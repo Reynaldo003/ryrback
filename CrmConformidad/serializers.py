@@ -65,7 +65,7 @@ class CasoSerializer(serializers.Serializer):
             "id_exp": instance.id_exp,
             "id_cliente": c.id_cliente,
             "chasis": c.chasis,
-            "os_exp": c.OS_EXP,
+            "os_exp": c.os_exp,
             "agencia": c.agencia,
             "cliente_nombre": c.nombre,
             "cliente_apellidos": c.apellidos,
@@ -101,7 +101,7 @@ class CasoSerializer(serializers.Serializer):
         # Cliente
         cliente = Cliente.objects.create(
             chasis=validated["chasis"],
-            OS_EXP=validated["os_exp"],
+            os_exp=validated["os_exp"],
             agencia=validated["agencia"],
             nombre=validated["cliente_nombre"],
             apellidos=validated["cliente_apellidos"],
@@ -137,7 +137,7 @@ class CasoSerializer(serializers.Serializer):
         # Cliente
         c = instance.cliente
         c.chasis = validated.get("chasis", c.chasis)
-        c.OS_EXP = validated.get("os_exp", c.OS_EXP)
+        c.os_exp = validated.get("os_exp", c.os_exp)
         c.agencia = validated.get("agencia", c.agencia)
         c.nombre = validated.get("cliente_nombre", c.nombre)
         c.apellidos = validated.get("cliente_apellidos", c.apellidos)

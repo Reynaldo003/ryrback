@@ -39,7 +39,7 @@ class Cliente(models.Model):
     apellidos = models.CharField(max_length=70)
     telefono = models.CharField(max_length=20)
     correo = models.EmailField(max_length=255)
-    OS_EXP = models.IntegerField()
+    os_exp = models.IntegerField()
     agencia = models.CharField(max_length=100)
 
     class Meta:
