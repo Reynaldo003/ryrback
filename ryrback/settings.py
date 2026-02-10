@@ -30,13 +30,15 @@ ALLOWED_HOSTS = [
     '127.0.0.1',
     "1729-2806-10a6-6-2142-49ed-5b4d-d374-ac68.ngrok-free.app",
     "rhi4i2-ip-187-148-222-77.tunnelmole.net",
-    "ryrcorp.vercel.app"
+    "ryrcorp.vercel.app",
+    "ryrback-1.onrender.com",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
     "https://1729-2806-10a6-6-2142-49ed-5b4d-d374-ac68.ngrok-free.app",
     "https://rhi4i2-ip-187-148-222-77.tunnelmole.net",
     "https://ryrcorp.vercel.app",
+    "https://ryrback-1.onrender.com",
 ]
 
 # Application definition
@@ -89,7 +91,8 @@ CORS_ALLOWED_ORIGINS = [
     "http://127.0.0.1:5173",
     "https://1729-2806-10a6-6-2142-49ed-5b4d-d374-ac68.ngrok-free.app",
     "https://rhi4i2-ip-187-148-222-77.tunnelmole.net",
-    "https://ryrcorp.vercel.app"
+    "https://ryrcorp.vercel.app",
+    "https://ryrback-1.onrender.com",
 ]
 
 
