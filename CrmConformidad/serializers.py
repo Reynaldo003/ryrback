@@ -222,7 +222,43 @@ class UsuarioLoginSerializer(serializers.Serializer):
 
         attrs["user"] = user
         return attrs
+    
+class AdminUsuarioCreateSerializer(serializers.Serializer):
+    nombre = serializers.CharField(max_length=50)
+    apellidos = serializers.CharField(max_length=70, required=False, allow_blank=True, allow_null=True)
+    usuario = serializers.CharField(max_length=10)
+    correo = serializers.EmailField(max_length=255)
+    contrasena = serializers.CharField(write_only=True)
+    agencia = serializers.ChoiceField(choices=DEALERS_VALIDOS)
+    id_rol = serializers.IntegerField()
 
+    def validate_usuario(self, value):
+        if Usuario.objects.filter(usuario=value).exists():
+            raise serializers.ValidationError("Ese usuario ya existe.")
+        return value
+
+    def validate_correo(self, value):
+        if Usuario.objects.filter(correo=value).exists():
+            raise serializers.ValidationError("Ese correo ya existe.")
+        return value
+
+    def validate_id_rol(self, value):
+        if not Rol.objects.filter(id_rol=value).exists():
+            raise serializers.ValidationError("Rol inválido.")
+        return value
+
+    def create(self, validated_data):
+        rol = Rol.objects.get(id_rol=validated_data["id_rol"])
+        u = Usuario.objects.create(
+            nombre=validated_data["nombre"],
+            apellidos=validated_data.get("apellidos") or "",
+            usuario=validated_data["usuario"],
+            correo=validated_data["correo"],
+            contrasena=make_password(validated_data["contrasena"]),
+            rol=rol,
+            agencia=validated_data["agencia"],
+        )
+        return u
 
 def generar_token_usuario(id_usuario: int) -> str:
     signer = signing.TimestampSigner()

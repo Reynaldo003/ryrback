@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import CasoListCreateView, CasoDetailView, CasoUploadDocsView, DocDeleteView, AuthLoginView, AuthRegisterView
+from .views import CasoListCreateView, CasoDetailView, CasoUploadDocsView, DocDeleteView, AuthLoginView, AuthRegisterView,AuthMeView,AdminRolesView, AdminPermisosCatalogView, AdminUsuariosCreateView
 
 urlpatterns = [
     path("api/casos/", CasoListCreateView.as_view(), name="casos-list-create"),
@@ -9,5 +9,11 @@ urlpatterns = [
     # AUTH
     path("api/auth/login/", AuthLoginView.as_view(), name="auth-login"),
     path("api/auth/register/", AuthRegisterView.as_view(), name="auth-register"),
+    path("api/auth/me/", AuthMeView.as_view(), name="auth-me"),
+
+     # ADMIN
+    path("api/admin/roles/", AdminRolesView.as_view(), name="admin-roles"),
+    path("api/admin/permisos/", AdminPermisosCatalogView.as_view(), name="admin-permisos"),
+    path("api/admin/usuarios/", AdminUsuariosCreateView.as_view(), name="admin-usuarios-create"),
 ]
 

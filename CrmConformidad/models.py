@@ -30,7 +30,13 @@ class Usuario(models.Model):
 
     def __str__(self):
         return f"{self.nombre} {self.apellidos or ''}".strip()
+    @property
+    def is_authenticated(self):
+        return True
 
+    @property
+    def is_anonymous(self):
+        return False
 
 class Cliente(models.Model):
     id_cliente = models.AutoField(primary_key=True)

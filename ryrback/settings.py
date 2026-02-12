@@ -27,15 +27,17 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    "90c5-2806-10a6-6-2142-85a-bb8f-2db3-f88b.ngrok-free.app",
     "ryrcorp.vercel.app",
     "ryrback-1.onrender.com",
+    "grupoautomotrizryr.com",
+    "www.grupoautomotrizryr.com",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://90c5-2806-10a6-6-2142-85a-bb8f-2db3-f88b.ngrok-free.app",
     "https://ryrcorp.vercel.app",
     "https://ryrback-1.onrender.com",
+    "https://grupoautomotrizryr.com",
+    "https://www.grupoautomotrizryr.com",
 ]
 
 # Application definition
@@ -86,10 +88,11 @@ CORS_ALLOW_CREDENTIALS = True
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "https://90c5-2806-10a6-6-2142-85a-bb8f-2db3-f88b.ngrok-free.app",
+    "http://127.0.0.1:8000",
     "https://ryrcorp.vercel.app",
     "https://ryrback-1.onrender.com",
+    "https://grupoautomotrizryr.com",
+    "https://www.grupoautomotrizryr.com",
 ]
 
 
@@ -102,25 +105,27 @@ DATABASES = {
 #        'HOST': 'localhost',
 #        'PORT': '5432'
 #    }
-'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'railway',
-        'USER': 'postgres',
-        'PASSWORD': 'HJuoWBPBiJWdICYKjrkyhnJMlVtVvBNx',
-        'HOST': 'gondola.proxy.rlwy.net',
-        'PORT': '35678'
-    },
 #'default': {
-#        'ENGINE': 'mssql',
-#        'NAME': 'TotalDealer_CO',
-#        'USER': 'Israel',
-#        'PASSWORD': 'Isr4el@2025',
-#        'HOST': '187.141.69.254',
-#        'PORT': '1433',
-#        'OPTIONS': {
-#            'driver': 'ODBC Driver 18 for SQL Server'
-#       }
-#    }
+#        'ENGINE': 'django.db.backends.postgresql',
+#        'NAME': 'railway',
+#        'USER': 'postgres',
+#        'PASSWORD': 'HJuoWBPBiJWdICYKjrkyhnJMlVtVvBNx',
+#        'HOST': 'gondola.proxy.rlwy.net',
+#        'PORT': '35678'
+#    },
+'default': {
+        'ENGINE': 'mssql',
+        'NAME': 'TotalDealer_CO',
+        'USER': 'Israel',
+        'PASSWORD': 'Isr4el@2025',
+        'HOST': '187.141.69.254',
+        'PORT': '1433',
+        'OPTIONS': {
+            'driver': 'ODBC Driver 18 for SQL Server',
+            "extra_params": "TrustServerCertificate=yes",
+
+       }
+    }
 }
 
 
