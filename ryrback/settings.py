@@ -15,7 +15,6 @@ from pathlib import Path
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/5.2/howto/deployment/checklist/
 
@@ -28,15 +27,13 @@ DEBUG = True
 ALLOWED_HOSTS = [
     'localhost',
     '127.0.0.1',
-    "1729-2806-10a6-6-2142-49ed-5b4d-d374-ac68.ngrok-free.app",
-    "rhi4i2-ip-187-148-222-77.tunnelmole.net",
+    "90c5-2806-10a6-6-2142-85a-bb8f-2db3-f88b.ngrok-free.app",
     "ryrcorp.vercel.app",
     "ryrback-1.onrender.com",
 ]
 
 CSRF_TRUSTED_ORIGINS = [
-    "https://1729-2806-10a6-6-2142-49ed-5b4d-d374-ac68.ngrok-free.app",
-    "https://rhi4i2-ip-187-148-222-77.tunnelmole.net",
+    "https://90c5-2806-10a6-6-2142-85a-bb8f-2db3-f88b.ngrok-free.app",
     "https://ryrcorp.vercel.app",
     "https://ryrback-1.onrender.com",
 ]
@@ -53,6 +50,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
     'rest_framework',
     'CrmConformidad',
+    'Digitales',
 ]
 
 MIDDLEWARE = [
@@ -89,8 +87,7 @@ CORS_ALLOW_CREDENTIALS = True
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:5173",
-    "https://1729-2806-10a6-6-2142-49ed-5b4d-d374-ac68.ngrok-free.app",
-    "https://rhi4i2-ip-187-148-222-77.tunnelmole.net",
+    "https://90c5-2806-10a6-6-2142-85a-bb8f-2db3-f88b.ngrok-free.app",
     "https://ryrcorp.vercel.app",
     "https://ryrback-1.onrender.com",
 ]
@@ -112,7 +109,18 @@ DATABASES = {
         'PASSWORD': 'HJuoWBPBiJWdICYKjrkyhnJMlVtVvBNx',
         'HOST': 'gondola.proxy.rlwy.net',
         'PORT': '35678'
-    }
+    },
+#'default': {
+#        'ENGINE': 'mssql',
+#        'NAME': 'TotalDealer_CO',
+#        'USER': 'Israel',
+#        'PASSWORD': 'Isr4el@2025',
+#        'HOST': '187.141.69.254',
+#        'PORT': '1433',
+#        'OPTIONS': {
+#            'driver': 'ODBC Driver 18 for SQL Server'
+#       }
+#    }
 }
 
 
