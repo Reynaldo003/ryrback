@@ -6,3 +6,4 @@ psycopg[binary]==3.2.13
 whitenoise==6.7.0
 requests==2.27.1
 pyodbc==5.3.0
+mssql-django==1.6
