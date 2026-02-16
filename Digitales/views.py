@@ -94,68 +94,85 @@ class ProspectosViewSet(viewsets.ModelViewSet):
 def bienvenido(request):
     return HttpResponse("Funcionando Digitales WhatsApp R&R, desde Django")
 
-
+TOKEN = 'CBAR&RVOLKS'
 @csrf_exempt
 def webhook(request):
-    """
-    Webhook entrante de WhatsApp.
-    - Guarda el mensaje
-    - Crea cliente si no existe (por telefono)
-    - Actualiza ultimo_contacto_at
-    """
     if request.method == "GET":
-        challenge = request.GET.get("hub.challenge")
-        if challenge:
-            return HttpResponse(challenge)
-        return HttpResponse("ok")
+        mode = request.GET.get("hub.mode", "")
+        token = request.GET.get("hub.verify_token", "")
+        challenge = request.GET.get("hub.challenge", "")
+
+        if mode == "subscribe" and token == TOKEN and challenge:
+            return HttpResponse(challenge, content_type="text/plain")
+
+        return HttpResponse("token incorrecto", status=403)
 
     if request.method != "POST":
         return HttpResponse("method not allowed", status=405)
 
     try:
-        body = json.loads(request.body.decode("utf-8"))
+        try:
+            body = json.loads(request.body.decode("utf-8"))
+        except Exception:
+            return HttpResponse("ok")
 
-        entry = body.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
+        entry0 = (body.get("entry") or [{}])[0]
+        changes0 = (entry0.get("changes") or [{}])[0]
+        value = changes0.get("value") or {}
 
-        msg = value.get("messages", [])[0]
-        wa_from = msg.get("from", "")
-        tel = normaliza_tel_mx(replace_start(wa_from))
+        messages = value.get("messages") or []
+        statuses = value.get("statuses") or []
 
-        text = obtener_mensaje_whatsapp(msg)
-        wa_id = msg.get("id", "")
+        if messages:
+            msg = messages[0]
 
-        name = ""
-        contacts = value.get("contacts") or []
-        if contacts:
-            name = (contacts[0].get("profile") or {}).get("name", "") or ""
+            wa_from = msg.get("from", "")
+            tel = normaliza_tel_mx(replace_start(wa_from))
 
-        cliente, _created = ClientesDigitales.objects.get_or_create(
-            telefono=tel,
-            defaults={
-                "nombre": name or "",
-            },
-        )
+            text = obtener_mensaje_whatsapp(msg)
+            wa_id = msg.get("id", "") or ""
 
-        # Si viene nombre y el cliente estaba vacío, lo guardamos
-        if name and not cliente.nombre:
-            cliente.nombre = name
+            name = ""
+            contacts = value.get("contacts") or []
+            if contacts:
+                name = (contacts[0].get("profile") or {}).get("name", "") or ""
 
-        MensajeWhatsApp.objects.create(
-            telefono=tel,
-            cliente=cliente,
-            direction="in",
-            body=text,
-            wa_message_id=wa_id,
-            status="received",
-            raw=body,
-        )
+            if tel:
+                cliente, _created = ClientesDigitales.objects.get_or_create(
+                    telefono=tel,
+                    defaults={"nombre": name or ""},
+                )
 
+                if name and not cliente.nombre:
+                    cliente.nombre = name
+                    cliente.save(update_fields=["nombre", "actualizado"])
+
+                cliente.touch_ultimo_contacto(save_now=True)
+
+                MensajeWhatsApp.objects.create(
+                    telefono=tel,
+                    cliente=cliente,
+                    direction="in",
+                    body=text,
+                    wa_message_id=wa_id,
+                    status="received",
+                    raw=body,
+                )
+
+            return HttpResponse("ok")
+
+        # Si no los manejas, no pasa nada: responde ok.
+        if statuses:
+            # Si quieres, aquí podrías mapear status por wa_message_id:
+            for s in statuses:
+                wa_id = s.get("id")
+                st = s.get("status")  # sent, delivered, read, failed...
+                MensajeWhatsApp.objects.filter(wa_message_id=wa_id).update(status=st)
+            return HttpResponse("ok")
         return HttpResponse("ok")
 
     except Exception as e:
-        return HttpResponse(f"error: {e}", status=400)
+        return HttpResponse("ok")
 
 
 def _unread_count(cliente: ClientesDigitales) -> int:

@@ -31,7 +31,7 @@ ALLOWED_HOSTS = [
     "ryrback-1.onrender.com",
     "grupoautomotrizryr.com",
     "www.grupoautomotrizryr.com",
-    "c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app"
+    "crm.grupoautomotrizryr.com"
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -39,7 +39,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://ryrback-1.onrender.com",
     "https://grupoautomotrizryr.com",
     "https://www.grupoautomotrizryr.com",
-    "https://c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app"
+    "https://c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app",
+    "https://crm.grupoautomotrizryr.com",
 ]
 
 # Application definition
@@ -95,19 +96,19 @@ CORS_ALLOWED_ORIGINS = [
     "https://ryrback-1.onrender.com",
     "https://grupoautomotrizryr.com",
     "https://www.grupoautomotrizryr.com",
-    "https://c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app"
+    "https://crm.grupoautomotrizryr.com",
 ]
 
 
 DATABASES = {
-#'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'ryrcorp',
-#        'USER': 'postgres',
-#        'PASSWORD': '1234',
-#       'HOST': 'localhost',
-#        'PORT': '5432'
-#    }
+'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'ryrcorp',
+        'USER': 'postgres',
+        'PASSWORD': '1234',
+        'HOST': 'localhost',
+        'PORT': '5432'
+    }
 #'default': {
 #        'ENGINE': 'django.db.backends.postgresql',
 #        'NAME': 'railway',
@@ -116,18 +117,19 @@ DATABASES = {
 #        'HOST': 'gondola.proxy.rlwy.net',
 #        'PORT': '35678'
 #    },
-'default': {
-        'ENGINE': 'mssql',
-        'NAME': 'TotalDealer_CO',
-        'USER': 'Israel',
-        'PASSWORD': 'Isr4el@2025',
-        'HOST': '187.141.69.254',
-        'PORT': '1433',
-        'OPTIONS': {
-            'driver': 'ODBC Driver 18 for SQL Server',
-            "extra_params": "TrustServerCertificate=yes",
-       }
-    }
+#'default': {
+#        'ENGINE': 'mssql',
+#        'NAME': 'TotalDealer_CO',
+#        'USER': 'Israel',
+#        'PASSWORD': 'Isr4el@2025',
+#        'HOST': '187.141.69.254',
+#        'PORT': '1433',
+#        'OPTIONS': {
+#            'driver': 'ODBC Driver 18 for SQL Server',
+#            "extra_params": "TrustServerCertificate=yes",
+#
+#       }
+#    }
 }
 
 

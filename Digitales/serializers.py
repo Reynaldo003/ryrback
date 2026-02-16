@@ -16,8 +16,8 @@ class ClientesDigitalesSerializer(serializers.ModelSerializer):
             "canal_contacto",
             "pauta",
             "estado",
-            "asesor_digital",   # ✅
-            "asesor_ventas",    # ✅
+            "asesor_digital",
+            "asesor_ventas",
             "responsable",
             "auto_interes",
             "comentarios",
