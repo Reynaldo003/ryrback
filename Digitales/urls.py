@@ -1,8 +1,34 @@
-#/Digitales/urls.py
-from django.urls import path
-from . import views
+# digitales/urls.py
+from django.urls import path, include
+from rest_framework.routers import DefaultRouter
+
+from .views import (
+    bienvenido,
+    webhook,
+    chats_list,
+    contacto_por_telefono,
+    enviar_mensaje_view,
+    enviar_plantilla_view,
+    mark_read_view,  # ✅ nuevo
+    ProspectosViewSet,
+)
+
+router = DefaultRouter()
+router.register(r"prospectos", ProspectosViewSet, basename="prospectos")
+
 urlpatterns = [
-    path("bienvenido/", views.bienvenido),
-    path("webhook/", views.webhook),
-    path("enviar-template/", views.enviar_template_view),
+    path("bienvenido/", bienvenido),
+    path("webhook/", webhook),
+
+    # chat
+    path("chats/", chats_list),
+    path("chats/mark-read/", mark_read_view),
+    path("contacto/", contacto_por_telefono),
+
+    # mensajes
+    path("mensajes/enviar/", enviar_mensaje_view),
+    path("mensajes/enviar-plantilla/", enviar_plantilla_view),
+
+    # api
+    path("api/", include(router.urls)),
 ]

@@ -31,6 +31,7 @@ ALLOWED_HOSTS = [
     "ryrback-1.onrender.com",
     "grupoautomotrizryr.com",
     "www.grupoautomotrizryr.com",
+    "c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app"
 ]
 
 CSRF_TRUSTED_ORIGINS = [
@@ -38,6 +39,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://ryrback-1.onrender.com",
     "https://grupoautomotrizryr.com",
     "https://www.grupoautomotrizryr.com",
+    "https://c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app"
 ]
 
 # Application definition
@@ -93,6 +95,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://ryrback-1.onrender.com",
     "https://grupoautomotrizryr.com",
     "https://www.grupoautomotrizryr.com",
+    "https://c7b2-2806-10a6-24-5453-416b-6048-7bd7-2b81.ngrok-free.app"
 ]
 
 
@@ -102,7 +105,7 @@ DATABASES = {
 #        'NAME': 'ryrcorp',
 #        'USER': 'postgres',
 #        'PASSWORD': '1234',
-#        'HOST': 'localhost',
+#       'HOST': 'localhost',
 #        'PORT': '5432'
 #    }
 #'default': {
@@ -123,7 +126,6 @@ DATABASES = {
         'OPTIONS': {
             'driver': 'ODBC Driver 18 for SQL Server',
             "extra_params": "TrustServerCertificate=yes",
-
        }
     }
 }
@@ -153,8 +155,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = 'en-us'
 
-TIME_ZONE = 'UTC'
-
+#TIME_ZONE = 'UTC'
+TIME_ZONE = "America/Mexico_City"
 USE_I18N = True
 
 USE_TZ = True
