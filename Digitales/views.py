@@ -8,7 +8,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status, viewsets
-from .models import ClientesDigitales, MensajeWhatsApp, normaliza_tel_mx
+from .models import ClientesDigitales, MensajeWhatsApp, normaliza_tel_mx,CampanaMeta
 from .serializers import ClientesDigitalesSerializer, WhatsAppMessageSerializer
 from .contacto import (
     obtener_mensaje_whatsapp,
@@ -16,6 +16,7 @@ from .contacto import (
     enviar_texto_whatsapp,
     enviar_template_whatsapp,
 )
+from datetime import timedelta
 
 class ProspectosViewSet(viewsets.ModelViewSet):
     permission_classes = [AllowAny]
@@ -358,3 +359,37 @@ def enviar_plantilla_view(request):
 
     except Exception as e:
         return Response({"ok": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def campanas_meta_recientes(request):
+    """
+    Devuelve campañas recientes (últimos N días).
+    Retorna items: { value: "Sucursal - Campaña", label: "Sucursal - Campaña" }
+    """
+    try:
+        days = int(request.query_params.get("days", "30"))
+    except ValueError:
+        days = 30
+
+    cutoff = timezone.localdate() - timedelta(days=days)
+
+    # Campañas donde inicio o fin caen dentro de los últimos N días.
+    # (si inicio_campana es null, fin_campana puede servir; por eso OR)
+    qs = CampanaMeta.objects.filter(
+        Q(inicio_campana__gte=cutoff) | Q(fin_campana__gte=cutoff)
+    ).order_by("-inicio_campana", "-fin_campana")
+
+    # DISTINCT por "Sucursal - Nombre" (evitar duplicados)
+    seen = set()
+    out = []
+    for c in qs[:500]:
+        label = f"{(c.sucursal or '').strip()} - {(c.nombre_campana or '').strip()}".strip(" -")
+        if not label:
+            continue
+        if label in seen:
+            continue
+        seen.add(label)
+        out.append({"value": label, "label": label})
+
+    return Response({"ok": True, "items": out}, status=status.HTTP_200_OK)

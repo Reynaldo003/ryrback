@@ -114,3 +114,15 @@ class MensajeWhatsApp(models.Model):
 
     def __str__(self):
         return f"{self.direction} {self.telefono} {self.created_at:%Y-%m-%d %H:%M}"
+
+class CampanaMeta(models.Model):
+    id_campana = models.BigIntegerField(primary_key=True)
+    id_concesionaria = models.IntegerField()
+    sucursal = models.CharField(max_length=100)
+    nombre_campana = models.CharField(max_length=500)
+    inicio_campana = models.DateField(null=True, blank=True)
+    fin_campana = models.DateField(null=True, blank=True)
+
+    class Meta:
+        db_table = "campanas_meta"
+        managed = False

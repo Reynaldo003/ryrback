@@ -31,7 +31,8 @@ ALLOWED_HOSTS = [
     "ryrback-1.onrender.com",
     "grupoautomotrizryr.com",
     "www.grupoautomotrizryr.com",
-    "crm.grupoautomotrizryr.com"
+    "crm.grupoautomotrizryr.com",
+    "191.96.31.18"
 ]
 
 CSRF_TRUSTED_ORIGINS = [

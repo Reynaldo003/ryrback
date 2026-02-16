@@ -9,8 +9,9 @@ from .views import (
     contacto_por_telefono,
     enviar_mensaje_view,
     enviar_plantilla_view,
-    mark_read_view,  # ✅ nuevo
+    mark_read_view,
     ProspectosViewSet,
+    campanas_meta_recientes
 )
 
 router = DefaultRouter()
@@ -31,4 +32,5 @@ urlpatterns = [
 
     # api
     path("api/", include(router.urls)),
+    path("api/campanas-meta/", campanas_meta_recientes),
 ]
