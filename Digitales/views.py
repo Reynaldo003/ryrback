@@ -186,8 +186,25 @@ def webhook(request):
                 for s in statuses:
                     wa_id = s.get("id")
                     st = s.get("status")
-                    if wa_id and st:
-                        MensajeWhatsApp.objects.filter(wa_message_id=wa_id).update(status=st)
+                    errors = s.get("errors") or []
+                    ts = s.get("timestamp")
+                    if not (wa_id and st):
+                        continue
+
+                    msg = MensajeWhatsApp.objects.filter(wa_message_id=wa_id).first()
+                    if not msg:
+                        continue
+
+                    new_raw = dict(msg.raw or {})
+                    new_raw["status_payload"] = s
+                    if errors:
+                        new_raw["errors"] = errors
+                    if ts:
+                        new_raw["status_timestamp"] = ts
+
+                    msg.status = st
+                    msg.raw = new_raw
+                    msg.save(update_fields=["status", "raw"])
 
         return HttpResponse("ok")
 
@@ -361,7 +378,7 @@ def enviar_mensaje_view(request):
             direction="out",
             body=text,
             wa_message_id=wa_message_id,
-            status="sent",  # ✅ inicial
+            status="accepted",
             raw=wa_res,
         )
 
@@ -396,7 +413,7 @@ def enviar_plantilla_view(request):
             to=to,
             template_name=template_name,
             params=[str(x) for x in params],
-            idioma="es",  # ✅ coincide con tu plantilla
+            idioma="es",
         )
 
         wa_message_id = ""
@@ -411,13 +428,22 @@ def enviar_plantilla_view(request):
             direction="out",
             body=f"[TEMPLATE:{template_name}] " + " | ".join([str(x) for x in params]),
             wa_message_id=wa_message_id,
-            status="sent",  # ✅ inicial
+            status="accepted",
             raw=wa_res,
         )
 
         return Response({"ok": True, "data": wa_res}, status=status.HTTP_200_OK)
 
     except Exception as e:
+        MensajeWhatsApp.objects.create(
+        telefono=to,
+        cliente=cliente,
+        direction="out",
+        body=f"[TEMPLATE:{template_name}] " + " | ".join([str(x) for x in params]),
+        wa_message_id="",
+        status="failed",
+        raw={"error": str(e)},
+        )
         return Response({"ok": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 
