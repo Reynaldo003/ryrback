@@ -63,13 +63,14 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         data.pop("primer_contacto_at", None)
         data.pop("ultimo_contacto_at", None)
 
-        # valida obligatorios también en update
         nombre = (data.get("nombre") or "").strip()
         tel = normaliza_tel_mx(data.get("telefono", ""))
+
         if not nombre:
             return Response({"ok": False, "error": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
         if not tel:
             return Response({"ok": False, "error": "El teléfono es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
+
         data["telefono"] = tel
 
         instance = self.get_object()
@@ -78,12 +79,12 @@ class ProspectosViewSet(viewsets.ModelViewSet):
 
         obj = serializer.save()
 
-        # opcional: mantener "responsable" consistente
+        # mantener "responsable" consistente (si aplica)
         if getattr(obj, "asesor_digital", "") or getattr(obj, "asesor_ventas", ""):
             obj.responsable = " / ".join([x for x in [obj.asesor_digital, obj.asesor_ventas] if x])
-            obj.save(update_fields=["responsable", "actualizado"])
-
-            return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
+            obj.save()  # simple y seguro
+        return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
+    
     def partial_update(self, request, *args, **kwargs):
             data = request.data.copy()
             data.pop("creado", None)
