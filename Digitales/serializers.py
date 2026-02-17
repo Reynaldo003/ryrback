@@ -49,6 +49,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             "body",
             "wa_message_id",
             "status",
+            "raw",
             "created_at",
             "time",
         ]

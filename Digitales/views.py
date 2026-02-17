@@ -1,7 +1,6 @@
 # digitales/views.py
 import json
 from datetime import timedelta
-
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
@@ -205,6 +204,8 @@ def webhook(request):
                     msg.status = st
                     msg.raw = new_raw
                     msg.save(update_fields=["status", "raw"])
+                    #logger.warning("WA STATUS EVENT: %s", json.dumps(s, ensure_ascii=False))
+                    print("WA STATUS EVENT:", json.dumps(s, ensure_ascii=False))
 
         return HttpResponse("ok")
 
