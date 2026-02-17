@@ -1,4 +1,4 @@
-#digitales/serializers.py
+# digitales/serializers.py
 from rest_framework import serializers
 from .models import ClientesDigitales, MensajeWhatsApp
 from django.utils import timezone

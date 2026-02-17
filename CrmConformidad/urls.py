@@ -1,3 +1,4 @@
+#crmConformidad/urls.py
 from django.urls import path
 from .views import CasoListCreateView, CasoDetailView, CasoUploadDocsView, DocDeleteView, AuthLoginView, AuthRegisterView,AuthMeView,AdminRolesView, AdminPermisosCatalogView, AdminUsuariosCreateView
 

@@ -1,14 +1,8 @@
-#digitales/models.py
+# digitales/models.py
 from django.db import models
 from django.utils import timezone
 
 def normaliza_tel_mx(raw: str) -> str:
-    """
-    Normaliza a '52' + 10 dígitos cuando aplica.
-    - "2720000000" -> "522720000000"
-    - "+52 2720000000" -> "522720000000"
-    - "52 2720000000" -> "522720000000"
-    """
     digits = "".join(c for c in str(raw or "") if c.isdigit())
     if not digits:
         return ""
@@ -29,11 +23,8 @@ class ClientesDigitales(models.Model):
     pauta = models.CharField(max_length=500, blank=True, default="")
     estado = models.CharField(max_length=120, blank=True, default="")
 
-    # ✅ NUEVO: separa responsabilidades reales
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
-
-    # (si quieres mantenerlo por compatibilidad)
     responsable = models.CharField(max_length=200, blank=True, default="")
 
     auto_interes = models.CharField(max_length=255, blank=True, default="")
@@ -65,10 +56,11 @@ class ClientesDigitales(models.Model):
         self.ultimo_contacto_at = when
         if save_now:
             self.save(update_fields=["primer_contacto_at", "ultimo_contacto_at", "actualizado"])
+
     def mark_read(self, when=None):
-            when = when or timezone.now()
-            self.last_read_at = when
-            self.save(update_fields=["last_read_at", "actualizado"])
+        when = when or timezone.now()
+        self.last_read_at = when
+        self.save(update_fields=["last_read_at", "actualizado"])
 
     def save(self, *args, **kwargs):
         self.telefono = normaliza_tel_mx(self.telefono)
@@ -77,10 +69,8 @@ class ClientesDigitales(models.Model):
     def __str__(self):
         return f"{self.nombre} ({self.telefono})".strip()
 
+
 class MensajeWhatsApp(models.Model):
-    """
-    Mensajes guardados (entrantes y salientes).
-    """
     class Direccion(models.TextChoices):
         IN = "in", "Entrante"
         OUT = "out", "Saliente"
@@ -97,10 +87,9 @@ class MensajeWhatsApp(models.Model):
     direction = models.CharField(max_length=3, choices=Direccion.choices)
     body = models.TextField(blank=True, default="")
     wa_message_id = models.CharField(max_length=120, blank=True, default="", db_index=True)
-    status = models.CharField(max_length=30, blank=True, default="sent")  # sent/delivered/read/failed/received
+    status = models.CharField(max_length=30, blank=True, default="sent")
 
     raw = models.JSONField(default=dict, blank=True)
-
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -114,6 +103,7 @@ class MensajeWhatsApp(models.Model):
 
     def __str__(self):
         return f"{self.direction} {self.telefono} {self.created_at:%Y-%m-%d %H:%M}"
+
 
 class CampanaMeta(models.Model):
     id_campana = models.BigIntegerField(primary_key=True)
