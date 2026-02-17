@@ -104,14 +104,14 @@ CORS_ALLOWED_ORIGINS = [
 
 
 DATABASES = {
-'default': {
-        'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'ryrcorp',
-        'USER': 'postgres',
-        'PASSWORD': '1234',
-        'HOST': 'localhost',
-        'PORT': '5432'
-    }
+#'default': {
+#        'ENGINE': 'django.db.backends.postgresql',
+#        'NAME': 'ryrcorp',
+#        'USER': 'postgres',
+#        'PASSWORD': '1234',
+#        'HOST': 'localhost',
+#        'PORT': '5432'
+#    }
 #'default': {
 #        'ENGINE': 'django.db.backends.postgresql',
 #        'NAME': 'railway',
@@ -120,19 +120,19 @@ DATABASES = {
 #        'HOST': 'gondola.proxy.rlwy.net',
 #        'PORT': '35678'
 #    },
-#'default': {
-#        'ENGINE': 'mssql',
-#        'NAME': 'TotalDealer_CO',
-#        'USER': 'Israel',
-#        'PASSWORD': 'Isr4el@2025',
-#        'HOST': '187.141.69.254',
-#        'PORT': '1433',
-#        'OPTIONS': {
-#            'driver': 'ODBC Driver 18 for SQL Server',
-#            "extra_params": "TrustServerCertificate=yes",
-#
-#       }
-#    }
+'default': {
+        'ENGINE': 'mssql',
+        'NAME': 'TotalDealer_CO',
+        'USER': 'Israel',
+        'PASSWORD': 'Isr4el@2025',
+        'HOST': '187.141.69.254',
+        'PORT': '1433',
+        'OPTIONS': {
+            'driver': 'ODBC Driver 18 for SQL Server',
+            "extra_params": "TrustServerCertificate=yes",
+
+       }
+    }
 }
 
 

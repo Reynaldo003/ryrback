@@ -58,12 +58,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
-        """
-        ✅ En EDIT no permitimos cambiar:
-        - creado (auto)
-        - primer_contacto_at
-        - ultimo_contacto_at
-        """
         data = request.data.copy()
         data.pop("creado", None)
         data.pop("primer_contacto_at", None)
@@ -89,8 +83,31 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             obj.responsable = " / ".join([x for x in [obj.asesor_digital, obj.asesor_ventas] if x])
             obj.save(update_fields=["responsable", "actualizado"])
 
-        return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
+            return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
+    def partial_update(self, request, *args, **kwargs):
+            data = request.data.copy()
+            data.pop("creado", None)
+            data.pop("primer_contacto_at", None)
+            data.pop("ultimo_contacto_at", None)
 
+            # Normaliza teléfono SOLO si viene en payload
+            if "telefono" in data:
+                tel = normaliza_tel_mx(data.get("telefono", ""))
+                if not tel:
+                    return Response({"ok": False, "error": "Teléfono inválido"}, status=status.HTTP_400_BAD_REQUEST)
+                data["telefono"] = tel
+
+            instance = self.get_object()
+            serializer = self.get_serializer(instance, data=data, partial=True)
+            serializer.is_valid(raise_exception=True)
+            obj = serializer.save()
+
+            # mantener "responsable" consistente
+            if getattr(obj, "asesor_digital", "") or getattr(obj, "asesor_ventas", ""):
+                obj.responsable = " / ".join([x for x in [obj.asesor_digital, obj.asesor_ventas] if x])
+                obj.save(update_fields=["responsable", "actualizado"])
+
+            return Response(self.get_serializer(obj).data, status=status.HTTP_200_OK)
 
 def bienvenido(request):
     return HttpResponse("Funcionando Digitales WhatsApp R&R, desde Django")
