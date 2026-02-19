@@ -9,6 +9,7 @@ from .views import (
     contacto_por_telefono,
     enviar_mensaje_view,
     enviar_plantilla_view,
+    enviar_media_view,
     mark_read_view,
     ProspectosViewSet,
     campanas_meta_recientes,
@@ -29,6 +30,7 @@ urlpatterns = [
 
     # mensajes
     path("mensajes/enviar/", enviar_mensaje_view),
+    path("mensajes/enviar-media/", enviar_media_view),
     path("mensajes/enviar-plantilla/", enviar_plantilla_view),
 
     # api

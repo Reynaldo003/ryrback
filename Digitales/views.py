@@ -1,14 +1,16 @@
 # digitales/views.py
 import json
+import mimetypes
 from datetime import timedelta
 from django.http import HttpResponse
 from django.views.decorators.csrf import csrf_exempt
 from django.utils import timezone
 from django.db.models import Q, OuterRef, Subquery
-from rest_framework.decorators import api_view, permission_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
 from rest_framework import status, viewsets
+from rest_framework.parsers import MultiPartParser, FormParser
 
 from .models import ClientesDigitales, MensajeWhatsApp, normaliza_tel_mx, CampanaMeta
 from .serializers import ClientesDigitalesSerializer, WhatsAppMessageSerializer
@@ -17,6 +19,8 @@ from .contacto import (
     replace_start,
     enviar_texto_whatsapp,
     enviar_template_whatsapp,
+    subir_media_whatsapp,
+    enviar_media_whatsapp,
 )
 
 class ProspectosViewSet(viewsets.ModelViewSet):
@@ -144,7 +148,7 @@ def webhook(request):
                 if contacts:
                     profile_name = (contacts[0].get("profile") or {}).get("name", "") or ""
 
-                # ✅ 1) Mensajes (pueden venir varios)
+                # ✅ 1) Mensajes
                 messages = value.get("messages") or []
                 for msg in messages:
                     wa_from = msg.get("from", "")
@@ -155,7 +159,6 @@ def webhook(request):
                     if not tel or not wa_id:
                         continue
 
-                    # ✅ idempotencia
                     if MensajeWhatsApp.objects.filter(wa_message_id=wa_id).exists():
                         continue
 
@@ -177,10 +180,10 @@ def webhook(request):
                         body=text,
                         wa_message_id=wa_id,
                         status="received",
-                        raw=body,
+                        raw=msg,  # ✅ mejor guardar el mensaje, no todo el webhook
                     )
 
-                # ✅ 2) Statuses (sent/delivered/read/failed)
+                # ✅ 2) Statuses
                 statuses = value.get("statuses") or []
                 for s in statuses:
                     wa_id = s.get("id")
@@ -204,13 +207,10 @@ def webhook(request):
                     msg.status = st
                     msg.raw = new_raw
                     msg.save(update_fields=["status", "raw"])
-                    #logger.warning("WA STATUS EVENT: %s", json.dumps(s, ensure_ascii=False))
-                    print("WA STATUS EVENT:", json.dumps(s, ensure_ascii=False))
 
         return HttpResponse("ok")
 
     except Exception:
-        # recomendado: logging.exception("webhook error")
         return HttpResponse("ok")
 
 
@@ -254,7 +254,6 @@ def contacto_updates(request):
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def chats_list(request):
-    # ✅ baja de 300 a 200 (si quieres 300, ok, pero 200 mejora carga)
     limit = 200
 
     last_msg_qs = (
@@ -273,7 +272,6 @@ def chats_list(request):
         .order_by("-ultimo_contacto_at", "-actualizado", "-creado")[:limit]
     )
 
-    # ✅ unread en Python (pero sin last_msg query N+1 ya cae mucho el tiempo)
     data = []
     for c in clientes:
         last_time_str = ""
@@ -391,17 +389,129 @@ def enviar_mensaje_view(request):
 
 @api_view(["POST"])
 @permission_classes([AllowAny])
+@parser_classes([MultiPartParser, FormParser])
+def enviar_media_view(request):
+    """
+    Recibe multipart/form-data:
+      - to: string
+      - text: string (caption opcional)
+      - files: múltiples archivos (campo repetido)
+
+    Envía 1 mensaje por archivo (WhatsApp style).
+    """
+    to = normaliza_tel_mx(request.data.get("to", ""))
+    caption = (request.data.get("text") or "").strip()
+    files = request.FILES.getlist("files") or []
+
+    if not to:
+        return Response({"ok": False, "error": "Falta to"}, status=status.HTTP_400_BAD_REQUEST)
+    if not files:
+        return Response({"ok": False, "error": "Faltan files"}, status=status.HTTP_400_BAD_REQUEST)
+
+    now = timezone.now()
+    cliente, _ = ClientesDigitales.objects.get_or_create(
+        telefono=to,
+        defaults={"primer_contacto_at": None, "ultimo_contacto_at": None},
+    )
+
+    # actualiza fechas contacto
+    if not cliente.primer_contacto_at:
+        cliente.primer_contacto_at = now
+    cliente.ultimo_contacto_at = now
+    cliente.save(update_fields=["primer_contacto_at", "ultimo_contacto_at", "actualizado"])
+
+    sent = []
+    failed = []
+
+    for f in files:
+        try:
+            name = getattr(f, "name", "archivo")
+            ct = getattr(f, "content_type", "") or (mimetypes.guess_type(name)[0] or "")
+
+            # decide tipo WhatsApp por mime
+            if (ct or "").startswith("image/"):
+                wtype = "image"
+            elif (ct or "").startswith("video/"):
+                wtype = "video"
+            elif (ct or "").startswith("audio/"):
+                wtype = "audio"
+            else:
+                wtype = "document"
+
+            # 1) subir
+            up = subir_media_whatsapp(f, filename=name, content_type=ct)
+            media_id = up.get("id") or ""
+            if not media_id:
+                raise RuntimeError(f"No regresó media_id: {up}")
+
+            # 2) enviar
+            wa_res = enviar_media_whatsapp(
+                to=to,
+                media_id=media_id,
+                media_type=wtype,
+                caption=caption if caption else "",
+                filename=name if wtype == "document" else "",
+            )
+
+            wa_message_id = ""
+            try:
+                wa_message_id = (wa_res.get("messages") or [{}])[0].get("id", "") or ""
+            except Exception:
+                wa_message_id = ""
+
+            # guardado local
+            body = caption if caption else ""
+            if body:
+                body = f"{body}\n[FILE:{name}]"
+            else:
+                body = f"[FILE:{name}]"
+
+            MensajeWhatsApp.objects.create(
+                telefono=to,
+                cliente=cliente,
+                direction="out",
+                body=body,
+                wa_message_id=wa_message_id,
+                status="accepted",
+                raw={
+                    "upload": up,
+                    "send": wa_res,
+                    "meta_type": wtype,
+                    "filename": name,
+                    "content_type": ct,
+                },
+            )
+
+            sent.append({"filename": name, "type": wtype, "data": wa_res})
+
+        except Exception as e:
+            failed.append({"filename": getattr(f, "name", "archivo"), "error": str(e)})
+
+    return Response({"ok": True, "sent": sent, "failed": failed}, status=status.HTTP_200_OK)
+
+
+@api_view(["POST"])
+@permission_classes([AllowAny])
 def enviar_plantilla_view(request):
     to = normaliza_tel_mx(request.data.get("to", ""))
     template_name = (request.data.get("template_name") or "").strip()
-    params = request.data.get("params") or []
+    params = request.data.get("params")
+    components = request.data.get("components")
+    idioma = (request.data.get("idioma") or "es_MX").strip()  # tu plantilla es es_MX
 
     if not to:
         return Response({"ok": False, "error": "Falta to"}, status=status.HTTP_400_BAD_REQUEST)
     if not template_name:
         return Response({"ok": False, "error": "Falta template_name"}, status=status.HTTP_400_BAD_REQUEST)
-    if not isinstance(params, list):
-        return Response({"ok": False, "error": "params debe ser lista"}, status=status.HTTP_400_BAD_REQUEST)
+
+    # validación: o params o components
+    if components is not None and not isinstance(components, list):
+        return Response({"ok": False, "error": "components debe ser lista"}, status=status.HTTP_400_BAD_REQUEST)
+    if components is None:
+        if params is None:
+            params = []
+        if not isinstance(params, list):
+            return Response({"ok": False, "error": "params debe ser lista"}, status=status.HTTP_400_BAD_REQUEST)
 
     try:
         cliente, _ = ClientesDigitales.objects.get_or_create(
@@ -413,8 +523,9 @@ def enviar_plantilla_view(request):
         wa_res = enviar_template_whatsapp(
             to=to,
             template_name=template_name,
-            params=[str(x) for x in params],
-            idioma="es",
+            params=[str(x) for x in (params or [])],
+            idioma=idioma,
+            components=components,
         )
 
         wa_message_id = ""
@@ -423,11 +534,25 @@ def enviar_plantilla_view(request):
         except Exception:
             wa_message_id = ""
 
+        # Guardamos algo legible en BD
+        body_log = f"[TEMPLATE:{template_name}]"
+        if components:
+            # concat de textos
+            flat = []
+            for c in components:
+                for p in (c.get("parameters") or []):
+                    if p.get("type") == "text":
+                        flat.append(str(p.get("text") or ""))
+            if flat:
+                body_log += " " + " | ".join(flat)
+        else:
+            body_log += " " + " | ".join([str(x) for x in (params or [])])
+
         MensajeWhatsApp.objects.create(
             telefono=to,
             cliente=cliente,
             direction="out",
-            body=f"[TEMPLATE:{template_name}] " + " | ".join([str(x) for x in params]),
+            body=body_log.strip(),
             wa_message_id=wa_message_id,
             status="accepted",
             raw=wa_res,
@@ -436,17 +561,17 @@ def enviar_plantilla_view(request):
         return Response({"ok": True, "data": wa_res}, status=status.HTTP_200_OK)
 
     except Exception as e:
+        # si truena, también log
         MensajeWhatsApp.objects.create(
-        telefono=to,
-        cliente=cliente,
-        direction="out",
-        body=f"[TEMPLATE:{template_name}] " + " | ".join([str(x) for x in params]),
-        wa_message_id="",
-        status="failed",
-        raw={"error": str(e)},
+            telefono=to,
+            cliente=cliente if "cliente" in locals() else None,
+            direction="out",
+            body=f"[TEMPLATE:{template_name}] failed",
+            wa_message_id="",
+            status="failed",
+            raw={"error": str(e)},
         )
         return Response({"ok": False, "error": str(e)}, status=status.HTTP_400_BAD_REQUEST)
-
 
 @api_view(["GET"])
 @permission_classes([AllowAny])
