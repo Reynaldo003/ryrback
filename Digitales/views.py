@@ -21,6 +21,7 @@ from .contacto import (
     enviar_template_whatsapp,
     subir_media_whatsapp,
     enviar_media_whatsapp,
+    editar_texto_whatsapp,
 )
 
 class ProspectosViewSet(viewsets.ModelViewSet):
@@ -594,3 +595,49 @@ def campanas_meta_recientes(request):
         out.append({"value": label, "label": label})
 
     return Response({"ok": True, "items": out}, status=status.HTTP_200_OK)
+
+@api_view(["PATCH"])
+@permission_classes([AllowAny])
+def editar_mensaje_view(request):
+    to = normaliza_tel_mx(request.data.get("to", ""))
+    message_id = (request.data.get("message_id") or "").strip()
+    text = (request.data.get("text") or "").strip()
+
+    if not to or not message_id or not text:
+        return Response({"ok": False, "error": "Falta to, message_id o text"}, status=400)
+
+    msg = MensajeWhatsApp.objects.filter(telefono=to, wa_message_id=message_id).first()
+    if not msg:
+        return Response({"ok": False, "error": "Mensaje no encontrado"}, status=404)
+
+    if msg.direction != "out":
+        return Response({"ok": False, "error": "Solo puedes editar mensajes enviados"}, status=400)
+
+    # evita editar plantillas (opcional)
+    if (msg.body or "").startswith("[TEMPLATE:"):
+        return Response({"ok": False, "error": "No se editan plantillas ya enviadas"}, status=400)
+
+    # ventana ~15 min
+    if msg.created_at and timezone.now() - msg.created_at > timedelta(minutes=15):
+        return Response({"ok": False, "error": "Ya no es editable (ventana expiró)"}, status=400)
+
+    try:
+        wa_res = editar_texto_whatsapp(
+            to=to,
+            original_message_id=message_id,
+            new_text=text,
+        )
+
+        # actualiza tu BD (marcar editado)
+        msg.body = text
+        raw = dict(msg.raw or {})
+        raw["edit_response"] = wa_res
+        msg.raw = raw
+        msg.save(update_fields=["body", "raw", "actualizado"])
+
+        return Response({"ok": True, "data": wa_res}, status=200)
+
+    except Exception as e:
+        # fallback opcional:
+        # enviar_texto_whatsapp(to=to, text=f"Corrección: {text}")
+        return Response({"ok": False, "error": str(e)}, status=400)

@@ -13,7 +13,8 @@ from .views import (
     mark_read_view,
     ProspectosViewSet,
     campanas_meta_recientes,
-    contacto_updates
+    contacto_updates,
+    editar_mensaje_view,
 )
 
 router = DefaultRouter()
@@ -32,6 +33,7 @@ urlpatterns = [
     path("mensajes/enviar/", enviar_mensaje_view),
     path("mensajes/enviar-media/", enviar_media_view),
     path("mensajes/enviar-plantilla/", enviar_plantilla_view),
+    path("mensajes/editar/", editar_mensaje_view),
 
     # api
     path("api/", include(router.urls)),

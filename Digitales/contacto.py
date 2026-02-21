@@ -213,3 +213,23 @@ def replace_start(s: str) -> str:
     if s.startswith("521"):
         return "52" + s[3:]
     return s
+
+def editar_texto_whatsapp(to: str, original_message_id: str, new_text: str) -> dict:
+    headers = {
+        "Content-Type": "application/json",
+        "Authorization": f"Bearer {whatsapp_token}",
+    }
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        # 🔑 referencia al mensaje a editar (según spec de Meta)
+        "context": {"message_id": original_message_id},
+        "text": {"body": new_text},
+    }
+
+    r = requests.post(whatsapp_url, headers=headers, json=payload, timeout=20)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Meta edit error {r.status_code}: {r.text}")
+    return r.json()
