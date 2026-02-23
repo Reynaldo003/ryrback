@@ -7,6 +7,7 @@ urlpatterns = [
     path('admin/', admin.site.urls),
     path("conformidad/", include("CrmConformidad.urls")),
     path("digitales/", include("Digitales.urls")),
+    path("citas/", include("citas.urls")),
 ]
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)

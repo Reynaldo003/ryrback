@@ -34,8 +34,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         tel = normaliza_tel_mx(data.get("telefono", ""))
 
         nombre = (data.get("nombre") or "").strip()
-        if not nombre:
-            return Response({"ok": False, "error": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
 
         if not tel:
             return Response({"ok": False, "error": "El teléfono es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
@@ -71,8 +69,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         nombre = (data.get("nombre") or "").strip()
         tel = normaliza_tel_mx(data.get("telefono", ""))
 
-        if not nombre:
-            return Response({"ok": False, "error": "El nombre es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
         if not tel:
             return Response({"ok": False, "error": "El teléfono es obligatorio"}, status=status.HTTP_400_BAD_REQUEST)
 
