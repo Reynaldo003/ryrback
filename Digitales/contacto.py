@@ -204,7 +204,10 @@ def obtener_mensaje_whatsapp(message: dict) -> str:
             return it.get("button_reply", {}).get("title", "")
     # media entrante (si lo quieres manejar mejor después)
     if t in ("image", "document", "video", "audio", "sticker"):
-        return f"[{t.upper()}]"
+        caption = ""
+        if t in ("image", "video", "document"):
+            caption = (message.get(t) or {}).get("caption") or ""
+        return caption.strip() or f"[{t.upper()}]"
     return "mensaje no procesado"
 
 
@@ -224,7 +227,6 @@ def editar_texto_whatsapp(to: str, original_message_id: str, new_text: str) -> d
         "messaging_product": "whatsapp",
         "to": to,
         "type": "text",
-        # 🔑 referencia al mensaje a editar (según spec de Meta)
         "context": {"message_id": original_message_id},
         "text": {"body": new_text},
     }
@@ -233,3 +235,40 @@ def editar_texto_whatsapp(to: str, original_message_id: str, new_text: str) -> d
     if r.status_code >= 400:
         raise RuntimeError(f"Meta edit error {r.status_code}: {r.text}")
     return r.json()
+
+# digitales/contacto.py
+import requests
+from .sett import whatsapp_url, whatsapp_token
+
+def get_media_info_whatsapp(media_id: str) -> dict:
+    """
+    1) GET /{media_id} para obtener {url, mime_type, ...}
+    """
+    base = _graph_base_from_messages_url(whatsapp_url)
+    if not base:
+        raise RuntimeError("No se pudo derivar base URL de WhatsApp (whatsapp_url inválida).")
+
+    url = f"{base}/{media_id}"
+    headers = {"Authorization": f"Bearer {whatsapp_token}"}
+
+    r = requests.get(url, headers=headers, timeout=20)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Meta media info error {r.status_code}: {r.text}")
+    return r.json()
+
+def download_media_whatsapp(media_id: str) -> tuple[bytes, str]:
+    """
+    2) GET al 'url' que regresa Meta (con Authorization) y devuelve (bytes, content_type)
+    """
+    info = get_media_info_whatsapp(media_id)
+    media_url = info.get("url") or ""
+    if not media_url:
+        raise RuntimeError(f"Meta no regresó url para media_id={media_id}: {info}")
+
+    headers = {"Authorization": f"Bearer {whatsapp_token}"}
+    r = requests.get(media_url, headers=headers, timeout=45)
+    if r.status_code >= 400:
+        raise RuntimeError(f"Meta media download error {r.status_code}: {r.text}")
+
+    ct = r.headers.get("content-type") or info.get("mime_type") or "application/octet-stream"
+    return (r.content, ct)

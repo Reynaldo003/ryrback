@@ -15,6 +15,7 @@ from .views import (
     campanas_meta_recientes,
     contacto_updates,
     editar_mensaje_view,
+    media_proxy_view,
 )
 
 router = DefaultRouter()
@@ -39,4 +40,6 @@ urlpatterns = [
     path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),
     path("contacto/updates/", contacto_updates),
+    path("media/<str:media_id>/", media_proxy_view),
+
 ]

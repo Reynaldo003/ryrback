@@ -47,6 +47,9 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
     is_template = serializers.SerializerMethodField()
     is_media = serializers.SerializerMethodField()
 
+    # ✅ adjuntos listos para UI
+    attachments = serializers.SerializerMethodField()
+
     class Meta:
         model = MensajeWhatsApp
         fields = [
@@ -66,6 +69,8 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             "edit_expires_at",
             "is_template",
             "is_media",
+
+            "attachments",
         ]
 
     def get_mine(self, obj):
@@ -82,6 +87,10 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
         return b.startswith("[TEMPLATE:")
 
     def get_is_media(self, obj):
+        # si tiene media_id en raw o el body tiene marcador
+        raw = obj.raw or {}
+        if raw.get("meta_type") in ("image","video","audio","document","sticker"):
+            return True
         b = (obj.body or "").strip()
         return b.startswith("[FILE:") or "\n[FILE:" in b
 
@@ -99,6 +108,49 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             return False
         if self.get_is_media(obj):
             return False
-
-        # ventana de tiempo
         return timezone.now() <= (obj.created_at + timedelta(minutes=EDIT_WINDOW_MINUTES))
+
+    def get_attachments(self, obj):
+        """
+        Regresa lista normalizada para el frontend:
+        [{id, kind, url, mime, name, size}]
+        """
+        raw = obj.raw or {}
+
+        # 1) Caso SALIENTE (tu enviar_media_view guarda: raw.upload.id, raw.meta_type, filename, content_type)
+        if isinstance(raw, dict) and raw.get("upload") and raw.get("meta_type"):
+            media_id = (raw.get("upload") or {}).get("id") or ""
+            if media_id:
+                kind = raw.get("meta_type")  # image/video/audio/document
+                req = self.context.get("request")
+                url = req.build_absolute_uri(f"/digitales/media/{media_id}/") if req else f"/digitales/media/{media_id}/"
+                return [{
+                    "id": media_id,
+                    "kind": "file" if kind == "document" else kind,
+                    "url": url,
+                    "mime": raw.get("content_type") or "",
+                    "name": raw.get("filename") or "",
+                    "size": 0,
+                }]
+
+        # 2) Caso ENTRANTE (webhook): raw es el msg de WhatsApp con type y payload
+        if isinstance(raw, dict):
+            t = (raw.get("type") or "").lower()
+            if t in ("image","video","audio","document","sticker"):
+                payload = raw.get(t) or {}
+                media_id = payload.get("id") or ""
+                if media_id:
+                    req = self.context.get("request")
+                    url = req.build_absolute_uri(f"/digitales/media/{media_id}/") if req else f"/digitales/media/{media_id}/"
+                    name = payload.get("filename") or ""
+                    mime = payload.get("mime_type") or ""
+                    return [{
+                        "id": media_id,
+                        "kind": "sticker" if t == "sticker" else ("file" if t == "document" else t),
+                        "url": url,
+                        "mime": mime,
+                        "name": name,
+                        "size": 0,
+                    }]
+
+        return []

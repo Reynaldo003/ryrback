@@ -217,7 +217,26 @@ def _unread_count(cliente: ClientesDigitales) -> int:
         qs = qs.filter(created_at__gt=cliente.last_read_at)
     return qs.count()
 
+# digitales/views.py
+from django.http import HttpResponse
+from rest_framework.decorators import api_view, permission_classes
+from rest_framework.permissions import AllowAny
+from .contacto import download_media_whatsapp
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def media_proxy_view(request, media_id: str):
+    try:
+        blob, content_type = download_media_whatsapp(media_id)
+        resp = HttpResponse(blob, content_type=content_type)
+
+        # Para documentos: si quieres forzar descarga, puedes setear Content-Disposition.
+        # Aquí lo dejamos inline para imágenes/video/audio.
+        resp["Cache-Control"] = "private, max-age=300"
+        return resp
+    except Exception as e:
+        return HttpResponse(f"error: {str(e)}", status=400, content_type="text/plain")
+    
 @api_view(["GET"])
 @permission_classes([AllowAny])
 def contacto_updates(request):
