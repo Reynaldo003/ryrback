@@ -239,16 +239,22 @@ def editar_texto_whatsapp(to: str, original_message_id: str, new_text: str) -> d
 # digitales/contacto.py
 import requests
 from .sett import whatsapp_url, whatsapp_token
+import re
+import requests
+from .sett import whatsapp_url, whatsapp_token
+
+def _graph_root_from_messages_url(messages_url: str) -> str:
+    base = _graph_base_from_messages_url(messages_url)  # quita /messages
+    if not base:
+        return ""
+    return "/".join(base.split("/")[:-1])  # quita el phone_number_id
 
 def get_media_info_whatsapp(media_id: str) -> dict:
-    """
-    1) GET /{media_id} para obtener {url, mime_type, ...}
-    """
-    base = _graph_base_from_messages_url(whatsapp_url)
-    if not base:
-        raise RuntimeError("No se pudo derivar base URL de WhatsApp (whatsapp_url inválida).")
+    graph_root = _graph_root_from_messages_url(whatsapp_url)
+    if not graph_root:
+        raise RuntimeError("No se pudo derivar graph_root desde whatsapp_url.")
 
-    url = f"{base}/{media_id}"
+    url = f"{graph_root}/{media_id}"
     headers = {"Authorization": f"Bearer {whatsapp_token}"}
 
     r = requests.get(url, headers=headers, timeout=20)
@@ -257,9 +263,6 @@ def get_media_info_whatsapp(media_id: str) -> dict:
     return r.json()
 
 def download_media_whatsapp(media_id: str) -> tuple[bytes, str]:
-    """
-    2) GET al 'url' que regresa Meta (con Authorization) y devuelve (bytes, content_type)
-    """
     info = get_media_info_whatsapp(media_id)
     media_url = info.get("url") or ""
     if not media_url:
