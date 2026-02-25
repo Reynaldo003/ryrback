@@ -260,7 +260,7 @@ def contacto_updates(request):
     return Response(
         {
             "ok": True,
-            "mensajes": WhatsAppMessageSerializer(qs, many=True).data,
+            "mensajes": WhatsAppMessageSerializer(qs, many=True, context={"request": request}).data,
             "server_now": timezone.now().isoformat(),
         },
         status=status.HTTP_200_OK,
@@ -329,7 +329,7 @@ def contacto_por_telefono(request):
         {
             "ok": True,
             "prospecto": ClientesDigitalesSerializer(prospecto).data if prospecto else None,
-            "mensajes": WhatsAppMessageSerializer(mensajes, many=True).data,
+            "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data            
         },
         status=status.HTTP_200_OK,
     )

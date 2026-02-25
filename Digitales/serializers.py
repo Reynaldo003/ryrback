@@ -3,7 +3,7 @@ from rest_framework import serializers
 from .models import ClientesDigitales, MensajeWhatsApp
 from django.utils import timezone
 from datetime import timedelta
-
+from django.urls import reverse
 class ClientesDigitalesSerializer(serializers.ModelSerializer):
     class Meta:
         model = ClientesDigitales
@@ -123,7 +123,10 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             if media_id:
                 kind = raw.get("meta_type")  # image/video/audio/document
                 req = self.context.get("request")
-                url = req.build_absolute_uri(f"/digitales/media/{media_id}/") if req else f"/digitales/media/{media_id}/"
+                #url = req.build_absolute_uri(f"/digitales/media/{media_id}/") if req else f"/digitales/media/{media_id}/"
+                req = self.context.get("request")
+                path = reverse("digitales-media-proxy", args=[media_id])
+                url = req.build_absolute_uri(path) if req else path
                 return [{
                     "id": media_id,
                     "kind": "file" if kind == "document" else kind,
@@ -141,7 +144,10 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
                 media_id = payload.get("id") or ""
                 if media_id:
                     req = self.context.get("request")
-                    url = req.build_absolute_uri(f"/digitales/media/{media_id}/") if req else f"/digitales/media/{media_id}/"
+                    #url = req.build_absolute_uri(f"/digitales/media/{media_id}/") if req else f"/digitales/media/{media_id}/"
+                    req = self.context.get("request")
+                    path = reverse("digitales-media-proxy", args=[media_id])
+                    url = req.build_absolute_uri(path) if req else path
                     name = payload.get("filename") or ""
                     mime = payload.get("mime_type") or ""
                     return [{

@@ -40,6 +40,5 @@ urlpatterns = [
     path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),
     path("contacto/updates/", contacto_updates),
-    path("media/<str:media_id>/", media_proxy_view),
-
+    path("media/<str:media_id>/", media_proxy_view, name="digitales-media-proxy"),
 ]
