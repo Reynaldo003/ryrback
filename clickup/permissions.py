@@ -1,26 +1,30 @@
 # clickup/permissions.py
 from rest_framework.permissions import BasePermission
-from .models import TeamMember
+from .models import MiembroEquipo
 
-class IsTeamMember(BasePermission):
+
+class EsMiembroEquipo(BasePermission):
     def has_permission(self, request, view):
-        team_id = view.kwargs.get("team_id")
-        if not team_id:
+        equipo_id = view.kwargs.get("equipo_id") or view.kwargs.get("team_id")
+        if not equipo_id:
             return True
-        return TeamMember.objects.filter(
-            team_id=team_id,
-            user_id=request.user.id_usuario,
-            is_active=True
+
+        return MiembroEquipo.objects.filter(
+            equipo_id=equipo_id,
+            usuario_id=request.user.id_usuario,
+            activo=True
         ).exists()
 
-class IsTeamAdminOrOwner(BasePermission):
+
+class EsAdminOPropietarioEquipo(BasePermission):
     def has_permission(self, request, view):
-        team_id = view.kwargs.get("team_id")
-        if not team_id:
+        equipo_id = view.kwargs.get("equipo_id") or view.kwargs.get("team_id")
+        if not equipo_id:
             return False
-        return TeamMember.objects.filter(
-            team_id=team_id,
-            user_id=request.user.id_usuario,
-            is_active=True,
-            role__in=["OWNER", "ADMIN"]
+
+        return MiembroEquipo.objects.filter(
+            equipo_id=equipo_id,
+            usuario_id=request.user.id_usuario,
+            activo=True,
+            rol__in=["OWNER", "ADMIN"]
         ).exists()

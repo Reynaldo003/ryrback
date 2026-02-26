@@ -1,213 +1,193 @@
 # clickup/views.py
-from django.db import transaction
+from django.db import models, transaction
 from django.utils import timezone
-from rest_framework import viewsets, status
+from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 
 from .models import (
-    Team, TeamMember, TeamInvite,
-    Project, List, Task, TaskAssignee
+    Equipo, MiembroEquipo, InvitacionEquipo,
+    Proyecto, Lista, Tarea
 )
 from .serializers import (
-    TeamSerializer, TeamMemberSerializer, TeamInviteSerializer,
-    ProjectSerializer, ListSerializer, TaskSerializer
+    EquipoSerializer, MiembroEquipoSerializer, InvitacionEquipoSerializer,
+    ProyectoSerializer, ListaSerializer, TareaSerializer
 )
-from .permissions import IsTeamMember, IsTeamAdminOrOwner
+from .permissions import EsMiembroEquipo, EsAdminOPropietarioEquipo
 
 
-class TeamViewSet(viewsets.ModelViewSet):
-    serializer_class = TeamSerializer
+class EquipoViewSet(viewsets.ModelViewSet):
+    serializer_class = EquipoSerializer
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
         uid = self.request.user.id_usuario
-        return Team.objects.filter(memberships__user_id=uid, memberships__is_active=True).distinct()
+        return Equipo.objects.filter(miembros__usuario_id=uid, miembros__activo=True).distinct()
 
     def perform_create(self, serializer):
-        team = serializer.save(owner=self.request.user)
-        TeamMember.objects.create(team=team, user=self.request.user, role="OWNER", is_active=True)
+        equipo = serializer.save(propietario=self.request.user)
+        MiembroEquipo.objects.create(equipo=equipo, usuario=self.request.user, rol="OWNER", activo=True)
 
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, IsTeamMember])
-    def members(self, request, pk=None):
-        qs = TeamMember.objects.filter(team_id=pk, is_active=True).select_related("user")
-        return Response(TeamMemberSerializer(qs, many=True).data)
+    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, EsMiembroEquipo])
+    def miembros(self, request, pk=None):
+        qs = MiembroEquipo.objects.filter(equipo_id=pk, activo=True).select_related("usuario")
+        return Response(MiembroEquipoSerializer(qs, many=True).data)
 
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, IsTeamAdminOrOwner])
-    def invites(self, request, pk=None):
-        qs = TeamInvite.objects.filter(team_id=pk).order_by("-created_at")
-        return Response(TeamInviteSerializer(qs, many=True).data)
+    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, EsAdminOPropietarioEquipo])
+    def invitaciones(self, request, pk=None):
+        qs = InvitacionEquipo.objects.filter(equipo_id=pk).order_by("-creado_en")
+        return Response(InvitacionEquipoSerializer(qs, many=True).data)
 
-    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsTeamAdminOrOwner])
-    def invite(self, request, pk=None):
-        email = str(request.data.get("email", "")).strip().lower()
-        role = str(request.data.get("role", "MEMBER")).strip().upper()
-        expires_days = int(request.data.get("expires_days", 7))
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, EsAdminOPropietarioEquipo])
+    def invitar(self, request, pk=None):
+        correo = str(request.data.get("correo", "")).strip().lower()
+        rol = str(request.data.get("rol", "MEMBER")).strip().upper()
+        dias_expira = int(request.data.get("dias_expira", 7))
 
-        if not email:
-            return Response({"detail": "email es requerido."}, status=400)
+        if not correo:
+            return Response({"detail": "correo es requerido."}, status=400)
 
-        inv = TeamInvite.objects.create(
-            team_id=pk,
-            email=email,
-            role=role if role in ["ADMIN", "MEMBER", "VIEWER"] else "MEMBER",
-            invited_by=request.user,
-            expires_at=timezone.now() + timezone.timedelta(days=expires_days),
+        inv = InvitacionEquipo.objects.create(
+            equipo_id=pk,
+            correo=correo,
+            rol=rol if rol in ["ADMIN", "MEMBER", "VIEWER"] else "MEMBER",
+            invitado_por=request.user,
+            expira_en=timezone.now() + timezone.timedelta(days=dias_expira),
         )
 
-        # Front: /clickup/accept?token=...
         base_url = request.headers.get("Origin", "").strip() or "http://localhost:5173"
-        invite_url = f"{base_url}/clickup/accept?token={inv.token}"
+        url_aceptar = f"{base_url}/clickup/accept?token={inv.token}"
 
-        # Si luego quieres enviar email real, lo conectamos aquí.
-        return Response({**TeamInviteSerializer(inv).data, "invite_url": invite_url}, status=201)
+        return Response({**InvitacionEquipoSerializer(inv).data, "url_aceptar": url_aceptar}, status=201)
 
-    @action(detail=True, methods=["post"], url_path="invites/(?P<invite_id>[^/.]+)/revoke",
-            permission_classes=[IsAuthenticated, IsTeamAdminOrOwner])
-    def revoke_invite(self, request, pk=None, invite_id=None):
-        inv = TeamInvite.objects.filter(team_id=pk, id=invite_id).first()
+    @action(detail=True, methods=["post"], url_path="invitaciones/(?P<invitacion_id>[^/.]+)/revocar",
+            permission_classes=[IsAuthenticated, EsAdminOPropietarioEquipo])
+    def revocar_invitacion(self, request, pk=None, invitacion_id=None):
+        inv = InvitacionEquipo.objects.filter(equipo_id=pk, id=invitacion_id).first()
         if not inv:
             return Response({"detail": "Invitación no encontrada."}, status=404)
-        if inv.status != "PENDING":
+        if inv.estado != "PENDING":
             return Response({"detail": "Solo PENDING se puede revocar."}, status=400)
-        inv.status = "REVOKED"
-        inv.save(update_fields=["status"])
+
+        inv.estado = "REVOKED"
+        inv.save(update_fields=["estado"])
         return Response({"ok": True})
 
-    @action(detail=False, methods=["post"], url_path="accept", permission_classes=[IsAuthenticated])
-    def accept(self, request):
+    @action(detail=False, methods=["post"], url_path="aceptar", permission_classes=[IsAuthenticated])
+    def aceptar(self, request):
         token = str(request.data.get("token", "")).strip()
         if not token:
             return Response({"detail": "token es requerido."}, status=400)
 
-        inv = TeamInvite.objects.filter(token=token).select_related("team").first()
+        inv = InvitacionEquipo.objects.filter(token=token).select_related("equipo").first()
         if not inv:
             return Response({"detail": "Invitación inválida."}, status=404)
 
-        if inv.status != "PENDING":
-            return Response({"detail": f"Invitación no disponible: {inv.status}."}, status=400)
+        if inv.estado != "PENDING":
+            return Response({"detail": f"Invitación no disponible: {inv.estado}."}, status=400)
 
-        if inv.is_expired():
-            inv.status = "EXPIRED"
-            inv.save(update_fields=["status"])
+        if inv.esta_expirada():
+            inv.estado = "EXPIRED"
+            inv.save(update_fields=["estado"])
             return Response({"detail": "Invitación expirada."}, status=400)
 
-        # Validación por correo (tu Usuario tiene campo correo). :contentReference[oaicite:3]{index=3}
-        if (request.user.correo or "").strip().lower() != inv.email:
+        if (request.user.correo or "").strip().lower() != inv.correo:
             return Response({"detail": "Tu correo no coincide con la invitación."}, status=403)
 
-        TeamMember.objects.update_or_create(
-            team=inv.team,
-            user=request.user,
-            defaults={"role": inv.role, "is_active": True},
+        MiembroEquipo.objects.update_or_create(
+            equipo=inv.equipo,
+            usuario=request.user,
+            defaults={"rol": inv.rol, "activo": True},
         )
 
-        inv.status = "ACCEPTED"
-        inv.accepted_at = timezone.now()
-        inv.accepted_by = request.user
-        inv.save(update_fields=["status", "accepted_at", "accepted_by"])
+        inv.estado = "ACCEPTED"
+        inv.aceptado_en = timezone.now()
+        inv.aceptado_por = request.user
+        inv.save(update_fields=["estado", "aceptado_en", "aceptado_por"])
 
-        return Response({"ok": True, "team_id": inv.team_id})
+        return Response({"ok": True, "equipo_id": inv.equipo_id})
 
 
-class ProjectViewSet(viewsets.ModelViewSet):
-    serializer_class = ProjectSerializer
-    permission_classes = [IsAuthenticated, IsTeamMember]
+class ProyectoViewSet(viewsets.ModelViewSet):
+    serializer_class = ProyectoSerializer
+    permission_classes = [IsAuthenticated, EsMiembroEquipo]
 
     def get_queryset(self):
-        return Project.objects.filter(team_id=self.kwargs["team_id"]).order_by("-created_at")
+        return Proyecto.objects.filter(equipo_id=self.kwargs["equipo_id"]).order_by("-creado_en")
 
     def perform_create(self, serializer):
-        serializer.save(team_id=self.kwargs["team_id"])
+        serializer.save(equipo_id=self.kwargs["equipo_id"])
 
-    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, IsTeamMember])
-    def bootstrap(self, request, team_id=None, pk=None):
-        """
-        Crea listas default para kanban:
-        - Por hacer
-        - En proceso
-        - Hecho
-        """
+    @action(detail=True, methods=["post"], permission_classes=[IsAuthenticated, EsMiembroEquipo])
+    def bootstrap(self, request, equipo_id=None, pk=None):
         defaults = ["Por hacer", "En proceso", "Hecho"]
-        created = []
-        for idx, name in enumerate(defaults):
-            obj, _ = List.objects.get_or_create(project_id=pk, name=name, defaults={"order": idx})
-            created.append(obj)
-        return Response(ListSerializer(created, many=True).data)
+        creadas = []
+        for idx, nombre in enumerate(defaults):
+            obj, _ = Lista.objects.get_or_create(proyecto_id=pk, nombre=nombre, defaults={"orden": idx})
+            creadas.append(obj)
+        return Response(ListaSerializer(creadas, many=True).data)
 
 
-class BoardViewSet(viewsets.ViewSet):
-    """
-    Tablero Kanban por Team + Project
-    """
-    permission_classes = [IsAuthenticated, IsTeamMember]
+class TableroViewSet(viewsets.ViewSet):
+    permission_classes = [IsAuthenticated, EsMiembroEquipo]
 
-    def list(self, request, team_id=None):
-        project_id = request.query_params.get("project_id")
-        if not project_id:
-            return Response({"detail": "project_id es requerido."}, status=400)
+    def list(self, request, equipo_id=None):
+        proyecto_id = request.query_params.get("proyecto_id")
+        if not proyecto_id:
+            return Response({"detail": "proyecto_id es requerido."}, status=400)
 
-        # valida que el proyecto sea de ese team
-        pr = Project.objects.filter(id=project_id, team_id=team_id).first()
+        pr = Proyecto.objects.filter(id=proyecto_id, equipo_id=equipo_id).first()
         if not pr:
             return Response({"detail": "Proyecto no encontrado."}, status=404)
 
-        lists = List.objects.filter(project_id=project_id).order_by("order", "id")
-        tasks = Task.objects.filter(list__project_id=project_id).select_related("list").order_by("order", "id")
+        listas = Lista.objects.filter(proyecto_id=proyecto_id).order_by("orden", "id")
+        tareas = Tarea.objects.filter(lista__proyecto_id=proyecto_id).select_related("lista").order_by("orden", "id")
 
-        # serialización simple
-        lists_data = ListSerializer(lists, many=True).data
+        listas_data = ListaSerializer(listas, many=True).data
 
-        tasks_by_list = {}
-        for t in tasks:
-            tasks_by_list.setdefault(t.list_id, []).append(TaskSerializer(t).data)
+        tareas_por_lista = {}
+        for t in tareas:
+            tareas_por_lista.setdefault(t.lista_id, []).append(TareaSerializer(t).data)
 
         return Response({
-            "project": ProjectSerializer(pr).data,
-            "lists": lists_data,
-            "tasks_by_list": tasks_by_list,
+            "proyecto": ProyectoSerializer(pr).data,
+            "listas": listas_data,
+            "tareas_por_lista": tareas_por_lista,
         })
 
     @action(detail=False, methods=["post"])
     @transaction.atomic
-    def move_task(self, request, team_id=None):
-        """
-        body:
-        {
-          "task_id": 1,
-          "to_list_id": 2,
-          "to_order": 0
-        }
-        """
-        task_id = request.data.get("task_id")
-        to_list_id = request.data.get("to_list_id")
-        to_order = int(request.data.get("to_order", 0))
+    def mover_tarea(self, request, equipo_id=None):
+        tarea_id = request.data.get("tarea_id")
+        lista_destino_id = request.data.get("lista_destino_id")
+        orden_destino = int(request.data.get("orden_destino", 0))
 
-        if not task_id or not to_list_id:
-            return Response({"detail": "task_id y to_list_id son requeridos."}, status=400)
+        if not tarea_id or not lista_destino_id:
+            return Response({"detail": "tarea_id y lista_destino_id son requeridos."}, status=400)
 
-        task = Task.objects.select_related("list__project").filter(
-            id=task_id, list__project__team_id=team_id
+        tarea = Tarea.objects.select_related("lista__proyecto").filter(
+            id=tarea_id, lista__proyecto__equipo_id=equipo_id
         ).first()
-        if not task:
+        if not tarea:
             return Response({"detail": "Tarea no encontrada."}, status=404)
 
-        to_list = List.objects.select_related("project").filter(
-            id=to_list_id, project__team_id=team_id
+        lista_destino = Lista.objects.select_related("proyecto").filter(
+            id=lista_destino_id, proyecto__equipo_id=equipo_id
         ).first()
-        if not to_list:
+        if not lista_destino:
             return Response({"detail": "Lista destino no encontrada."}, status=404)
 
+        lista_origen_id = tarea.lista_id
+
         # compacta órdenes en la lista origen
-        origin_list_id = task.list_id
-        Task.objects.filter(list_id=origin_list_id, order__gt=task.order).update(order=models.F("order") - 1)
+        Tarea.objects.filter(lista_id=lista_origen_id, orden__gt=tarea.orden).update(orden=models.F("orden") - 1)
 
         # abre hueco en la lista destino
-        Task.objects.filter(list_id=to_list_id, order__gte=to_order).update(order=models.F("order") + 1)
+        Tarea.objects.filter(lista_id=lista_destino_id, orden__gte=orden_destino).update(orden=models.F("orden") + 1)
 
-        task.list = to_list
-        task.order = to_order
-        task.save(update_fields=["list", "order"])
+        tarea.lista = lista_destino
+        tarea.orden = orden_destino
+        tarea.save(update_fields=["lista", "orden"])
 
         return Response({"ok": True})

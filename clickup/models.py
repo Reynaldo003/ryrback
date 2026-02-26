@@ -3,145 +3,201 @@ import uuid
 from django.db import models
 from django.utils import timezone
 
-from CrmConformidad.models import Usuario  # AJUSTA a tu app real donde está Usuario
+from CrmConformidad.models import Usuario
 
 
-class Team(models.Model):
+class Equipo(models.Model):
     id = models.BigAutoField(primary_key=True)
-    name = models.CharField(max_length=120)
+    nombre = models.CharField(max_length=120)
     descripcion = models.CharField(max_length=255, blank=True, null=True)
 
-    owner = models.ForeignKey(Usuario, on_delete=models.PROTECT, related_name="owned_teams")
-    created_at = models.DateTimeField(auto_now_add=True)
+    propietario = models.ForeignKey(
+        Usuario,
+        on_delete=models.PROTECT,
+        related_name="equipos_propios",
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = "clickup_teams"
+        db_table = "clickup_equipo"
 
     def __str__(self):
-        return self.name
+        return self.nombre
 
 
-class TeamMember(models.Model):
-    ROLE_CHOICES = (
-        ("OWNER", "Owner"),
-        ("ADMIN", "Admin"),
-        ("MEMBER", "Member"),
-        ("VIEWER", "Viewer"),
+class MiembroEquipo(models.Model):
+    ROLES = (
+        ("OWNER", "Propietario"),
+        ("ADMIN", "Administrador"),
+        ("MEMBER", "Miembro"),
+        ("VIEWER", "Lector"),
     )
 
     id = models.BigAutoField(primary_key=True)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="memberships")
-    user = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name="team_memberships")
-    role = models.CharField(max_length=12, choices=ROLE_CHOICES, default="MEMBER")
-    joined_at = models.DateTimeField(auto_now_add=True)
-    is_active = models.BooleanField(default=True)
+    equipo = models.ForeignKey(
+        Equipo,
+        on_delete=models.CASCADE,
+        related_name="miembros",
+    )
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.CASCADE,
+        related_name="membresias_equipo",
+    )
+    rol = models.CharField(max_length=12, choices=ROLES, default="MEMBER")
+    unido_en = models.DateTimeField(auto_now_add=True)
+    activo = models.BooleanField(default=True)
 
     class Meta:
-        db_table = "clickup_team_members"
-        unique_together = ("team", "user")
+        db_table = "clickup_miembro_equipo"
+        constraints = [
+            models.UniqueConstraint(fields=["equipo", "usuario"], name="uq_clickup_miembro_equipo_usuario")
+        ]
 
 
-class TeamInvite(models.Model):
-    STATUS_CHOICES = (
-        ("PENDING", "Pending"),
-        ("ACCEPTED", "Accepted"),
-        ("REVOKED", "Revoked"),
-        ("EXPIRED", "Expired"),
+class InvitacionEquipo(models.Model):
+    ESTADOS = (
+        ("PENDING", "Pendiente"),
+        ("ACCEPTED", "Aceptada"),
+        ("REVOKED", "Revocada"),
+        ("EXPIRED", "Expirada"),
     )
 
     id = models.BigAutoField(primary_key=True)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="invites")
-    email = models.EmailField(max_length=255)
-    role = models.CharField(max_length=12, default="MEMBER")
+    equipo = models.ForeignKey(
+        Equipo,
+        on_delete=models.CASCADE,
+        related_name="invitaciones",
+    )
+    correo = models.EmailField(max_length=255)
+    rol = models.CharField(max_length=12, default="MEMBER")
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
 
-    invited_by = models.ForeignKey(Usuario, on_delete=models.PROTECT, related_name="sent_team_invites")
-    status = models.CharField(max_length=10, choices=STATUS_CHOICES, default="PENDING")
+    invitado_por = models.ForeignKey(
+        Usuario,
+        on_delete=models.PROTECT,
+        related_name="invitaciones_equipo_enviadas",
+    )
+    estado = models.CharField(max_length=10, choices=ESTADOS, default="PENDING")
 
-    created_at = models.DateTimeField(auto_now_add=True)
-    expires_at = models.DateTimeField()
+    creado_en = models.DateTimeField(auto_now_add=True)
+    expira_en = models.DateTimeField(blank=True, null=True)
 
-    accepted_at = models.DateTimeField(blank=True, null=True)
-    accepted_by = models.ForeignKey(
-        Usuario, on_delete=models.PROTECT, null=True, blank=True, related_name="accepted_team_invites"
+    aceptado_en = models.DateTimeField(blank=True, null=True)
+    aceptado_por = models.ForeignKey(
+        Usuario,
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="invitaciones_equipo_aceptadas",
     )
 
     class Meta:
-        db_table = "clickup_team_invites"
+        db_table = "clickup_invitacion_equipo"
         indexes = [
-            models.Index(fields=["team", "email"]),
+            models.Index(fields=["equipo", "correo"]),
             models.Index(fields=["token"]),
-            models.Index(fields=["status"]),
+            models.Index(fields=["estado"]),
         ]
 
     def save(self, *args, **kwargs):
-        if not self.expires_at:
-            self.expires_at = timezone.now() + timezone.timedelta(days=7)
+        if not self.expira_en:
+            self.expira_en = timezone.now() + timezone.timedelta(days=7)
         super().save(*args, **kwargs)
 
-    def is_expired(self):
-        return timezone.now() >= self.expires_at
+    def esta_expirada(self):
+        return timezone.now() >= self.expira_en
 
 
 # ========= Proyectos por equipo =========
 
-class Project(models.Model):
+class Proyecto(models.Model):
     id = models.BigAutoField(primary_key=True)
-    team = models.ForeignKey(Team, on_delete=models.CASCADE, related_name="projects")
-    name = models.CharField(max_length=140)
+    equipo = models.ForeignKey(
+        Equipo,
+        on_delete=models.CASCADE,
+        related_name="proyectos",
+    )
+    nombre = models.CharField(max_length=140)
     descripcion = models.CharField(max_length=255, blank=True, null=True)
-    created_at = models.DateTimeField(auto_now_add=True)
+    creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = "clickup_projects"
-        unique_together = ("team", "name")
+        db_table = "clickup_proyectos"
+        constraints = [
+            models.UniqueConstraint(fields=["equipo", "nombre"], name="uq_clickup_proyecto_equipo_nombre")
+        ]
 
 
-class List(models.Model):
+class Lista(models.Model):
     id = models.BigAutoField(primary_key=True)
-    project = models.ForeignKey(Project, on_delete=models.CASCADE, related_name="lists")
-    name = models.CharField(max_length=120)
-    order = models.IntegerField(default=0)
+    proyecto = models.ForeignKey(
+        Proyecto,
+        on_delete=models.CASCADE,
+        related_name="listas",
+    )
+    nombre = models.CharField(max_length=120)
+    orden = models.IntegerField(default=0)
 
     class Meta:
-        db_table = "clickup_lists"
-        ordering = ["order", "id"]
-        unique_together = ("project", "name")
+        db_table = "clickup_listas"
+        ordering = ["orden", "id"]
+        constraints = [
+            models.UniqueConstraint(fields=["proyecto", "nombre"], name="uq_clickup_lista_proyecto_nombre")
+        ]
 
 
-class Task(models.Model):
-    PRIORITY_CHOICES = (
-        ("LOW", "Low"),
-        ("MEDIUM", "Medium"),
-        ("HIGH", "High"),
-        ("URGENT", "Urgent"),
+class Tarea(models.Model):
+    PRIORIDADES = (
+        ("LOW", "Baja"),
+        ("MEDIUM", "Media"),
+        ("HIGH", "Alta"),
+        ("URGENT", "Urgente"),
     )
 
     id = models.BigAutoField(primary_key=True)
-    list = models.ForeignKey(List, on_delete=models.CASCADE, related_name="tasks")
+    lista = models.ForeignKey(
+        Lista,
+        on_delete=models.CASCADE,
+        related_name="tareas",
+    )
 
-    title = models.CharField(max_length=200)
-    description = models.TextField(blank=True, null=True)
+    titulo = models.CharField(max_length=200)
+    descripcion = models.TextField(blank=True, null=True)
 
-    priority = models.CharField(max_length=10, choices=PRIORITY_CHOICES, default="MEDIUM")
-    due_date = models.DateTimeField(blank=True, null=True)
+    prioridad = models.CharField(max_length=10, choices=PRIORIDADES, default="MEDIUM")
+    vence_en = models.DateTimeField(blank=True, null=True)
 
     # orden dentro de la lista (para kanban)
-    order = models.IntegerField(default=0)
+    orden = models.IntegerField(default=0)
 
-    created_by = models.ForeignKey(Usuario, on_delete=models.PROTECT, related_name="created_clickup_tasks")
-    created_at = models.DateTimeField(auto_now_add=True)
+    creado_por = models.ForeignKey(
+        Usuario,
+        on_delete=models.PROTECT,
+        related_name="tareas_clickup_creadas",
+    )
+    creado_en = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = "clickup_tasks"
-        ordering = ["order", "id"]
+        db_table = "clickup_tareas"
+        ordering = ["orden", "id"]
 
 
-class TaskAssignee(models.Model):
+class TareaAsignada(models.Model):
     id = models.BigAutoField(primary_key=True)
-    task = models.ForeignKey(Task, on_delete=models.CASCADE, related_name="assignees")
-    user = models.ForeignKey(Usuario, on_delete=models.CASCADE, related_name="assigned_clickup_tasks")
+    tarea = models.ForeignKey(
+        Tarea,
+        on_delete=models.CASCADE,
+        related_name="asignados",
+    )
+    usuario = models.ForeignKey(
+        Usuario,
+        on_delete=models.CASCADE,
+        related_name="tareas_clickup_asignadas",
+    )
 
     class Meta:
-        db_table = "clickup_task_assignees"
-        unique_together = ("task", "user")
+        db_table = "clickup_tarea_asignada"
+        constraints = [
+            models.UniqueConstraint(fields=["tarea", "usuario"], name="uq_clickup_tarea_asignada_tarea_usuario")
+        ]

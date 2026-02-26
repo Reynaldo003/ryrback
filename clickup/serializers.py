@@ -1,8 +1,9 @@
 # clickup/serializers.py
 from rest_framework import serializers
 from django.utils import timezone
-from .models import Team, TeamMember, TeamInvite, Project, List, Task, TaskAssignee
-from CrmConformidad.models import Usuario  # AJUSTA
+
+from .models import Equipo, MiembroEquipo, InvitacionEquipo, Proyecto, Lista, Tarea, TareaAsignada
+from CrmConformidad.models import Usuario
 
 
 class UsuarioMiniSerializer(serializers.ModelSerializer):
@@ -11,78 +12,78 @@ class UsuarioMiniSerializer(serializers.ModelSerializer):
         fields = ("id_usuario", "nombre", "apellidos", "correo")
 
 
-class TeamSerializer(serializers.ModelSerializer):
-    owner = UsuarioMiniSerializer(read_only=True)
+class EquipoSerializer(serializers.ModelSerializer):
+    propietario = UsuarioMiniSerializer(read_only=True)
 
     class Meta:
-        model = Team
-        fields = ("id", "name", "descripcion", "owner", "created_at")
+        model = Equipo
+        fields = ("id", "nombre", "descripcion", "propietario", "creado_en")
 
 
-class TeamMemberSerializer(serializers.ModelSerializer):
-    user = UsuarioMiniSerializer(read_only=True)
-
-    class Meta:
-        model = TeamMember
-        fields = ("id", "team", "user", "role", "joined_at", "is_active")
-        read_only_fields = ("id", "joined_at")
-
-
-class TeamInviteSerializer(serializers.ModelSerializer):
-    invited_by = UsuarioMiniSerializer(read_only=True)
-    is_expired = serializers.SerializerMethodField()
+class MiembroEquipoSerializer(serializers.ModelSerializer):
+    usuario = UsuarioMiniSerializer(read_only=True)
 
     class Meta:
-        model = TeamInvite
+        model = MiembroEquipo
+        fields = ("id", "equipo", "usuario", "rol", "unido_en", "activo")
+        read_only_fields = ("id", "unido_en")
+
+
+class InvitacionEquipoSerializer(serializers.ModelSerializer):
+    invitado_por = UsuarioMiniSerializer(read_only=True)
+    esta_expirada = serializers.SerializerMethodField()
+
+    class Meta:
+        model = InvitacionEquipo
         fields = (
-            "id", "team", "email", "role", "token",
-            "status", "invited_by", "created_at", "expires_at",
-            "is_expired", "accepted_at", "accepted_by"
+            "id", "equipo", "correo", "rol", "token",
+            "estado", "invitado_por", "creado_en", "expira_en",
+            "esta_expirada", "aceptado_en", "aceptado_por"
         )
-        read_only_fields = ("id", "token", "status", "created_at", "accepted_at", "accepted_by")
+        read_only_fields = ("id", "token", "estado", "creado_en", "aceptado_en", "aceptado_por")
 
-    def get_is_expired(self, obj):
-        return obj.is_expired()
+    def get_esta_expirada(self, obj):
+        return obj.esta_expirada()
 
-    def validate_email(self, value):
+    def validate_correo(self, value):
         return value.strip().lower()
 
-    def validate_expires_at(self, value):
+    def validate_expira_en(self, value):
         if value and value <= timezone.now():
-            raise serializers.ValidationError("expires_at debe ser futura.")
+            raise serializers.ValidationError("expira_en debe ser futura.")
         return value
 
 
-class ProjectSerializer(serializers.ModelSerializer):
+class ProyectoSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Project
-        fields = ("id", "team", "name", "descripcion", "created_at")
-        read_only_fields = ("id", "created_at")
+        model = Proyecto
+        fields = ("id", "equipo", "nombre", "descripcion", "creado_en")
+        read_only_fields = ("id", "creado_en")
 
 
-class ListSerializer(serializers.ModelSerializer):
+class ListaSerializer(serializers.ModelSerializer):
     class Meta:
-        model = List
-        fields = ("id", "project", "name", "order")
+        model = Lista
+        fields = ("id", "proyecto", "nombre", "orden")
         read_only_fields = ("id",)
 
 
-class TaskAssigneeSerializer(serializers.ModelSerializer):
-    user = UsuarioMiniSerializer(read_only=True)
+class TareaAsignadaSerializer(serializers.ModelSerializer):
+    usuario = UsuarioMiniSerializer(read_only=True)
 
     class Meta:
-        model = TaskAssignee
-        fields = ("id", "user")
+        model = TareaAsignada
+        fields = ("id", "usuario")
 
 
-class TaskSerializer(serializers.ModelSerializer):
-    assignees = TaskAssigneeSerializer(many=True, read_only=True)
+class TareaSerializer(serializers.ModelSerializer):
+    asignados = TareaAsignadaSerializer(many=True, read_only=True)
 
     class Meta:
-        model = Task
+        model = Tarea
         fields = (
-            "id", "list", "title", "description",
-            "priority", "due_date", "order",
-            "created_by", "created_at", "assignees",
+            "id", "lista", "titulo", "descripcion",
+            "prioridad", "vence_en", "orden",
+            "creado_por", "creado_en", "asignados",
         )
-        read_only_fields = ("id", "created_by", "created_at")
+        read_only_fields = ("id", "creado_por", "creado_en")

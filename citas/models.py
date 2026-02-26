@@ -15,6 +15,7 @@ class Citas(models.Model):
 
     tipo_cita = models.CharField(max_length=120, blank=True, default="")
     fuente_prospeccion = models.CharField(max_length=120, blank=True, default="")
+    asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_solicita = models.CharField(max_length=200, blank=True, default="")
     asesor_asignado = models.CharField(max_length=200, blank=True, default="") 
     asesor_atendio = models.CharField(max_length=200, blank=True, default="")
