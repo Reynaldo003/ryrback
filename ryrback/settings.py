@@ -58,6 +58,7 @@ INSTALLED_APPS = [
     'CrmConformidad',
     'Digitales',
     'citas',
+    "clickup",
 ]
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
@@ -105,14 +106,14 @@ CORS_ALLOWED_ORIGINS = [
 
 
 DATABASES = {
-#'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'ryrcorp',
-#        'USER': 'postgres',
-#        'PASSWORD': '1234',
-#        'HOST': 'localhost',
-#        'PORT': '5432'
-#    }
+'default': {
+        'ENGINE': 'django.db.backends.postgresql',
+        'NAME': 'ryrcorp',
+        'USER': 'postgres',
+        'PASSWORD': '1234',
+        'HOST': 'localhost',
+        'PORT': '5432'
+    }
 #'default': {
 #        'ENGINE': 'django.db.backends.postgresql',
 #        'NAME': 'railway',
@@ -121,19 +122,19 @@ DATABASES = {
 #        'HOST': 'gondola.proxy.rlwy.net',
 #        'PORT': '35678'
 #    },
-'default': {
-        'ENGINE': 'mssql',
-        'NAME': 'TotalDealer_CO',
-        'USER': 'Israel',
-        'PASSWORD': 'Isr4el@2025',
-        'HOST': '187.141.69.254',
-        'PORT': '1433',
-        'OPTIONS': {
-            'driver': 'ODBC Driver 18 for SQL Server',
-            "extra_params": "TrustServerCertificate=yes",
-
-      }
-    }
+#'default': {
+#        'ENGINE': 'mssql',
+#        'NAME': 'TotalDealer_CO',
+#        'USER': 'Israel',
+#        'PASSWORD': 'Isr4el@2025',
+#        'HOST': '187.141.69.254',
+#        'PORT': '1433',
+#        'OPTIONS': {
+#            'driver': 'ODBC Driver 18 for SQL Server',
+#            "extra_params": "TrustServerCertificate=yes",
+#
+#      }
+#    }
 }
 
 
@@ -179,3 +180,5 @@ MEDIA_ROOT = BASE_DIR / "media"
 # https://docs.djangoproject.com/en/5.2/ref/settings/#default-auto-field
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+DEFAULT_FROM_EMAIL = "no-reply@crm.local"

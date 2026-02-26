@@ -2,6 +2,7 @@
 import mimetypes
 import requests
 from .sett import whatsapp_url, whatsapp_token
+import re
 
 DEFAULT_IDIOMA = "es"
 
@@ -29,10 +30,6 @@ def enviar_template_whatsapp(
     idioma: str = DEFAULT_IDIOMA,
     components: list[dict] | None = None,
 ) -> dict:
-    """
-    - Si components viene, se usa tal cual (header/body/footer).
-    - Si NO viene components, se asume BODY con params (compatibilidad hacia atrás).
-    """
     if not to:
         raise ValueError("Falta número destino")
     if not template_name:
@@ -202,7 +199,6 @@ def obtener_mensaje_whatsapp(message: dict) -> str:
             return it.get("list_reply", {}).get("title", "")
         if it.get("type") == "button_reply":
             return it.get("button_reply", {}).get("title", "")
-    # media entrante (si lo quieres manejar mejor después)
     if t in ("image", "document", "video", "audio", "sticker"):
         caption = ""
         if t in ("image", "video", "document"):
@@ -235,13 +231,6 @@ def editar_texto_whatsapp(to: str, original_message_id: str, new_text: str) -> d
     if r.status_code >= 400:
         raise RuntimeError(f"Meta edit error {r.status_code}: {r.text}")
     return r.json()
-
-# digitales/contacto.py
-import requests
-from .sett import whatsapp_url, whatsapp_token
-import re
-import requests
-from .sett import whatsapp_url, whatsapp_token
 
 def _graph_root_from_messages_url(messages_url: str) -> str:
     base = _graph_base_from_messages_url(messages_url)  # quita /messages
