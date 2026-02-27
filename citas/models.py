@@ -35,3 +35,46 @@ class Citas(models.Model):
     def __str__(self):
         return f"{self.nombre} ({self.telefono})".strip()
 
+
+class CitasPiso(models.Model):
+    nombre = models.CharField(max_length=200, blank=True, default="")
+    telefono = models.CharField(max_length=32, db_index=True, unique=False)
+    correo = models.CharField(max_length=200, blank=True, default="")
+    auto_interes = models.CharField(max_length=255, blank=True, default="")
+    agencia = models.CharField(max_length=120, blank=True, default="")
+    fecha_hora_cita = models.DateTimeField(null=True, blank=True)
+    asistencia = models.BooleanField(default=False)
+    be_back = models.BooleanField(default=False)
+    fuente_prospeccion = models.CharField(max_length=120, blank=True, default="")
+    asesor_piso = models.CharField(max_length=200, blank=True, default="")
+    folio_venta = models.CharField(max_length=200, blank=True, default="")
+    tipo_venta = models.CharField(max_length=200, blank=True, default="")
+    estado_ingreso = models.CharField(max_length=120, blank=True, default="")
+    comentarios_cliente = models.CharField(max_length=2000, blank=True, default="")
+    
+    class Meta:
+        db_table = "citas_piso"
+        managed = True
+
+    def __str__(self):
+        return f"{self.nombre} ({self.telefono})".strip()
+
+class PruebasManejo(models.Model):
+    nombre = models.CharField(max_length=200, blank=True, default="")
+    telefono = models.CharField(max_length=32, db_index=True, unique=False)
+    correo = models.CharField(max_length=200, blank=True, default="")
+    auto_interes = models.CharField(max_length=255, blank=True, default="")
+    agencia = models.CharField(max_length=120, blank=True, default="")
+    fecha_hora_cita = models.DateTimeField(null=True, blank=True)
+    asistencia = models.BooleanField(default=False)
+    num_serie = models.CharField(max_length=200, blank=True, default="")
+    asesor_piso = models.CharField(max_length=200, blank=True, default="")
+    comentarios_cliente = models.CharField(max_length=2000, blank=True, default="")
+    folio_venta = models.CharField(max_length=200, blank=True, default="")
+
+    class Meta:
+        db_table = "pruebas_manejo"
+        managed = True
+
+    def __str__(self):
+        return f"{self.nombre} ({self.telefono})".strip()
