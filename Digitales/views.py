@@ -1941,7 +1941,3 @@ def obtener_productos(request):
         {"nombre": "Producto B", "precio": 200.00}
     ]
     return JsonResponse(datos, safe=False) 
-
-
-
-Digitales
