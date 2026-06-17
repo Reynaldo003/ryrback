@@ -29,13 +29,15 @@ from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from citas.models import ClienteComercial, normaliza_tel_mx
 
 from .sett import WHATSAPP_LINES, whatsapp_numero_default
-from .IA import responder_mensaje_automatico, CATALOGO_VEHICULOS
+from .IA import responder_mensaje_automatico
 from .models import (
     ExpedienteDigital,
     MensajeWhatsApp,
     CampanaMeta,
     LecturaWhatsApp,
-    CatalogoPreciosSnapshot,
+    ConfiguracionIAWhatsApp,
+    ConversacionIA,
+    CatalogoVehiculos,
 )
 from .serializers import ProspectoSerializer, WhatsAppMessageSerializer
 from .services import generar_y_guardar_resumen, debe_generar_resumen_al_llegar_a_6
@@ -344,12 +346,93 @@ def _unread_count(exp: ExpedienteDigital, numero_asesor: str) -> int:
         qs = qs.filter(created_at__gt=lectura.last_read_at)
     return qs.count()
 
+def _parse_hora_ia(value):
+    try:
+        return timezone.datetime.strptime(str(value or "").strip(), "%H:%M").time()
+    except Exception:
+        return None
 
-def _debe_responder_con_ia(numero_asesor: str) -> bool:
+def _aware_datetime_ia(fecha, hora):
+    dt = timezone.datetime.combine(fecha, hora)
+
+    if settings.USE_TZ and timezone.is_naive(dt):
+        return timezone.make_aware(dt, timezone.get_current_timezone())
+
+    return dt
+
+def _ia_esta_en_horario(horarios: dict) -> bool:
+    if not isinstance(horarios, dict) or not horarios:
+        return True
+
+    dias = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
+    ahora = timezone.localtime()
+    hoy_idx = ahora.weekday()
+
+    for inicio_idx, dia_key in enumerate(dias):
+        config_dia = horarios.get(dia_key) or {}
+
+        if not config_dia.get("activo", False):
+            continue
+
+        hora_inicio = _parse_hora_ia(config_dia.get("inicio"))
+        hora_fin = _parse_hora_ia(config_dia.get("fin"))
+
+        if not hora_inicio or not hora_fin:
+            continue
+
+        hasta_dia = config_dia.get("hastaDia")
+        hasta_idx = dias.index(hasta_dia) if hasta_dia in dias else None
+
+        base_delta = inicio_idx - hoy_idx
+
+        for semana_offset in (0, -7):
+            fecha_inicio = ahora.date() + timedelta(days=base_delta + semana_offset)
+
+            if hasta_idx is not None:
+                dias_duracion = (hasta_idx - inicio_idx) % 7
+                fecha_fin = fecha_inicio + timedelta(days=dias_duracion)
+            else:
+                fecha_fin = fecha_inicio
+                if hora_fin <= hora_inicio:
+                    fecha_fin = fecha_fin + timedelta(days=1)
+
+            inicio_dt = _aware_datetime_ia(fecha_inicio, hora_inicio)
+            fin_dt = _aware_datetime_ia(fecha_fin, hora_fin)
+
+            if inicio_dt <= ahora <= fin_dt:
+                return True
+
+    return False
+
+def _debe_responder_con_ia(numero_asesor: str, expediente=None) -> bool:
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
-    cfg = WHATSAPP_LINES.get(numero_asesor, {})
-    return bool(cfg.get("responder_ia"))
 
+    if not numero_asesor:
+        return False
+
+    if expediente and expediente.ia_pausada:
+        return False
+
+    config = ConfiguracionIAWhatsApp.objects.filter(
+        numero_asesor=numero_asesor,
+    ).first()
+
+    if not config:
+        return False
+
+    if not config.activo:
+        return False
+
+    if expediente:
+        conversacion = ConversacionIA.objects.filter(
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+        ).first()
+
+        if conversacion and (not conversacion.ia_activa or conversacion.ia_pausada):
+            return False
+
+    return _ia_esta_en_horario(config.horarios)
 
 def _ya_existe_respuesta_ia_para_entrada(numero_asesor: str, wa_message_id_entrante: str) -> bool:
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
@@ -798,7 +881,7 @@ def webhook(request):
                         except Exception as e:
                             logger.exception("Error notificación websocket | tel=%s wa_id=%s error=%s", tel, wa_id, str(e))
 
-                    if _debe_responder_con_ia(numero_asesor):
+                    if _debe_responder_con_ia(numero_asesor, exp):
                         if not _ya_existe_respuesta_ia_para_entrada(numero_asesor, wa_id):
                             hilo = threading.Thread(
                                 target=_procesar_respuesta_ia_en_segundo_plano,
@@ -1189,8 +1272,11 @@ def enviar_mensaje_view(request):
                 "provider": "meta",
                 "send": wa_res,
                 "numero_asesor": numero_asesor,
+                "origen": "asesor_humano",
             },
         )
+
+        pausar_ia_por_intervencion_humana(exp, numero_asesor)
 
         return Response(
             {
@@ -1261,6 +1347,32 @@ def enviar_mensaje_view(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+def pausar_ia_por_intervencion_humana(expediente, numero_asesor):
+    expediente.ia_pausada = True
+    expediente.ia_pausada_motivo = "intervencion_humana"
+    expediente.ia_pausada_at = timezone.now()
+    expediente.save(update_fields=[
+        "ia_pausada",
+        "ia_pausada_motivo",
+        "ia_pausada_at",
+        "actualizado",
+    ])
+
+    conv, _ = ConversacionIA.objects.get_or_create(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    )
+
+    conv.ia_activa = False
+    conv.ia_pausada = True
+    conv.motivo_pausa = "intervencion_humana"
+    conv.estado_conversacion = "pausada"
+    conv.save(update_fields=[
+        "ia_activa",
+        "ia_pausada",
+        "motivo_pausa",
+        "estado_conversacion",
+    ])
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
@@ -1363,6 +1475,8 @@ def enviar_media_view(request):
                     "document_link": local_media_url if wtype == "document" else "",
                 },
             )
+            
+            pausar_ia_por_intervencion_humana(exp, numero_asesor)
 
             sent.append(
                 {
@@ -1544,6 +1658,8 @@ def enviar_plantilla_view(request):
                 "idioma": idioma,
             },
         )
+        
+        pausar_ia_por_intervencion_humana(exp, numero_asesor)
 
         return Response(
             {
@@ -1721,190 +1837,39 @@ def plantillas_whatsapp_view(request):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def catalogo_precios_actuales(request):
-    """Precios actuales vivos en CATALOGO_VEHICULOS. Incluye versiones."""
+    qs = CatalogoVehiculos.objects.filter(activo=True)
+
     precios = {}
-    for modelo, data in CATALOGO_VEHICULOS.items():
-        precios[modelo] = {
-            "precio_desde":     data.get("precio_desde", ""),
-            "precio_lista_num": data.get("precio_lista_num"),
-            "versiones":        data.get("versiones", {}),
-        }
-    return Response({"ok": True, "precios": precios})
 
+    for item in qs.order_by("modelo", "ano", "version"):
+        key = f"{item.modelo} {item.ano}".strip()
 
-@api_view(["POST"])
-@authentication_classes([CRMJWTAuthentication])
-@permission_classes([IsAuthenticated])
-def catalogo_iniciar_scraping(request):
-    """
-    Lanza scraping con requests+BeautifulSoup.
-    Guarda snapshot para revisión. NO aplica precios todavía.
-    """
-    precios_actuales = {}
-    for modelo, data in CATALOGO_VEHICULOS.items():
-        precios_actuales[modelo] = {
-            "precio_desde":     data.get("precio_desde", ""),
-            "precio_lista_num": data.get("precio_lista_num"),
-            "versiones":        data.get("versiones", {}),
-        }
+        if key not in precios:
+            precios[key] = {
+                "modelo": item.modelo,
+                "ano": item.ano,
+                "precio_desde": item.precio_lista,
+                "versiones": [],
+            }
 
-    resultado = scrapear_precios()
+        precios[key]["versiones"].append({
+            "id": item.id,
+            "version": item.version,
+            "precio_lista": item.precio_lista,
+            "precio_contado": item.precio_contado,
+            "precio_financiado": item.precio_financiado,
+        })
 
-    snapshot = CatalogoPreciosSnapshot.objects.create(
-        precios_actuales=precios_actuales,
-        precios_propuestos=resultado["precios"],
-        estado="pendiente",
-        scraping_exitoso=resultado["exitoso"],
-        error_scraping=resultado.get("error") or "",
-        modelos_fallidos=resultado["fallidos"],
-    )
+        if item.precio_lista:
+            precio_actual = precios[key].get("precio_desde")
 
-    return Response({
-        "ok":                  True,
-        "snapshot_id":         snapshot.id,
-        "scraping_exitoso":    snapshot.scraping_exitoso,
-        "modelos_encontrados": len(resultado["precios"]),
-        "modelos_fallidos":    resultado["fallidos"],
-        "advertencia":         snapshot.error_scraping or None,
-        "precios_propuestos":  resultado["precios"],
-    })
-
-
-@api_view(["GET"])
-@authentication_classes([CRMJWTAuthentication])
-@permission_classes([IsAuthenticated])
-def catalogo_ultimo_snapshot(request):
-    """Último snapshot pendiente de revisión."""
-    snapshot = CatalogoPreciosSnapshot.objects.filter(estado="pendiente").first()
-    if not snapshot:
-        return Response({"ok": True, "snapshot": None})
+            if not precio_actual or item.precio_lista < precio_actual:
+                precios[key]["precio_desde"] = item.precio_lista
 
     return Response({
         "ok": True,
-        "snapshot": {
-            "id":                 snapshot.id,
-            "estado":             snapshot.estado,
-            "scraping_exitoso":   snapshot.scraping_exitoso,
-            "error_scraping":     snapshot.error_scraping,
-            "modelos_fallidos":   snapshot.modelos_fallidos,
-            "precios_actuales":   snapshot.precios_actuales,
-            "precios_propuestos": snapshot.precios_propuestos,
-            "creado_en":          snapshot.creado_en.isoformat(),
-        },
+        "precios": precios,
     })
-
-
-@api_view(["POST"])
-@authentication_classes([CRMJWTAuthentication])
-@permission_classes([IsAuthenticated])
-def catalogo_aplicar_precios(request):
-    """
-    Aplica precios del snapshot a CATALOGO_VEHICULOS en memoria.
-    Acepta lista opcional 'modelos' para aplicar solo los seleccionados.
-    Rollback por modelo si algo falla.
-    """
-    snapshot_id  = request.data.get("snapshot_id")
-    modelos_sel  = request.data.get("modelos", None)
-    aplicado_por = (request.data.get("usuario") or "").strip()
-
-    if not snapshot_id:
-        return Response({"ok": False, "error": "Falta snapshot_id"}, status=400)
-
-    snapshot = CatalogoPreciosSnapshot.objects.filter(
-        id=snapshot_id, estado="pendiente"
-    ).first()
-
-    if not snapshot:
-        return Response(
-            {"ok": False, "error": "Snapshot no encontrado o ya procesado"},
-            status=404,
-        )
-
-    aplicados      = []
-    sin_cambio     = []
-    no_encontrados = []
-
-    modelos_a_aplicar = set(modelos_sel) if modelos_sel else set(snapshot.precios_propuestos.keys())
-
-    for modelo, nuevos in snapshot.precios_propuestos.items():
-        if modelo not in modelos_a_aplicar:
-            sin_cambio.append(modelo)
-            continue
-
-        if modelo not in CATALOGO_VEHICULOS:
-            no_encontrados.append(modelo)
-            continue
-
-        precio_nuevo  = nuevos.get("precio_lista_num")
-        precio_actual = CATALOGO_VEHICULOS[modelo].get("precio_lista_num")
-
-        if not precio_nuevo:
-            sin_cambio.append(modelo)
-            continue
-
-        backup = {
-            "precio_desde":     CATALOGO_VEHICULOS[modelo].get("precio_desde", ""),
-            "precio_lista_num": precio_actual,
-            "versiones":        CATALOGO_VEHICULOS[modelo].get("versiones", {}),
-        }
-
-        try:
-            CATALOGO_VEHICULOS[modelo]["precio_desde"]     = nuevos.get("precio_desde", "")
-            CATALOGO_VEHICULOS[modelo]["precio_lista_num"] = precio_nuevo
-            if nuevos.get("versiones"):
-                CATALOGO_VEHICULOS[modelo]["versiones"] = nuevos["versiones"]
-            if "lista" in CATALOGO_VEHICULOS[modelo].get("precios", {}):
-                CATALOGO_VEHICULOS[modelo]["precios"]["lista"] = nuevos.get("precio_desde", "")
-
-            if precio_nuevo != precio_actual:
-                aplicados.append(modelo)
-            else:
-                sin_cambio.append(modelo)
-
-        except Exception as e:
-            _cat_logger.error("Error aplicando precio %s: %s — rollback", modelo, e)
-            CATALOGO_VEHICULOS[modelo]["precio_desde"]     = backup["precio_desde"]
-            CATALOGO_VEHICULOS[modelo]["precio_lista_num"] = backup["precio_lista_num"]
-            CATALOGO_VEHICULOS[modelo]["versiones"]        = backup["versiones"]
-            no_encontrados.append(modelo)
-
-    snapshot.estado      = "aplicado"
-    snapshot.aplicado_en  = timezone.now()
-    snapshot.aplicado_por = aplicado_por
-    snapshot.save(update_fields=["estado", "aplicado_en", "aplicado_por"])
-
-    return Response({
-        "ok":             True,
-        "aplicados":      aplicados,
-        "sin_cambio":     sin_cambio,
-        "no_encontrados": no_encontrados,
-    })
-
-
-@api_view(["POST"])
-@authentication_classes([CRMJWTAuthentication])
-@permission_classes([IsAuthenticated])
-def catalogo_rechazar_precios(request):
-    """Rechaza snapshot — precios actuales no se tocan."""
-    snapshot_id = request.data.get("snapshot_id")
-
-    if not snapshot_id:
-        return Response({"ok": False, "error": "Falta snapshot_id"}, status=400)
-
-    snapshot = CatalogoPreciosSnapshot.objects.filter(
-        id=snapshot_id, estado="pendiente"
-    ).first()
-
-    if not snapshot:
-        return Response(
-            {"ok": False, "error": "Snapshot no encontrado o ya procesado"},
-            status=404,
-        )
-
-    snapshot.estado = "rechazado"
-    snapshot.save(update_fields=["estado"])
-
-    return Response({"ok": True, "mensaje": "Precios rechazados. Sin cambios."})
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])

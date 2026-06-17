@@ -1,9 +1,8 @@
 # Digitales/models.py
 from django.db import models
 from django.utils import timezone
-from citas.models import ClienteComercial, normaliza_tel_mx
-from django.conf import settings
 
+from citas.models import ClienteComercial, normaliza_tel_mx
 
 class ExpedienteDigital(models.Model):
     cliente = models.OneToOneField(
@@ -22,13 +21,34 @@ class ExpedienteDigital(models.Model):
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")
+
+    # Perfil comercial detectado por IA / asesor
+    enganche_monto = models.PositiveIntegerField(null=True, blank=True)
+    presupuesto_mensual = models.PositiveIntegerField(null=True, blank=True)
+    buro_estado = models.CharField(max_length=30,blank=True,default="",)  # bueno | regular | iniciando | desconocido
+    forma_pago = models.CharField(max_length=30,blank=True,default="",)  # contado | credito | arrendamiento | desconocido
+    tipo_cliente = models.CharField(max_length=30,blank=True,default="",)  # persona_fisica | persona_moral | desconocido
+    uso_vehiculo = models.CharField(max_length=255, blank=True, default="")
+    plazo_compra = models.CharField(max_length=120, blank=True, default="")
+
+    # Control operativo de IA
+    ia_pausada = models.BooleanField(default=False)
+    ia_pausada_motivo = models.CharField(max_length=120, blank=True, default="")
+    ia_pausada_at = models.DateTimeField(null=True, blank=True)
+
+    requiere_asesor = models.BooleanField(default=False)
+    motivo_requiere_asesor = models.CharField(max_length=120, blank=True, default="")
+
+    cotizacion_pendiente = models.BooleanField(default=False)
+    cotizacion_solicitada_at = models.DateTimeField(null=True, blank=True)
+
     primer_contacto_at = models.DateTimeField(null=True, blank=True)
     ultimo_contacto_at = models.DateTimeField(null=True, blank=True)
     last_read_at = models.DateTimeField(null=True, blank=True)
 
     resumen = models.TextField(blank=True, default="")
     resumen_actualizado_at = models.DateTimeField(null=True, blank=True)
-    resumen_fuente = models.CharField(max_length=30, blank=True, default="")  # auto_6 | auto_1h | manual
+    resumen_fuente = models.CharField(max_length=30,blank=True,default="",)  # auto_6 | auto_1h | manual
 
     ultima_cita = models.ForeignKey(
         "citas.Cita",
@@ -50,22 +70,91 @@ class ExpedienteDigital(models.Model):
 
     def touch_ultimo_contacto(self, when=None, save_now=False):
         when = when or timezone.now()
+
         if not self.primer_contacto_at:
             self.primer_contacto_at = when
+
         self.ultimo_contacto_at = when
+
         if save_now:
-            self.save(update_fields=["primer_contacto_at", "ultimo_contacto_at", "actualizado"])
+            self.save(
+                update_fields=[
+                    "primer_contacto_at",
+                    "ultimo_contacto_at",
+                    "actualizado",
+                ]
+            )
 
     def mark_read(self, when=None):
         when = when or timezone.now()
         self.last_read_at = when
         self.save(update_fields=["last_read_at", "actualizado"])
 
-    def save(self, *args, **kwargs):
-        super().save(*args, **kwargs)
-
     def __str__(self):
         return f"ExpedienteDigital #{self.cliente_id} - {self.cliente.telefono}"
+
+class ConversacionIA(models.Model):
+    expediente = models.ForeignKey(
+        ExpedienteDigital,
+        on_delete=models.CASCADE,
+        related_name="conversaciones_ia",
+    )
+
+    numero_asesor = models.CharField(max_length=15, db_index=True)
+
+    ia_activa = models.BooleanField(default=True)
+    ia_pausada = models.BooleanField(default=False)
+    motivo_pausa = models.CharField(max_length=120, blank=True, default="")
+
+    estado_conversacion = models.CharField(max_length=50,blank=True,default="sin_iniciar",)
+    # sin_iniciar | perfilando | informando | pendiente_cotizacion | pausada
+
+    pregunta_pendiente = models.CharField(max_length=80, blank=True, default="")
+    pregunta_pendiente_intentos = models.PositiveSmallIntegerField(default=0)
+
+    ultima_intencion = models.CharField(max_length=80, blank=True, default="")
+    ultimo_modelo_mencionado = models.CharField(max_length=120, blank=True, default="")
+
+    resumen_conversacion = models.TextField(blank=True, default="")
+    datos_extra = models.JSONField(default=dict, blank=True)
+
+    class Meta:
+        db_table = "conversacion_ia"
+        unique_together = [("expediente", "numero_asesor")]
+        indexes = [
+            models.Index(fields=["numero_asesor", "ia_activa", "ia_pausada"]),
+            models.Index(fields=["estado_conversacion"]),
+        ]
+
+    def __str__(self):
+        return f"IA {self.numero_asesor} | expediente {self.expediente_id}"
+
+class InteresVehiculoProspecto(models.Model):
+    expediente = models.ForeignKey(
+        ExpedienteDigital,
+        on_delete=models.CASCADE,
+        related_name="intereses_vehiculos",
+    )
+
+    modelo = models.CharField(max_length=120)
+    version = models.CharField(max_length=120, blank=True, default="")
+    origen = models.CharField(max_length=50, blank=True, default="ia")
+    activo = models.BooleanField(default=True)
+    prioridad = models.PositiveSmallIntegerField(default=1)
+
+    creado = models.DateTimeField(auto_now_add=True)
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "intereses_vehiculos_prospectos"
+        indexes = [
+            models.Index(fields=["expediente", "activo"]),
+            models.Index(fields=["modelo"]),
+        ]
+
+    def __str__(self):
+        version = f" {self.version}" if self.version else ""
+        return f"{self.modelo}{version} | expediente {self.expediente_id}"
 
 
 class MensajeWhatsApp(models.Model):
@@ -126,6 +215,7 @@ class LecturaWhatsApp(models.Model):
     )
     numero_asesor = models.CharField(max_length=15, db_index=True)
     last_read_at = models.DateTimeField(null=True, blank=True)
+
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 
@@ -157,7 +247,11 @@ class CampanaMeta(models.Model):
 
 
 class MapeoFuenteMeta(models.Model):
-    id_fuente = models.CharField(max_length=120, primary_key=True, db_column="id_fuente")
+    id_fuente = models.CharField(
+        max_length=120,
+        primary_key=True,
+        db_column="id_fuente",
+    )
     tipo_fuente = models.CharField(max_length=30)
     id_campana = models.BigIntegerField(null=True, blank=True)
     nombre_campana = models.CharField(max_length=500, blank=True, default="")
@@ -174,28 +268,68 @@ class MapeoFuenteMeta(models.Model):
         db_table = "mapeo_fuentes_meta"
         managed = False
 
+class CatalogoVehiculos(models.Model):
+    marca = models.CharField(max_length=80, default="Volkswagen")
+    modelo = models.CharField(max_length=120)
+    ano = models.PositiveSmallIntegerField()
+    version = models.CharField(max_length=120, blank=True, default="")
 
-class CatalogoPreciosSnapshot(models.Model):
-    ESTADO_CHOICES = [
-        ("pendiente",  "Pendiente revisión"),
-        ("aplicado",   "Aplicado"),
-        ("rechazado",  "Rechazado"),
-    ]
+    precio_lista = models.PositiveIntegerField(null=True, blank=True)
+    precio_contado = models.PositiveIntegerField(null=True, blank=True)
+    precio_financiado = models.PositiveIntegerField(null=True, blank=True)
 
-    precios_actuales   = models.JSONField(default=dict)
-    precios_propuestos = models.JSONField(default=dict, blank=True)
-    estado             = models.CharField(max_length=20, choices=ESTADO_CHOICES, default="pendiente")
-    scraping_exitoso   = models.BooleanField(default=False)
-    error_scraping     = models.TextField(blank=True, default="")
-    modelos_fallidos   = models.JSONField(default=list, blank=True)
-    creado_en          = models.DateTimeField(auto_now_add=True)
-    aplicado_en        = models.DateTimeField(null=True, blank=True)
-    aplicado_por       = models.CharField(max_length=120, blank=True, default="")
+    resumen = models.TextField(blank=True, default="")
+    ficha_tecnica = models.JSONField(default=dict, blank=True)
+
+    url_ficha_tecnica = models.CharField(max_length=800, blank=True, default="")
+    imagenes = models.JSONField(default=list, blank=True)
+    ultima_actualizacion = models.DateField(null=True, blank=True)
+
+    activo = models.BooleanField(default=True)
+
+    creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        db_table = "catalogo_precios_snapshot"
-        managed  = True
-        ordering = ["-creado_en"]
+        db_table = "catalogo_vehiculos"
+        ordering = ["marca", "modelo", "ano", "version"]
+        indexes = [
+            models.Index(fields=["marca", "modelo", "ano"]),
+            models.Index(fields=["activo"]),
+            models.Index(fields=["modelo"]),
+        ]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["marca", "modelo", "ano", "version"],
+                name="uniq_catalogo_vehiculos_modelo_version",
+            )
+        ]
 
     def __str__(self):
-        return f"Snapshot {self.id} | {self.estado} | {self.creado_en:%Y-%m-%d %H:%M}"
+        partes = [self.marca, self.modelo, str(self.ano), self.version]
+        return " ".join([p for p in partes if p]).strip()
+    
+class ConfiguracionIAWhatsApp(models.Model):
+    numero_asesor = models.CharField(max_length=15, unique=True)
+
+    activo = models.BooleanField(default=False)
+    horarios = models.JSONField(default=dict, blank=True)
+
+    identidad = models.TextField(blank=True, default="")
+    precios = models.TextField(blank=True, default="")
+    perfilamiento = models.TextField(blank=True, default="")
+    limites = models.TextField(blank=True, default="")
+    personalidad = models.TextField(blank=True, default="")
+    condiciones_fijas = models.TextField(blank=True, default="")
+    actualizado_por = models.CharField(max_length=120, blank=True, default="")
+
+    class Meta:
+        db_table = "configuracion_ia_whatsapp"
+        ordering = ["numero_asesor"]
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        estado = "activa" if self.activo else "inactiva"
+        return f"IA WhatsApp {self.numero_asesor} | {estado}"

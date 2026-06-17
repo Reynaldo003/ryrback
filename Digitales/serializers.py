@@ -162,12 +162,44 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "cliente_id",
             "nombre", "telefono", "correo",
             "nombre_out", "telefono_out", "correo_out",
-            "agencia", "business", "canal_contacto", "pauta", "estado",
-            "asesor_digital", "asesor_ventas",
-            "auto_interes", "comentarios",
-            "resumen", "resumen_actualizado_at", "resumen_fuente",
-            "primer_contacto_at", "ultimo_contacto_at", "last_read_at",
-            "creado", "actualizado",
+
+            "agencia",
+            "business",
+            "canal_contacto",
+            "pauta",
+            "estado",
+            "asesor_digital",
+            "asesor_ventas",
+            "auto_interes",
+            "comentarios",
+
+            "enganche_monto",
+            "presupuesto_mensual",
+            "buro_estado",
+            "forma_pago",
+            "tipo_cliente",
+            "uso_vehiculo",
+            "plazo_compra",
+
+            "ia_pausada",
+            "ia_pausada_motivo",
+            "ia_pausada_at",
+            "requiere_asesor",
+            "motivo_requiere_asesor",
+            "cotizacion_pendiente",
+            "cotizacion_solicitada_at",
+
+            "resumen",
+            "resumen_actualizado_at",
+            "resumen_fuente",
+
+            "primer_contacto_at",
+            "ultimo_contacto_at",
+            "last_read_at",
+
+            "creado",
+            "actualizado",
+
             "ultima_cita_agendada",
             "asistencia",
             "ultima_cita",
@@ -260,5 +292,3 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         instance.save()
         return instance
-
-       

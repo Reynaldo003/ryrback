@@ -1,4 +1,4 @@
-#Digitales/urls.py
+# Digitales/urls.py
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
 
@@ -21,16 +21,28 @@ from .views import (
     generar_resumen_prospecto_view,
     plantillas_whatsapp_view,
     catalogo_precios_actuales,
-    catalogo_iniciar_scraping,
-    catalogo_ultimo_snapshot,
-    catalogo_aplicar_precios,
-    catalogo_rechazar_precios,
     mark_unread_view,
     llamar_whatsapp,
 )
 
+from .ia_config import (
+    ia_config_list,
+    ia_config_detail,
+    ia_config_publicar,
+    ia_pausar_conversacion,
+    ia_reactivar_conversacion,
+    ia_lineas_whatsapp,
+)
+
+from .ia_catalogo import (
+    catalogo_vehiculos_list,
+    catalogo_vehiculo_detail,
+)
+
+
 router = DefaultRouter()
 router.register(r"prospectos", ProspectosViewSet, basename="prospectos")
+
 
 urlpatterns = [
     path("bienvenido/", bienvenido),
@@ -55,12 +67,20 @@ urlpatterns = [
 
     path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),
-    path("api/prospectos/<int:prospecto_id>/generar-resumen/", generar_resumen_prospecto_view),
-    path("media/<str:media_id>/", media_proxy_view, name="digitales-media-proxy"),
+    path("api/prospectos/<int:prospecto_id>/generar-resumen/",generar_resumen_prospecto_view,),
 
-    path("catalogo/precios/aplicar/",  catalogo_aplicar_precios,  name="catalogo-aplicar"),
-    path("catalogo/precios/rechazar/", catalogo_rechazar_precios, name="catalogo-rechazar"),
-    path("catalogo/precios/",          catalogo_precios_actuales, name="catalogo-precios"),  
-    path("catalogo/scraping/iniciar/", catalogo_iniciar_scraping, name="catalogo-scraping"),
-    path("catalogo/snapshot/ultimo/",  catalogo_ultimo_snapshot,  name="catalogo-snapshot"),
+    path("media/<str:media_id>/",media_proxy_view,name="digitales-media-proxy",),
+    path("catalogo/precios/",catalogo_precios_actuales,name="catalogo-precios",),
+
+    # Configuración operativa de IA por línea de WhatsApp.
+    path("ia/config/", ia_config_list, name="ia-config-list"),
+    path("ia/config/<str:numero_asesor>/",ia_config_detail,name="ia-config-detail",),
+    path("ia/config/<str:numero_asesor>/publicar/",ia_config_publicar,name="ia-config-publicar",),
+
+    path("ia/conversacion/pausar/",ia_pausar_conversacion,name="ia-conversacion-pausar",),
+    path("ia/conversacion/reactivar/",ia_reactivar_conversacion,name="ia-conversacion-reactivar",),
+    path("ia/lineas/", ia_lineas_whatsapp, name="ia-lineas-whatsapp"),
+    
+    path("catalogo/vehiculos/",catalogo_vehiculos_list,name="catalogo-vehiculos-list",),
+    path("catalogo/vehiculos/<int:vehiculo_id>/",catalogo_vehiculo_detail,name="catalogo-vehiculo-detail",),
 ]
