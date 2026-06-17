@@ -278,6 +278,7 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "no-reply@crm.local"
 PUBLIC_API_BASE_URL = "https://crm.grupoautomotrizryr.com"
 OPENAI_API_KEY = ""
+GEMINI_API_KEY = ""
 
 REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (

@@ -12,6 +12,9 @@ from django.db import transaction
 from django.utils import timezone
 from openai import OpenAI
 
+from google import genai
+from google.genai import types
+
 from .sett import WHATSAPP_LINES
 from citas.models import ClienteComercial, normaliza_tel_mx
 from .models import ExpedienteDigital, MensajeWhatsApp, ConfiguracionIAWhatsApp, ConversacionIA
@@ -792,6 +795,72 @@ def _get_openai_client() -> OpenAI:
         raise RuntimeError("Falta OPENAI_API_KEY")
     return OpenAI(api_key=api_key, timeout=25.0, max_retries=2)
 
+@lru_cache(maxsize=1)
+def _get_gemini_client():
+    api_key = getattr(settings, "GEMINI_API_KEY", "") or ""
+
+    if not api_key:
+        raise RuntimeError("Falta GEMINI_API_KEY")
+
+    return genai.Client(api_key=api_key)
+
+GEMINI_DECISION_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "reply_text": {"type": "STRING"},
+        "selected_version": {
+            "anyOf": [
+                {"type": "STRING"},
+                {"type": "NULL"},
+            ],
+        },
+        "send_pdf": {"type": "BOOLEAN"},
+        "send_images": {"type": "BOOLEAN"},
+        "requiere_asesor": {"type": "BOOLEAN"},
+        "accion_ofrecida": {"type": "STRING"},
+        "nueva_etapa_perfilado": {"type": "INTEGER"},
+        "detected_profile": {
+            "type": "OBJECT",
+            "properties": {
+                "nombre_detectado": {"type": "STRING"},
+                "enganche_monto": {
+                    "anyOf": [
+                        {"type": "INTEGER"},
+                        {"type": "NULL"},
+                    ],
+                },
+                "presupuesto_mensual": {
+                    "anyOf": [
+                        {"type": "INTEGER"},
+                        {"type": "NULL"},
+                    ],
+                },
+                "buro_estado": {"type": "STRING"},
+                "tipo_cliente": {"type": "STRING"},
+                "forma_pago": {"type": "STRING"},
+                "uso_vehiculo": {"type": "STRING"},
+                "plazo_compra": {"type": "STRING"},
+                "interes_principal": {"type": "STRING"},
+            },
+        },
+        "reasoning_tags": {
+            "type": "ARRAY",
+            "items": {"type": "STRING"},
+        },
+    },
+    "required": [
+        "reply_text",
+        "selected_version",
+        "send_pdf",
+        "send_images",
+        "requiere_asesor",
+        "accion_ofrecida",
+        "nueva_etapa_perfilado",
+        "detected_profile",
+        "reasoning_tags",
+    ],
+}
+
 def _construir_instrucciones_desde_bd(config_ia: dict) -> str:
     partes = [
         config_ia.get("identidad", ""),
@@ -825,7 +894,9 @@ def _decision_conversacional_ia(
     es_primer_mensaje: bool,
 ) -> dict[str, Any]:
     auto_interes_actual = _normalizar_version_catalogo(auto_interes_actual)
-    client = _get_openai_client()
+    #client = _get_openai_client()
+    
+    client = _get_gemini_client()
     
     config_ia = _obtener_config_ia(numero_asesor)
     
@@ -900,16 +971,37 @@ def _decision_conversacional_ia(
     if not instrucciones:
         return {}
     
+#    try:
+#        respuesta = client.responses.create(
+#            model="gpt-4.1",
+#            instructions=instrucciones,
+#            input=json.dumps(contexto, ensure_ascii=False),
+#        )
+#        salida = _json_seguro(getattr(respuesta, "output_text", "") or "")
+#    except Exception as e:
+#        import logging
+#        logging.getLogger(__name__).error(f"Error OpenAI: {e}", exc_info=True)
+#        return {}
+    
     try:
-        respuesta = client.responses.create(
-            model="gpt-4.1",
-            instructions=instrucciones,
-            input=json.dumps(contexto, ensure_ascii=False),
+        modelo = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
+
+        respuesta = client.models.generate_content(
+            model=modelo,
+            contents=json.dumps(contexto, ensure_ascii=False),
+            config=types.GenerateContentConfig(
+                system_instruction=instrucciones,
+                response_mime_type="application/json",
+                response_schema=GEMINI_DECISION_SCHEMA,
+                temperature=0.3,
+            ),
         )
-        salida = _json_seguro(getattr(respuesta, "output_text", "") or "")
+
+        salida = _json_seguro(getattr(respuesta, "text", "") or "")
+
     except Exception as e:
         import logging
-        logging.getLogger(__name__).error(f"Error OpenAI: {e}", exc_info=True)
+        logging.getLogger(__name__).error(f"Error Gemini: {e}", exc_info=True)
         return {}
 
     salida.setdefault("reply_text", "")
@@ -1508,7 +1600,9 @@ def responder_mensaje_automatico(
         telefono=telefono, numero_asesor=numero_asesor, cliente=cliente,
         texto=respuesta_texto, wa_message_id=wa_message_id_salida,
         raw={
-            "openai_model": "gpt-4.1", "reply_to": wa_message_id_entrante,
+            #"openai_model": "gpt-4.1", "reply_to": wa_message_id_entrante,
+            "ia_provider": "gemini",
+            "ia_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
             "numero_asesor": numero_asesor, "version_contexto": version_contexto,
             "requiere_asesor": requiere_asesor, "detected_profile": detected_profile,
             "decision": raw_decision, "accion_ofrecida": accion_ofrecida,
