@@ -31,6 +31,7 @@ from .ia_config import (
     ia_config_publicar,
     ia_pausar_conversacion,
     ia_reactivar_conversacion,
+    ia_estado_conversacion,
     ia_lineas_whatsapp,
 )
 
@@ -79,8 +80,9 @@ urlpatterns = [
 
     path("ia/conversacion/pausar/",ia_pausar_conversacion,name="ia-conversacion-pausar",),
     path("ia/conversacion/reactivar/",ia_reactivar_conversacion,name="ia-conversacion-reactivar",),
+    path("ia/conversacion/estado/",ia_estado_conversacion,name="ia-conversacion-estado",),
     path("ia/lineas/", ia_lineas_whatsapp, name="ia-lineas-whatsapp"),
-    
+
     path("catalogo/vehiculos/",catalogo_vehiculos_list,name="catalogo-vehiculos-list",),
     path("catalogo/vehiculos/<int:vehiculo_id>/",catalogo_vehiculo_detail,name="catalogo-vehiculo-detail",),
 ]

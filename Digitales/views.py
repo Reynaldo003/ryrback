@@ -60,6 +60,7 @@ from .contacto import (
 from .catalogo_scraper import scrapear_precios
 from notificaciones.services import notificar_mensaje_whatsapp
 from .atribucion_meta import aplicar_pauta_desde_referencia_meta
+from .ia_config import obtener_estado_ia_conversacion
 
 from django.http import JsonResponse
 
@@ -365,12 +366,10 @@ def _ia_esta_en_horario(horarios: dict) -> bool:
         return True
 
     dias = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
-
     ahora = timezone.now()
 
     if settings.USE_TZ and timezone.is_aware(ahora):
         ahora = timezone.localtime(ahora)
-
     hoy_idx = ahora.weekday()
 
     for inicio_idx, dia_key in enumerate(dias):
@@ -410,34 +409,27 @@ def _ia_esta_en_horario(horarios: dict) -> bool:
     return False
 
 def _debe_responder_con_ia(numero_asesor: str, expediente=None) -> bool:
-    numero_asesor = normaliza_tel_mx(numero_asesor or "")
-
-    if not numero_asesor:
-        return False
-
-    if expediente and expediente.ia_pausada:
-        return False
-
-    config = ConfiguracionIAWhatsApp.objects.filter(
+    estado_ia = obtener_estado_ia_conversacion(
         numero_asesor=numero_asesor,
-    ).first()
+        expediente=expediente,
+    )
 
-    if not config:
+    if not estado_ia.get("puede_responder"):
+        logger.info(
+            "IA OMITIDA | numero_asesor=%s expediente_id=%s bloqueos=%s estado=%s",
+            numero_asesor,
+            getattr(expediente, "id", None),
+            estado_ia.get("bloqueos"),
+            json.dumps(estado_ia, ensure_ascii=False),
+        )
         return False
 
-    if not config.activo:
-        return False
-
-    if expediente:
-        conversacion = ConversacionIA.objects.filter(
-            expediente=expediente,
-            numero_asesor=numero_asesor,
-        ).first()
-
-        if conversacion and (not conversacion.ia_activa or conversacion.ia_pausada):
-            return False
-
-    return _ia_esta_en_horario(config.horarios)
+    logger.info(
+        "IA HABILITADA | numero_asesor=%s expediente_id=%s",
+        numero_asesor,
+        getattr(expediente, "id", None),
+    )
+    return True
 
 def _ya_existe_respuesta_ia_para_entrada(numero_asesor: str, wa_message_id_entrante: str) -> bool:
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
@@ -1040,6 +1032,11 @@ def chats_list(request):
         else:
             last_time_str = ""
 
+        estado_ia = obtener_estado_ia_conversacion(
+            numero_asesor=numero_asesor,
+            expediente=exp,
+        )
+
         data.append({
             "id": exp.id,
             "telefono": exp.cliente.telefono,
@@ -1051,6 +1048,9 @@ def chats_list(request):
             "last_text": exp.last_text or "",
             "last_time": last_time_str,
             "numero_asesor": numero_asesor,
+            "ia_estado": estado_ia,
+            "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False),
+            "ia_bloqueos": estado_ia.get("bloqueos", []),
         })
 
     return Response(data, status=status.HTTP_200_OK)
@@ -1102,10 +1102,17 @@ def contacto_por_telefono(request):
     oldest_created_at = mensajes[0].created_at.isoformat() if mensajes and mensajes[0].created_at else None
     newest_created_at = mensajes[-1].created_at.isoformat() if mensajes and mensajes[-1].created_at else None
 
+    ia_estado = obtener_estado_ia_conversacion(
+        tel=tel,
+        numero_asesor=numero_asesor,
+        expediente=exp,
+    ) if exp else None
+
     return Response({
         "ok": True,
         "numero_asesor_activo": numero_asesor,
         "prospecto": ProspectoSerializer(exp).data if exp else None,
+        "ia_estado": ia_estado,
         "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data,
         "paginacion": {
             "limit": limit,
