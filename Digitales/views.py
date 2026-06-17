@@ -365,7 +365,10 @@ def _ia_esta_en_horario(horarios: dict) -> bool:
         return True
 
     dias = ["lun", "mar", "mie", "jue", "vie", "sab", "dom"]
-    ahora = timezone.localtime()
+    ahora = timezone.now()
+
+    if settings.USE_TZ and timezone.is_aware(ahora):
+        ahora = timezone.localtime(ahora)
     hoy_idx = ahora.weekday()
 
     for inicio_idx, dia_key in enumerate(dias):
