@@ -73,7 +73,7 @@ WHATSAPP_LINES = {
         "asesor_digital": "IA Vagen",
         "messages_url": whatsapp_url,
         "agencia": "VW Cordoba",
-        "business": "Comerciales",
+        "business": "Nuevos",
         "responder_ia": True,
         "template_names": ["saludo_seguimiento", "informacion_seguimiento"],
         **meta_ads_linea(META_ADS_CORDOBA),

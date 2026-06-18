@@ -180,6 +180,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "tipo_cliente",
             "uso_vehiculo",
             "plazo_compra",
+            "comprobacion_ingresos",
 
             "ia_pausada",
             "ia_pausada_motivo",

@@ -33,3 +33,23 @@ class EncuestaServicio(models.Model):
     class Meta:
         db_table = "encuestas_servicio"
         managed = True
+
+class EncuestaPiso(models.Model):
+    id_encuesta = models.AutoField(primary_key=True)
+    creado = models.DateTimeField(auto_now_add=True)
+    agencia = models.CharField(max_length=200, blank=True, default="")
+    nombre_cliente = models.CharField(max_length=200, blank=True, default="")
+    telefono = models.CharField(max_length=20, blank=True, default="")
+    asesor_atendio = models.CharField(max_length=200, blank=True, default="")
+    motivo_visita = models.CharField(max_length=300, blank=True, default="")
+    atencion_asesor = models.IntegerField(blank=True, default=0)
+    seguimiento_asesor = models.IntegerField(blank=True, default=0)
+    tiempo_entrega_unidad = models.IntegerField(blank=True, default=0)
+    experiencia_recepcion = models.IntegerField(blank=True, default=0)
+    comentario = models.CharField(max_length=1000, blank=True, null=True, default="")
+    id_trafico = models.IntegerField(blank=True, null=True)
+    flow_token = models.CharField(max_length=200, blank=True, default="")
+
+    class Meta:
+        db_table = "encuestas_piso"
+        managed = True

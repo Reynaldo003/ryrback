@@ -10,11 +10,14 @@ from rest_framework.views import APIView
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
 from .QR import generar_qr_permanente, obtener_capacidades_qr
-from .models import EncuestaSatisfaccion, EncuestaServicio
+from .models import EncuestaSatisfaccion, EncuestaServicio, EncuestaPiso
 from .serializers import (
     EncuestaSatisfaccionSerializer,
     EncuestaServicioSerializer,
+    EncuestaPisoSerializer,
 )
+
+from trafico_piso.models import TraficoPiso
 
 
 # ============================================================
@@ -77,6 +80,38 @@ class QRInfoView(APIView):
 # VISTAS PROTEGIDAS CRM
 # ============================================================
 
+class EncuestaPisoViewSet(viewsets.ReadOnlyModelViewSet):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    serializer_class = EncuestaPisoSerializer
+    queryset = EncuestaPiso.objects.all().order_by("-creado")
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+
+        id_trafico = self.request.query_params.get("id_trafico")
+        telefono = self.request.query_params.get("telefono")
+        flow_token = self.request.query_params.get("flow_token")
+        agencia = self.request.query_params.get("agencia")
+
+        if id_trafico:
+            qs = qs.filter(id_trafico=id_trafico)
+
+        if flow_token:
+            qs = qs.filter(flow_token=flow_token)
+
+        if telefono:
+            digitos = "".join(ch for ch in telefono if ch.isdigit())
+            ultimos_10 = digitos[-10:] if len(digitos) >= 10 else digitos
+            if ultimos_10:
+                qs = qs.filter(telefono__endswith=ultimos_10)
+
+        if agencia:
+            qs = qs.filter(agencia__iexact=agencia)
+
+        return qs
+    
 class EncuestaSatisfaccionViewSet(viewsets.ReadOnlyModelViewSet):
     authentication_classes = []
     permission_classes = [AllowAny]
@@ -130,4 +165,56 @@ class GenerarQRPermanenteView(APIView):
             return Response(
                 {"detail": f"Error generando QR: {exc}"},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
+        
+class RespuestasEncuestaPorClienteView(APIView):
+    """
+    Obtiene las respuestas de encuesta para un cliente específico
+    usando su ID de tráfico de piso
+    """
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    
+    def get(self, request, cliente_id):
+        try:
+            # Primero, verifica que el cliente existe en tráfico_piso
+            # Ajusta el nombre del modelo según tu app trafico_piso
+            from trafico_piso.models import RegistroTraficoPiso  # Cambia por el nombre correcto
+            
+            try:
+                cliente = RegistroTraficoPiso.objects.get(id=cliente_id)
+            except RegistroTraficoPiso.DoesNotExist:
+                return Response(
+                    {"error": "Cliente no encontrado en tráfico de piso"},
+                    status=status.HTTP_404_NOT_FOUND
+                )
+            
+            # Busca encuestas asociadas a este cliente
+            # Puedes buscar por id_trafico o por teléfono
+            encuestas = EncuestaSatisfaccion.objects.filter(
+                id_trafico=cliente_id
+            ).order_by('-creado')
+            
+            # Si no hay encuestas con id_trafico, intenta por teléfono
+            if not encuestas.exists() and cliente.telefono:
+                encuestas = EncuestaSatisfaccion.objects.filter(
+                    telefono=cliente.telefono
+                ).order_by('-creado')
+            
+            serializer = EncuestaSatisfaccionSerializer(encuestas, many=True)
+            
+            return Response({
+                "cliente": {
+                    "id": cliente.id,
+                    "nombre": cliente.nombre or cliente.nombre_cliente,
+                    "telefono": cliente.telefono
+                },
+                "encuestas": serializer.data,
+                "total": encuestas.count()
+            }, status=status.HTTP_200_OK)
+            
+        except Exception as e:
+            return Response(
+                {"error": str(e)},
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
             )

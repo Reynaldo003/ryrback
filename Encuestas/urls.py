@@ -8,6 +8,8 @@ from .views import (
     EncuestaServicioViewSet,
     GenerarQRPermanenteView,
     QRInfoView,
+    RespuestasEncuestaPorClienteView,
+    EncuestaPisoViewSet,
 )
 
 router = DefaultRouter()
@@ -20,6 +22,11 @@ router.register(
     r"servicio",
     EncuestaServicioViewSet,
     basename="encuestas-servicio",
+)
+router.register(
+    r"piso",
+    EncuestaPisoViewSet,
+    basename="encuestas-piso",
 )
 
 urlpatterns = [
@@ -36,4 +43,5 @@ urlpatterns = [
     path("encuestas/", include(router.urls)),
     path("qr/info/", QRInfoView.as_view(), name="qr-info"),
     path("qr/generar-permanente/", GenerarQRPermanenteView.as_view(), name="qr-generar-permanente"),
+    path("api/cliente/<int:cliente_id>/respuestas/",RespuestasEncuestaPorClienteView.as_view(),name="respuestas-por-cliente",),
 ]

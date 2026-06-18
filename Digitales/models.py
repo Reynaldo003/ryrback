@@ -22,7 +22,6 @@ class ExpedienteDigital(models.Model):
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")
 
-    # Perfil comercial detectado por IA / asesor
     enganche_monto = models.PositiveIntegerField(null=True, blank=True)
     presupuesto_mensual = models.PositiveIntegerField(null=True, blank=True)
     buro_estado = models.CharField(max_length=30,blank=True,default="",)  # bueno | regular | iniciando | desconocido
@@ -30,6 +29,7 @@ class ExpedienteDigital(models.Model):
     tipo_cliente = models.CharField(max_length=30,blank=True,default="",)  # persona_fisica | persona_moral | desconocido
     uso_vehiculo = models.CharField(max_length=255, blank=True, default="")
     plazo_compra = models.CharField(max_length=120, blank=True, default="")
+    comprobacion_ingresos = models.CharField(max_length=200, blank=True, default="")
 
     # Control operativo de IA
     ia_pausada = models.BooleanField(default=False)
