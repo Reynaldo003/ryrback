@@ -219,7 +219,7 @@ CONDICIONES_FIJAS_DEFAULT = """
 - No compartir datos de otros clientes.
 - No hablar de marcas fuera del catálogo configurado.
 - Si el cliente pide cotización formal, marcar pendiente de cotización y canalizar a asesor.
-- Si un asesor humano interviene, pausar la IA.
+- La IA solo debe pausarse cuando un asesor lo haga manualmente desde el CRM.
 """.strip()
 
 

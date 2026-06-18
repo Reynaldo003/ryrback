@@ -1719,6 +1719,7 @@ def responder_mensaje_automatico(
             or any(palabra in texto_normalizado for palabra in PALABRAS_COTIZACION)
         )
 
+        # Marcar que requiere atención humana, pero SIN pausar la IA automáticamente.
         expediente.requiere_asesor = True
         expediente.motivo_requiere_asesor = (
             "Solicitud de cotización" if requiere_cotizacion else "Atención de asesor requerida"
@@ -1729,17 +1730,16 @@ def responder_mensaje_automatico(
             expediente.cotizacion_pendiente = True
             expediente.cotizacion_solicitada_at = timezone.now()
             expediente.estado = "Pendiente de Cotización"
-            cambios.extend(["cotizacion_pendiente", "cotizacion_solicitada_at", "estado"])
+            cambios.extend([
+                "cotizacion_pendiente",
+                "cotizacion_solicitada_at",
+                "estado",
+            ])
         elif expediente.estado not in ("Lead Calificado", "Requiere Asesor", "Pendiente de Cotización"):
             expediente.estado = "Requiere Asesor"
             cambios.append("estado")
-
-        expediente.ia_pausada = True
-        expediente.ia_pausada_motivo = "atencion_asesor"
-        expediente.ia_pausada_at = timezone.now()
-        cambios.extend(["ia_pausada", "ia_pausada_motivo", "ia_pausada_at"])
-
         conversacion = _get_or_create_conversacion_ia(expediente, numero_asesor)
+
         datos_extra = conversacion.datos_extra if isinstance(conversacion.datos_extra, dict) else {}
         datos_extra.update({
             "requiere_asesor": True,
@@ -1748,18 +1748,16 @@ def responder_mensaje_automatico(
             "auto_interes": version_contexto,
             "marcado_at": timezone.now().isoformat(),
         })
+
         conversacion.datos_extra = datos_extra
-        conversacion.ia_activa = False
-        conversacion.ia_pausada = True
-        conversacion.motivo_pausa = "atencion_asesor"
-        conversacion.estado_conversacion = "pendiente_cotizacion" if requiere_cotizacion else "pausada"
+        conversacion.estado_conversacion = (
+            "pendiente_cotizacion" if requiere_cotizacion else "informando"
+        )
         conversacion.ultima_intencion = accion_ofrecida or ""
         conversacion.ultimo_modelo_mencionado = version_contexto or ""
+
         conversacion.save(update_fields=[
             "datos_extra",
-            "ia_activa",
-            "ia_pausada",
-            "motivo_pausa",
             "estado_conversacion",
             "ultima_intencion",
             "ultimo_modelo_mencionado",

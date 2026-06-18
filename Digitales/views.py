@@ -1288,7 +1288,7 @@ def enviar_mensaje_view(request):
             },
         )
 
-        pausar_ia_por_intervencion_humana(exp, numero_asesor)
+        #pausar_ia_por_intervencion_humana(exp, numero_asesor)
 
         return Response(
             {
@@ -1488,7 +1488,7 @@ def enviar_media_view(request):
                 },
             )
             
-            pausar_ia_por_intervencion_humana(exp, numero_asesor)
+            #pausar_ia_por_intervencion_humana(exp, numero_asesor)
 
             sent.append(
                 {
@@ -1671,7 +1671,7 @@ def enviar_plantilla_view(request):
             },
         )
         
-        pausar_ia_por_intervencion_humana(exp, numero_asesor)
+        #pausar_ia_por_intervencion_humana(exp, numero_asesor)
 
         return Response(
             {
