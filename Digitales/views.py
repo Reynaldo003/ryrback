@@ -78,7 +78,13 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         ExpedienteDigital.objects
         .select_related("cliente")
         .all()
-        .order_by("-ultimo_contacto_at", "-actualizado", "-creado")
+        .order_by(
+            "-ultimo_contacto_asesor",
+            "-primer_contacto_asesor",
+            "-primer_mensaje_cliente",
+            "-actualizado",
+            "-creado",
+        )
     )
     serializer_class = ProspectoSerializer
 
@@ -878,7 +884,7 @@ def webhook(request):
                         logger.warning("WEBHOOK OMITIDO SIN CLIENTE O EXPEDIENTE | tel=%s", tel)
                         continue
 
-                    exp.touch_ultimo_contacto(save_now=True)
+                    exp.touch_mensaje_cliente(save_now=True)
 
                     resultado_atribucion_meta = _aplicar_atribucion_meta_segura(
                         expediente=exp, mensaje_whatsapp=msg,
@@ -1333,6 +1339,7 @@ def enviar_mensaje_view(request):
     numero_asesor = _get_numero_asesor_request(request)
     to = normaliza_tel_mx(request.data.get("to", ""))
     text = (request.data.get("text") or "").strip()
+    reply_to_message_id = (request.data.get("reply_to_message_id") or "").strip()
 
     if not to or not text:
         return Response(
@@ -1348,12 +1355,13 @@ def enviar_mensaje_view(request):
             numero_asesor=numero_asesor,
         )
 
-        exp.touch_ultimo_contacto(save_now=True)
+        exp.touch_contacto_asesor(save_now=True)
 
         wa_res = enviar_texto_whatsapp(
             to=to,
             text=text,
             numero_asesor=numero_asesor,
+            reply_to_message_id=reply_to_message_id,
         )
 
         wa_message_id = _extraer_wa_message_id(wa_res)
@@ -1371,6 +1379,7 @@ def enviar_mensaje_view(request):
                 "send": wa_res,
                 "numero_asesor": numero_asesor,
                 "origen": "asesor_humano",
+                "reply_to": reply_to_message_id,
             },
         )
 
@@ -1480,8 +1489,8 @@ def enviar_media_view(request):
     numero_asesor = _get_numero_asesor_request(request)
     to = normaliza_tel_mx(request.data.get("to", ""))
     caption = (request.data.get("text") or "").strip()
+    reply_to_message_id = (request.data.get("reply_to_message_id") or "").strip()
     files = request.FILES.getlist("files") or []
-
     if not to:
         return Response(
             {"ok": False, "error": "Falta to"},
@@ -1499,7 +1508,7 @@ def enviar_media_view(request):
         numero_asesor=numero_asesor,
     )
 
-    exp.touch_ultimo_contacto(save_now=True)
+    exp.touch_contacto_asesor(save_now=True)
 
     sent, failed = [], []
 
@@ -1544,6 +1553,7 @@ def enviar_media_view(request):
                 numero_asesor=numero_asesor,
                 caption=caption if caption else "",
                 filename=name if wtype == "document" else "",
+                reply_to_message_id=reply_to_message_id,
             )
 
             wa_message_id = _extraer_wa_message_id(wa_res)
@@ -1571,6 +1581,7 @@ def enviar_media_view(request):
                     "local_media_url": local_media_url,
                     "media_link": local_media_url if wtype in ("image", "video", "audio") else "",
                     "document_link": local_media_url if wtype == "document" else "",
+                    "reply_to": reply_to_message_id,
                 },
             )
             
@@ -1711,7 +1722,7 @@ def enviar_plantilla_view(request):
             numero_asesor=numero_asesor,
         )
 
-        exp.touch_ultimo_contacto(save_now=True)
+        exp.touch_contacto_asesor(save_now=True)
 
         wa_res = enviar_template_whatsapp(
             to=to,

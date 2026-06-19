@@ -42,8 +42,10 @@ class ExpedienteDigital(models.Model):
     cotizacion_pendiente = models.BooleanField(default=False)
     cotizacion_solicitada_at = models.DateTimeField(null=True, blank=True)
 
-    primer_contacto_at = models.DateTimeField(null=True, blank=True)
-    ultimo_contacto_at = models.DateTimeField(null=True, blank=True)
+    primer_mensaje_cliente = models.DateTimeField(null=True, blank=True, db_index=True)
+    primer_contacto_asesor = models.DateTimeField(null=True, blank=True, db_index=True)
+    ultimo_contacto_asesor = models.DateTimeField(null=True, blank=True, db_index=True)
+
     last_read_at = models.DateTimeField(null=True, blank=True)
 
     resumen = models.TextField(blank=True, default="")
@@ -68,22 +70,50 @@ class ExpedienteDigital(models.Model):
         db_table = "expediente_digital"
         managed = True
 
-    def touch_ultimo_contacto(self, when=None, save_now=False):
+    def touch_mensaje_cliente(self, when=None, save_now=False):
+        """
+        Marca cuándo escribió el cliente por primera vez.
+
+        Este campo sirve para saber desde qué momento empezó
+        el tiempo de respuesta comercial.
+        """
         when = when or timezone.now()
 
-        if not self.primer_contacto_at:
-            self.primer_contacto_at = when
+        campos = []
 
-        self.ultimo_contacto_at = when
+        if not self.primer_mensaje_cliente:
+            self.primer_mensaje_cliente = when
+            campos.append("primer_mensaje_cliente")
+
+        if save_now and campos:
+            campos.append("actualizado")
+            self.save(update_fields=campos)
+
+
+    def touch_contacto_asesor(self, when=None, save_now=False):
+        """
+        Marca cuándo respondió el asesor humano.
+
+        primer_contacto_asesor:
+            Se llena una sola vez.
+
+        ultimo_contacto_asesor:
+            Se actualiza cada vez que el asesor responde.
+        """
+        when = when or timezone.now()
+
+        campos = []
+
+        if not self.primer_contacto_asesor:
+            self.primer_contacto_asesor = when
+            campos.append("primer_contacto_asesor")
+
+        self.ultimo_contacto_asesor = when
+        campos.append("ultimo_contacto_asesor")
 
         if save_now:
-            self.save(
-                update_fields=[
-                    "primer_contacto_at",
-                    "ultimo_contacto_at",
-                    "actualizado",
-                ]
-            )
+            campos.append("actualizado")
+            self.save(update_fields=list(dict.fromkeys(campos)))
 
     def mark_read(self, when=None):
         when = when or timezone.now()

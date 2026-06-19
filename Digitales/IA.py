@@ -6,7 +6,7 @@ import json
 import re
 import unicodedata
 from typing import Any, Optional
-
+import time
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -23,6 +23,8 @@ from .contacto import (
     enviar_documento_whatsapp_por_link,
     enviar_imagen_whatsapp_por_link,
     replace_start,
+    download_media_whatsapp,
+    enviar_indicador_escribiendo_whatsapp,
 )
 from .ia_catalogo import obtener_catalogo_activo_para_ia
 
@@ -1171,9 +1173,9 @@ def _get_or_create_cliente_y_expediente(
         cambios.append("auto_interes")
 
     now = timezone.now()
-    if not expediente.primer_contacto_at:
-        expediente.primer_contacto_at = now; cambios.append("primer_contacto_at")
-    expediente.ultimo_contacto_at = now; cambios.append("ultimo_contacto_at")
+    if not expediente.primer_mensaje_cliente:
+        expediente.primer_mensaje_cliente = now
+        cambios.append("primer_mensaje_cliente")
 
     if cambios:
         cambios.append("actualizado")
@@ -1514,6 +1516,229 @@ def construir_respuesta_informativa(
 
     return reply_text, selected_version, send_pdf, send_images, requiere_asesor, detected_profile, raw_decision, accion_ofrecida, nueva_etapa
 
+TIPOS_MEDIA_PROCESABLE_IA = {"image", "sticker", "video", "audio"}
+
+
+def _extraer_media_entrante(raw_message: Optional[dict]) -> dict[str, Any]:
+    if not isinstance(raw_message, dict):
+        return {}
+
+    media_type = str(raw_message.get("type") or "").lower().strip()
+
+    if media_type not in TIPOS_MEDIA_PROCESABLE_IA:
+        return {}
+
+    payload = raw_message.get(media_type) or {}
+    media_id = str(payload.get("id") or "").strip()
+
+    if not media_id:
+        return {}
+
+    return {
+        "type": media_type,
+        "id": media_id,
+        "mime_type": payload.get("mime_type") or "",
+        "caption": payload.get("caption") or "",
+        "sha256": payload.get("sha256") or "",
+        "filename": payload.get("filename") or "",
+    }
+
+
+def _describir_media_entrante_con_ia(
+    *,
+    raw_message: Optional[dict],
+    numero_asesor: str,
+) -> str:
+    """
+    Descarga el archivo desde Meta y le pide a Gemini que lo convierta
+    en contexto útil para atención automotriz.
+    """
+    media = _extraer_media_entrante(raw_message)
+
+    if not media:
+        return ""
+
+    try:
+        blob, content_type = download_media_whatsapp(
+            media["id"],
+            numero_asesor=numero_asesor,
+        )
+
+        mime_type = media.get("mime_type") or content_type or "application/octet-stream"
+        media_type = media.get("type") or "media"
+
+        prompt = f"""
+Eres una IA de atención comercial para agencias Volkswagen.
+
+El cliente envió un archivo de tipo: {media_type}.
+Analiza el contenido y responde SOLO con un resumen útil para continuar la conversación.
+
+Enfócate en:
+- Si se ve o menciona algún vehículo.
+- Si parece comprobante, identificación, cotización, captura de pantalla o documento.
+- Si el audio/video contiene una solicitud de precio, modelo, cita, financiamiento o ubicación.
+- Si el sticker comunica emoción/intención: interés, duda, aprobación, molestia, risa, etc.
+- No inventes datos que no se vean o escuchen.
+
+Devuelve máximo 8 líneas.
+""".strip()
+
+        client = _get_gemini_client()
+
+        response = client.models.generate_content(
+            model=getattr(
+                settings,
+                "GEMINI_MEDIA_MODEL",
+                getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+            ),
+            contents=[
+                prompt,
+                types.Part.from_bytes(
+                    data=blob,
+                    mime_type=mime_type,
+                ),
+            ],
+        )
+
+        return _limitar_texto((getattr(response, "text", "") or "").strip(), 900)
+
+    except Exception as exc:
+        return (
+            "El cliente envió un archivo multimedia, pero no pude analizarlo "
+            f"automáticamente. Tipo detectado: {media.get('type')}. Error interno: {str(exc)[:180]}"
+        )
+
+
+def _enriquecer_texto_usuario_con_media(
+    *,
+    texto_usuario: str,
+    raw_message: Optional[dict],
+    numero_asesor: str,
+) -> str:
+    media = _extraer_media_entrante(raw_message)
+
+    if not media:
+        return texto_usuario
+
+    descripcion = _describir_media_entrante_con_ia(
+        raw_message=raw_message,
+        numero_asesor=numero_asesor,
+    )
+
+    caption = str(media.get("caption") or "").strip()
+    tipo = media.get("type") or "media"
+
+    partes = []
+
+    if texto_usuario and texto_usuario.strip() not in {
+        "[IMAGE]",
+        "[VIDEO]",
+        "[AUDIO]",
+        "[STICKER]",
+    }:
+        partes.append(texto_usuario.strip())
+
+    if caption:
+        partes.append(f"Caption del cliente: {caption}")
+
+    if descripcion:
+        partes.append(
+            "[CONTEXTO MULTIMEDIA ANALIZADO]\n"
+            f"Tipo: {tipo}\n"
+            f"Resumen: {descripcion}"
+        )
+
+    return "\n\n".join(partes).strip() or f"El cliente envió un archivo de tipo {tipo}."
+
+
+def _dividir_mensaje_whatsapp(
+    texto: str,
+    max_len: int = 500,
+    max_partes: int = 2,
+) -> list[str]:
+    """
+    Divide sin cortar palabras ni ideas cuando sea posible.
+    Prioridad de corte:
+    1. párrafo
+    2. oración
+    3. espacio
+    """
+    texto = re.sub(r"\n{3,}", "\n\n", (texto or "").strip())
+
+    if not texto:
+        return []
+
+    if len(texto) <= max_len:
+        return [texto]
+
+    partes = []
+    restante = texto
+
+    while restante and len(partes) < max_partes:
+        if len(restante) <= max_len:
+            partes.append(restante.strip())
+            break
+
+        ventana = restante[:max_len]
+
+        cortes = [
+            ventana.rfind("\n\n"),
+            ventana.rfind(". "),
+            ventana.rfind("? "),
+            ventana.rfind("! "),
+            ventana.rfind("; "),
+            ventana.rfind(", "),
+            ventana.rfind(" "),
+        ]
+
+        corte = max(cortes)
+
+        if corte < int(max_len * 0.55):
+            corte = ventana.rfind(" ")
+
+        if corte <= 0:
+            corte = max_len
+
+        parte = restante[:corte].strip()
+        restante = restante[corte:].strip()
+
+        if parte:
+            partes.append(parte)
+
+    if restante and partes:
+        aviso = "Te comparto el resto en el siguiente seguimiento para no saturarte."
+        espacio = max_len - len(partes[-1]) - 2
+
+        if espacio >= len(aviso):
+            partes[-1] = f"{partes[-1]}\n\n{aviso}"
+        else:
+            partes[-1] = partes[-1][: max_len - 3].rstrip() + "..."
+
+    return partes
+
+
+def _segundos_escritura_ia(texto: str) -> int:
+    """
+    Delay humano. Puedes fijarlo en settings.py:
+    IA_WHATSAPP_TYPING_SECONDS = 4
+    """
+    fijo = getattr(settings, "IA_WHATSAPP_TYPING_SECONDS", None)
+
+    if fijo is not None:
+        try:
+            return max(0, min(int(fijo), 24))
+        except (TypeError, ValueError):
+            pass
+
+    largo = len(texto or "")
+
+    if largo <= 180:
+        return 2
+
+    if largo <= 500:
+        return 4
+
+    return 6
 
 # Respuesta automática completa
 
@@ -1526,6 +1751,14 @@ def responder_mensaje_automatico(
     numero_asesor = normaliza_tel_mx(numero_asesor)
     wa_message_id_entrante = (wa_message_id_entrante or "").strip()
 
+    texto_usuario_original = texto_usuario
+
+    texto_usuario = _enriquecer_texto_usuario_con_media(
+        texto_usuario=texto_usuario,
+        raw_message=raw_message,
+        numero_asesor=numero_asesor,
+    )
+    
     if not telefono:
         raise ValueError("Numero invalido para responder automaticamente")
     if not numero_asesor:
@@ -1588,34 +1821,82 @@ def responder_mensaje_automatico(
         numero_asesor=numero_asesor,
     )
 
-    wa_res = enviar_texto_whatsapp(to=telefono, text=respuesta_texto, numero_asesor=numero_asesor)
+    partes_respuesta = _dividir_mensaje_whatsapp(
+        respuesta_texto,
+        max_len=500,
+        max_partes=2,
+    )
 
-    wa_message_id_salida = ""
+    if not partes_respuesta:
+        partes_respuesta = [RESPUESTA_FALLBACK]
+
     try:
-        wa_message_id_salida = (wa_res.get("messages") or [{}])[0].get("id", "") or ""
+        enviar_indicador_escribiendo_whatsapp(
+            message_id=wa_message_id_entrante,
+            numero_asesor=numero_asesor,
+        )
+        time.sleep(_segundos_escritura_ia(respuesta_texto))
     except Exception:
+        # No rompemos el flujo si Meta no acepta el typing indicator.
         pass
 
-    _guardar_salida(
-        telefono=telefono, numero_asesor=numero_asesor, cliente=cliente,
-        texto=respuesta_texto, wa_message_id=wa_message_id_salida,
-        raw={
-            #"openai_model": "gpt-4.1", "reply_to": wa_message_id_entrante,
-            "ia_provider": "gemini",
-            "ia_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
-            "numero_asesor": numero_asesor, "version_contexto": version_contexto,
-            "requiere_asesor": requiere_asesor, "detected_profile": detected_profile,
-            "decision": raw_decision, "accion_ofrecida": accion_ofrecida,
-            "nueva_etapa_perfilado": nueva_etapa_perfilado,
-            "conversation_meta": {
+    wa_res = None
+    wa_message_id_salida = ""
+
+    for index, parte in enumerate(partes_respuesta):
+        reply_context_id = wa_message_id_entrante if index == 0 else ""
+
+        wa_res_parte = enviar_texto_whatsapp(
+            to=telefono,
+            text=parte,
+            numero_asesor=numero_asesor,
+            reply_to_message_id=reply_context_id,
+        )
+
+        wa_message_id_parte = ""
+        try:
+            wa_message_id_parte = (wa_res_parte.get("messages") or [{}])[0].get("id", "") or ""
+        except Exception:
+            pass
+
+        if index == 0:
+            wa_res = wa_res_parte
+            wa_message_id_salida = wa_message_id_parte
+
+        _guardar_salida(
+            telefono=telefono,
+            numero_asesor=numero_asesor,
+            cliente=cliente,
+            texto=parte,
+            wa_message_id=wa_message_id_parte,
+            raw={
+                "reply_to": wa_message_id_entrante,
+                "ia_provider": "gemini",
+                "ia_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+                "numero_asesor": numero_asesor,
+                "version_contexto": version_contexto,
+                "requiere_asesor": requiere_asesor,
+                "detected_profile": detected_profile,
+                "decision": raw_decision,
                 "accion_ofrecida": accion_ofrecida,
-                "accion_ofrecida_previa": accion_ofrecida_previa,
-                "etapa_perfilado": nueva_etapa_perfilado,
+                "nueva_etapa_perfilado": nueva_etapa_perfilado,
+                "parte": index + 1,
+                "partes_total": len(partes_respuesta),
+                "texto_usuario_original": texto_usuario_original,
+                "texto_usuario_enriquecido": texto_usuario,
+                "conversation_meta": {
+                    "accion_ofrecida": accion_ofrecida,
+                    "accion_ofrecida_previa": accion_ofrecida_previa,
+                    "etapa_perfilado": nueva_etapa_perfilado,
+                },
+                "wa_response": wa_res_parte,
+                "raw_message": raw_message or {},
             },
-            "wa_response": wa_res, "raw_message": raw_message or {},
-        },
-        status_msg="accepted",
-    )
+            status_msg="accepted",
+        )
+
+        if index < len(partes_respuesta) - 1:
+            time.sleep(1.2)
 
     # Envio de imagenes
     image_results: list = []
@@ -1706,11 +1987,13 @@ def responder_mensaje_automatico(
             pdf_error = "El vehículo no tiene url_ficha_tecnica configurada."
 
     # Actualizar expediente
-    cambios = ["ultimo_contacto_at"]
-    expediente.ultimo_contacto_at = timezone.now()
+    # La IA NO debe actualizar primer_contacto_asesor ni ultimo_contacto_asesor.
+    # Esos campos solo deben cambiar cuando responde un asesor humano desde el CRM.
+    cambios = []
 
     if version_contexto and expediente.auto_interes != version_contexto:
-        expediente.auto_interes = version_contexto; cambios.append("auto_interes")
+        expediente.auto_interes = version_contexto
+        cambios.append("auto_interes")
 
     if requiere_asesor:
         texto_normalizado = _normalizar_texto(texto_usuario)

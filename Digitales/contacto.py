@@ -543,7 +543,48 @@ def _post_messages_api(cfg: dict, payload: dict, max_retries: int = 3) -> dict:
         attempts=attempts_total,
     )
 
-def enviar_texto_whatsapp(to: str, text: str, numero_asesor: str) -> dict:
+def enviar_indicador_escribiendo_whatsapp(
+    *,
+    message_id: str,
+    numero_asesor: str,
+) -> dict:
+    """
+    Marca el mensaje entrante como leído y muestra 'escribiendo...'.
+
+    Importante:
+    - message_id debe ser el ID del mensaje entrante del cliente.
+    - El indicador dura aprox. 25 segundos o hasta que se envíe una respuesta.
+    """
+    message_id = str(message_id or "").strip()
+
+    if not message_id:
+        return {
+            "success": False,
+            "skipped": True,
+            "reason": "sin_message_id",
+        }
+
+    cfg = obtener_config_linea(numero_asesor=numero_asesor)
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "status": "read",
+        "message_id": message_id,
+        "typing_indicator": {
+            "type": "text",
+        },
+    }
+
+    return _post_messages_api(cfg, payload)
+
+
+def enviar_texto_whatsapp(
+    to: str,
+    text: str,
+    numero_asesor: str,
+    reply_to_message_id: str = "",
+    preview_url: bool = False,
+) -> dict:
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
 
     payload = {
@@ -553,8 +594,15 @@ def enviar_texto_whatsapp(to: str, text: str, numero_asesor: str) -> dict:
         "type": "text",
         "text": {
             "body": text,
+            "preview_url": bool(preview_url),
         },
     }
+
+    reply_to_message_id = str(reply_to_message_id or "").strip()
+    if reply_to_message_id:
+        payload["context"] = {
+            "message_id": reply_to_message_id,
+        }
 
     return _post_messages_api(cfg, payload)
 
@@ -737,8 +785,9 @@ def enviar_media_whatsapp(
     numero_asesor: str,
     caption: str = "",
     filename: str = "",
+    reply_to_message_id: str = "",
 ) -> dict:
-    if media_type not in ("image", "document", "video", "audio"):
+    if media_type not in ("image", "document", "video", "audio", "sticker"):
         raise ValueError("media_type inválido")
 
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
@@ -753,6 +802,12 @@ def enviar_media_whatsapp(
         },
     }
 
+    reply_to_message_id = str(reply_to_message_id or "").strip()
+    if reply_to_message_id:
+        payload["context"] = {
+            "message_id": reply_to_message_id,
+        }
+
     if caption and media_type in ("image", "video", "document"):
         payload[media_type]["caption"] = caption
 
@@ -760,7 +815,6 @@ def enviar_media_whatsapp(
         payload[media_type]["filename"] = filename
 
     return _post_messages_api(cfg, payload)
-
 
 def editar_texto_whatsapp(
     to: str,
