@@ -766,9 +766,9 @@ def _procesar_respuesta_flow_enc_piso(msg: dict) -> bool:
             return STAR_MAP.get(v, 0) or (int(v) if v.isdigit() else 0)
 
         # Importar el modelo aquí para evitar imports circulares
-        from Encuestas.models import EncuestaSatisfaccion
+        from Encuestas.models import EncuestaPiso
 
-        encuesta = EncuestaSatisfaccion.objects.create(
+        encuesta = EncuestaPiso.objects.create(
             agencia=str(flow_data.get("agencia") or flow_data.get("screen_0_Dropdown_0") or "").strip(),
             nombre_cliente=str(flow_data.get("nombre_cliente") or flow_data.get("screen_0_TextInput_0") or "").strip(),
             asesor_atendio=str(flow_data.get("asesor_atendio") or flow_data.get("screen_0_TextInput_1") or "").strip(),
