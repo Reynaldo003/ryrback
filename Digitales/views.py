@@ -1161,6 +1161,9 @@ def contacto_por_telefono(request):
     limit = _int_param(request=request, name="limit", default=20, min_value=1, max_value=80)
     before_id = request.query_params.get("before_id", "").strip()
 
+    mark_read_raw = str(request.query_params.get("mark_read", "1")).strip().lower()
+    mark_read = mark_read_raw not in ("0", "false", "no", "off")
+
     cliente = ClienteComercial.objects.filter(telefono=tel).first()
     exp = None
     if cliente:
@@ -1186,7 +1189,7 @@ def contacto_por_telefono(request):
     mensajes_desc = mensajes_desc[:limit]
     mensajes = list(reversed(mensajes_desc))
 
-    if exp and not before_id:
+    if exp and not before_id and mark_read:
         _mark_read_exp(exp, numero_asesor)
 
     oldest_id = mensajes[0].id if mensajes else None
