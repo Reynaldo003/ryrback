@@ -708,6 +708,90 @@ def _cache_media_meta_en_segundo_plano(*, media_id: str, numero_asesor: str):
     finally:
         close_old_connections()
 
+# ── Procesador de respuestas WhatsApp Flow (enc_piso) ─────────────────────────
+
+def _procesar_respuesta_flow_enc_piso(msg: dict) -> bool:
+    """
+    Detecta si el mensaje es una respuesta al Flow enc_piso y guarda
+    los datos en EncuestaSatisfaccion. Retorna True si se procesó.
+    """
+    try:
+        msg_type = str(msg.get("type") or "").lower()
+        if msg_type != "interactive":
+            return False
+
+        interactive = msg.get("interactive") or {}
+        interactive_type = str(interactive.get("type") or "").lower()
+        if interactive_type != "nfm_reply":
+            return False
+
+        nfm_reply = interactive.get("nfm_reply") or {}
+        response_json_str = nfm_reply.get("response_json") or "{}"
+
+        try:
+            flow_data = json.loads(response_json_str)
+        except Exception:
+            logger.warning("FLOW ENC_PISO | No se pudo parsear response_json: %s", response_json_str)
+            return False
+
+        logger.info("FLOW ENC_PISO RECIBIDO | data=%s", json.dumps(flow_data, ensure_ascii=False))
+
+        # El flow_token viene en el contexto del mensaje
+        flow_token = str(msg.get("context", {}).get("flow_token") or flow_data.get("flow_token") or "").strip()
+
+        # Extraer id_trafico del flow_token (formato: "trafico_<id>")
+        id_trafico = None
+        if flow_token.startswith("trafico_"):
+            try:
+                id_trafico = int(flow_token.replace("trafico_", ""))
+            except ValueError:
+                pass
+
+        # Número de teléfono del remitente
+        wa_from = str(msg.get("from") or "").strip()
+        digitos = "".join(ch for ch in wa_from if ch.isdigit())
+        telefono = digitos[-10:] if len(digitos) >= 10 else digitos
+
+        # Mapeo de valores de texto a números (el Flow manda palabras en español)
+        STAR_MAP = {
+            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+            "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
+            "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+        }
+
+        def parse_star(val):
+            if val is None:
+                return 0
+            v = str(val).strip().lower()
+            return STAR_MAP.get(v, 0) or (int(v) if v.isdigit() else 0)
+
+        # Importar el modelo aquí para evitar imports circulares
+        from Encuestas.models import EncuestaSatisfaccion
+
+        encuesta = EncuestaSatisfaccion.objects.create(
+            agencia=str(flow_data.get("agencia") or flow_data.get("screen_0_Dropdown_0") or "").strip(),
+            nombre_cliente=str(flow_data.get("nombre_cliente") or flow_data.get("screen_0_TextInput_0") or "").strip(),
+            asesor_atendio=str(flow_data.get("asesor_atendio") or flow_data.get("screen_0_TextInput_1") or "").strip(),
+            motivo_visita=str(flow_data.get("motivo_visita") or flow_data.get("screen_0_TextInput_2") or "").strip(),
+            atencion_asesor=parse_star(flow_data.get("atencion_asesor") or flow_data.get("screen_1_Rating_0")),
+            seguimiento_asesor=parse_star(flow_data.get("seguimiento_asesor") or flow_data.get("screen_1_Rating_1")),
+            tiempo_entrega_unidad=parse_star(flow_data.get("tiempo_entrega_unidad") or flow_data.get("screen_1_Rating_2")),
+            experiencia_recepcion=parse_star(flow_data.get("experiencia_recepcion") or flow_data.get("screen_1_Rating_3")),
+            comentario=str(flow_data.get("comentario") or flow_data.get("screen_2_TextArea_0") or "").strip(),
+            id_trafico=id_trafico,
+            telefono=telefono,
+            flow_token=flow_token,
+        )
+
+        logger.info(
+            "FLOW ENC_PISO GUARDADO | id_encuesta=%s id_trafico=%s telefono=%s flow_token=%s",
+            encuesta.id_encuesta, id_trafico, telefono, flow_token,
+        )
+        return True
+
+    except Exception as e:
+        logger.exception("ERROR PROCESANDO FLOW ENC_PISO | error=%s", str(e))
+        return False
 
 # ── Webhook ───────────────────────────────────────────────────────────────────
 
@@ -775,6 +859,8 @@ def webhook(request):
                         "WEBHOOK MENSAJE RECIBIDO | from=%s tel=%s wa_id=%s type=%s text=%s",
                         wa_from, tel, wa_id, msg.get("type"), text,
                     )
+                    if _procesar_respuesta_flow_enc_piso(msg):
+                        logger.info("FLOW PROCESADO | from=%s wa_id=%s", wa_from, wa_id)
 
                     if not tel or not wa_id:
                         logger.warning("WEBHOOK MENSAJE OMITIDO SIN TEL O WA_ID | from=%s wa_id=%s", wa_from, wa_id)
