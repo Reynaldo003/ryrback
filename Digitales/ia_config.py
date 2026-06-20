@@ -21,6 +21,38 @@ from .models import (
 )
 from .sett import WHATSAPP_LINES
 
+IA_CONFIG_GLOBAL_KEY = "GLOBAL"
+
+def _normalizar_numero_config_ia(value: str, permitir_global: bool = True) -> str:
+    raw = str(value or "").strip()
+
+    if permitir_global and raw.upper() in ("GLOBAL", "TODOS", "ALL", "*"):
+        return IA_CONFIG_GLOBAL_KEY
+
+    return normaliza_tel_mx(raw)
+
+
+def obtener_config_ia_para_numero(numero_asesor: str):
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+
+    config_especifica = None
+
+    if numero_asesor:
+        config_especifica = ConfiguracionIAWhatsApp.objects.filter(
+            numero_asesor=numero_asesor,
+        ).first()
+
+    if config_especifica:
+        return config_especifica, "especifica"
+
+    config_global = ConfiguracionIAWhatsApp.objects.filter(
+        numero_asesor=IA_CONFIG_GLOBAL_KEY,
+    ).first()
+
+    if config_global:
+        return config_global, "global"
+
+    return None, ""
 
 def _parse_hora_ia(value):
     try:
@@ -90,10 +122,7 @@ def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expedie
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
     tel = normaliza_tel_mx(tel or "")
 
-    config = None
-    if numero_asesor:
-        config = ConfiguracionIAWhatsApp.objects.filter(numero_asesor=numero_asesor).first()
-
+    config, config_origen = obtener_config_ia_para_numero(numero_asesor)
     if expediente is None and tel:
         expediente = _obtener_expediente_por_tel(tel)
 
@@ -143,6 +172,8 @@ def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expedie
             "activo": bool(config.activo) if config else False,
             "en_horario": en_horario,
             "horarios": config.horarios if config else {},
+            "origen": config_origen,
+            "numero_config": config.numero_asesor if config else "",
         },
         "expediente": {
             "existe": bool(expediente),
@@ -177,11 +208,13 @@ def ia_lineas_whatsapp(request):
         item.numero_asesor: item
         for item in ConfiguracionIAWhatsApp.objects.all()
     }
+    config_global = configs.get(IA_CONFIG_GLOBAL_KEY)
 
     items = []
 
     for numero, cfg in WHATSAPP_LINES.items():
-        config = configs.get(numero)
+        config = configs.get(numero) or config_global
+        config_origen = "especifica" if configs.get(numero) else ("global" if config_global else "")
         en_horario = _ia_esta_en_horario(config.horarios if config else {}) if config else False
         bloqueos = []
 
@@ -206,6 +239,8 @@ def ia_lineas_whatsapp(request):
             "puede_responder_linea": bool(config and config.activo and en_horario),
             "bloqueos_linea": bloqueos,
             "horarios": config.horarios if config else {},
+            "config_origen": config_origen,
+            "numero_config": config.numero_asesor if config else "",
         })
 
     return Response({
@@ -266,11 +301,12 @@ def _serializar_config(item):
         "limites": item.limites or "",
         "personalidad": item.personalidad or "",
         "condiciones_fijas": item.condiciones_fijas or "",
+        "promociones_eventos": item.promociones_eventos or "",
         "actualizado_por": item.actualizado_por or "",
     }
 
 def _get_or_create_config(numero_asesor: str) -> ConfiguracionIAWhatsApp:
-    numero_asesor = normaliza_tel_mx(numero_asesor)
+    numero_asesor = _normalizar_numero_config_ia(numero_asesor)
 
     item, _ = ConfiguracionIAWhatsApp.objects.get_or_create(
         numero_asesor=numero_asesor,
@@ -296,6 +332,7 @@ def _aplicar_payload_config(
         "limites",
         "personalidad",
         "condiciones_fijas",
+        "promociones_eventos",
     ]
 
     for campo in campos_texto:
@@ -330,7 +367,7 @@ def ia_config_list(request):
             status=status.HTTP_200_OK,
         )
 
-    numero_asesor = normaliza_tel_mx(request.data.get("numero_asesor", ""))
+    numero_asesor = _normalizar_numero_config_ia(request.data.get("numero_asesor", "GLOBAL"))
 
     if not numero_asesor:
         return Response(
@@ -362,7 +399,7 @@ def ia_config_list(request):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def ia_config_detail(request, numero_asesor: str):
-    numero_asesor = normaliza_tel_mx(numero_asesor)
+    numero_asesor = _normalizar_numero_config_ia(numero_asesor)
 
     if not numero_asesor:
         return Response(
@@ -403,7 +440,7 @@ def ia_config_detail(request, numero_asesor: str):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def ia_config_publicar(request, numero_asesor: str):
-    numero_asesor = normaliza_tel_mx(numero_asesor)
+    numero_asesor = _normalizar_numero_config_ia(numero_asesor)
 
     if not numero_asesor:
         return Response(

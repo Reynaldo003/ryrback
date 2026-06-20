@@ -77,12 +77,23 @@ SUCURSALES_VW: list[dict] = [
     },
 ]
 
+IA_CONFIG_GLOBAL_KEY = "GLOBAL"
+
+
 def _obtener_config_ia(numero_asesor: str) -> dict:
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
 
-    cfg = ConfiguracionIAWhatsApp.objects.filter(
-        numero_asesor=numero_asesor,
-    ).first()
+    cfg = None
+
+    if numero_asesor:
+        cfg = ConfiguracionIAWhatsApp.objects.filter(
+            numero_asesor=numero_asesor,
+        ).first()
+
+    if not cfg:
+        cfg = ConfiguracionIAWhatsApp.objects.filter(
+            numero_asesor=IA_CONFIG_GLOBAL_KEY,
+        ).first()
 
     if not cfg:
         return {}
@@ -94,6 +105,7 @@ def _obtener_config_ia(numero_asesor: str) -> dict:
         "limites": cfg.limites or "",
         "personalidad": cfg.personalidad or "",
         "condiciones_fijas": cfg.condiciones_fijas or "",
+        "promociones_eventos": cfg.promociones_eventos or "",
     }
 
 def _clave_catalogo(item: dict) -> str:
@@ -867,6 +879,7 @@ def _construir_instrucciones_desde_bd(config_ia: dict) -> str:
     partes = [
         config_ia.get("identidad", ""),
         config_ia.get("precios", ""),
+        config_ia.get("promociones_eventos", ""),
         config_ia.get("perfilamiento", ""),
         config_ia.get("limites", ""),
         config_ia.get("personalidad", ""),

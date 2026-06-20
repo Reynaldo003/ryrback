@@ -4,6 +4,8 @@ from django.utils import timezone
 
 from citas.models import ClienteComercial, normaliza_tel_mx
 
+IA_CONFIG_GLOBAL_KEY = "GLOBAL"
+
 class ExpedienteDigital(models.Model):
     cliente = models.OneToOneField(
         ClienteComercial,
@@ -350,6 +352,7 @@ class ConfiguracionIAWhatsApp(models.Model):
     limites = models.TextField(blank=True, default="")
     personalidad = models.TextField(blank=True, default="")
     condiciones_fijas = models.TextField(blank=True, default="")
+    promociones_eventos = models.TextField(blank=True, default="")
     actualizado_por = models.CharField(max_length=120, blank=True, default="")
 
     class Meta:
@@ -357,7 +360,12 @@ class ConfiguracionIAWhatsApp(models.Model):
         ordering = ["numero_asesor"]
 
     def save(self, *args, **kwargs):
-        self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+        raw = str(self.numero_asesor or "").strip()
+        if raw.upper() in ("GLOBAL", "TODOS", "ALL", "*"):
+            self.numero_asesor = IA_CONFIG_GLOBAL_KEY
+        else:
+            self.numero_asesor = normaliza_tel_mx(raw)
+
         super().save(*args, **kwargs)
 
     def __str__(self):
