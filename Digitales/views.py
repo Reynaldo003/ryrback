@@ -717,18 +717,13 @@ def _cache_media_meta_en_segundo_plano(*, media_id: str, numero_asesor: str):
 # ── Procesador de respuestas WhatsApp Flow (enc_piso) ─────────────────────────
 
 def _procesar_respuesta_flow_enc_piso(msg: dict) -> bool:
-    """
-    Detecta si el mensaje es una respuesta al Flow enc_piso y guarda
-    los datos en EncuestaSatisfaccion. Retorna True si se procesó.
-    """
     try:
         msg_type = str(msg.get("type") or "").lower()
         if msg_type != "interactive":
             return False
 
         interactive = msg.get("interactive") or {}
-        interactive_type = str(interactive.get("type") or "").lower()
-        if interactive_type != "nfm_reply":
+        if str(interactive.get("type") or "").lower() != "nfm_reply":
             return False
 
         nfm_reply = interactive.get("nfm_reply") or {}
@@ -742,10 +737,18 @@ def _procesar_respuesta_flow_enc_piso(msg: dict) -> bool:
 
         logger.info("FLOW ENC_PISO RECIBIDO | data=%s", json.dumps(flow_data, ensure_ascii=False))
 
-        # El flow_token viene en el contexto del mensaje
-        flow_token = str(msg.get("context", {}).get("flow_token") or flow_data.get("flow_token") or "").strip()
+        # Verificar que es el flow correcto — debe tener al menos atencion_llegada
+        if "atencion_llegada" not in flow_data:
+            return False
 
-        # Extraer id_trafico del flow_token (formato: "trafico_<id>")
+        # flow_token
+        flow_token = str(
+            msg.get("context", {}).get("flow_token")
+            or flow_data.get("flow_token")
+            or ""
+        ).strip()
+
+        # id_trafico desde flow_token "trafico_<id>"
         id_trafico = None
         if flow_token.startswith("trafico_"):
             try:
@@ -753,52 +756,72 @@ def _procesar_respuesta_flow_enc_piso(msg: dict) -> bool:
             except ValueError:
                 pass
 
-        # Número de teléfono del remitente
+        # Teléfono del remitente
         wa_from = str(msg.get("from") or "").strip()
         digitos = "".join(ch for ch in wa_from if ch.isdigit())
         telefono = digitos[-10:] if len(digitos) >= 10 else digitos
 
-        # Mapeo de valores de texto a números (el Flow manda palabras en español)
+        # Mapeo de palabras a número de estrellas
         STAR_MAP = {
-            "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
-            "uno": 1, "dos": 2, "tres": 3, "cuatro": 4, "cinco": 5,
-            "1": 1, "2": 2, "3": 3, "4": 4, "5": 5,
+            "cinco": 5, "cuatro": 4, "tres": 3, "dos": 2, "uno": 1,
+            "five": 5, "four": 4, "three": 3, "two": 2, "one": 1,
+            "5": 5, "4": 4, "3": 3, "2": 2, "1": 1,
         }
 
         def parse_star(val):
             if val is None:
                 return 0
             v = str(val).strip().lower()
-            return STAR_MAP.get(v, 0) or (int(v) if v.isdigit() else 0)
+            return STAR_MAP.get(v, 0)
 
-        # Importar el modelo aquí para evitar imports circulares
+        # Obtener agencia y nombre desde TraficoPiso si tenemos id_trafico
+        agencia = ""
+        nombre_cliente = ""
+        asesor_atendio = ""
+        if id_trafico:
+            try:
+                from TraficoPiso.models import TraficoPiso as TraficoPisoModel
+                trafico = TraficoPisoModel.objects.filter(id_trafico=id_trafico).first()
+                if trafico:
+                    agencia = trafico.agencia or ""
+                    nombre_cliente = trafico.nombre_prospecto or ""
+                    asesor_atendio = trafico.asesor_ventas or ""
+            except Exception as e:
+                logger.warning("No se pudo obtener TraficoPiso id=%s: %s", id_trafico, e)
+
         from Encuestas.models import EncuestaPiso
 
         encuesta = EncuestaPiso.objects.create(
-            agencia=str(flow_data.get("agencia") or flow_data.get("screen_0_Dropdown_0") or "").strip(),
-            nombre_cliente=str(flow_data.get("nombre_cliente") or flow_data.get("screen_0_TextInput_0") or "").strip(),
-            asesor_atendio=str(flow_data.get("asesor_atendio") or flow_data.get("screen_0_TextInput_1") or "").strip(),
-            motivo_visita=str(flow_data.get("motivo_visita") or flow_data.get("screen_0_TextInput_2") or "").strip(),
-            atencion_asesor=parse_star(flow_data.get("atencion_asesor") or flow_data.get("screen_1_Rating_0")),
-            seguimiento_asesor=parse_star(flow_data.get("seguimiento_asesor") or flow_data.get("screen_1_Rating_1")),
-            tiempo_entrega_unidad=parse_star(flow_data.get("tiempo_entrega_unidad") or flow_data.get("screen_1_Rating_2")),
-            experiencia_recepcion=parse_star(flow_data.get("experiencia_recepcion") or flow_data.get("screen_1_Rating_3")),
-            comentario=str(flow_data.get("comentario") or flow_data.get("screen_2_TextArea_0") or "").strip(),
-            id_trafico=id_trafico,
-            telefono=telefono,
-            flow_token=flow_token,
+            id_trafico      = id_trafico,
+            telefono        = telefono,
+            flow_token      = flow_token,
+            agencia         = agencia,
+            nombre_cliente  = nombre_cliente,
+            asesor_atendio  = asesor_atendio,
+            # Campos del Flow
+            atencion_llegada = parse_star(flow_data.get("atencion_llegada")),
+            amenidades       = parse_star(flow_data.get("amenidades")),
+            atencion_asesor  = parse_star(flow_data.get("atencion_asesor")),
+            financiamiento   = str(flow_data.get("financiamiento") or "").strip(),
+            experiencia      = parse_star(flow_data.get("experiencia")),
+            medio_contacto   = str(flow_data.get("medio_contacto") or "").strip(),
+            prueba_manejo    = str(flow_data.get("prueba_manejo") or "").strip(),
+            recomendacion    = str(flow_data.get("recomendacion") or "").strip(),
+            contacto_post    = str(flow_data.get("contacto_post") or "").strip(),
+            tiempo_contacto  = str(flow_data.get("tiempo_contacto") or "").strip(),
+            comentarios      = str(flow_data.get("comentarios") or "").strip(),
         )
 
         logger.info(
-            "FLOW ENC_PISO GUARDADO | id_encuesta=%s id_trafico=%s telefono=%s flow_token=%s",
-            encuesta.id_encuesta, id_trafico, telefono, flow_token,
+            "FLOW ENC_PISO GUARDADO | id_encuesta=%s id_trafico=%s telefono=%s",
+            encuesta.id_encuesta, id_trafico, telefono,
         )
         return True
 
     except Exception as e:
         logger.exception("ERROR PROCESANDO FLOW ENC_PISO | error=%s", str(e))
         return False
-
+    
 # ── Webhook ───────────────────────────────────────────────────────────────────
 
 @csrf_exempt

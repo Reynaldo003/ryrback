@@ -115,20 +115,12 @@ class EncuestaPisoSerializer(serializers.ModelSerializer):
     class Meta:
         model = EncuestaPiso
         fields = [
-            "id_encuesta",
-            "creado",
-            "agencia",
-            "nombre_cliente",
-            "telefono",
-            "asesor_atendio",
-            "motivo_visita",
-            "atencion_asesor",
-            "seguimiento_asesor",
-            "tiempo_entrega_unidad",
-            "experiencia_recepcion",
-            "comentario",
-            "id_trafico",
-            "flow_token",
+            "id_encuesta", "creado_en", "agencia", "nombre_cliente",
+            "telefono", "asesor_atendio", "id_trafico", "flow_token",
+            "atencion_llegada", "amenidades", "atencion_asesor",
+            "financiamiento", "experiencia", "medio_contacto",
+            "prueba_manejo", "recomendacion", "contacto_post",
+            "tiempo_contacto", "comentarios",
         ]
         read_only_fields = ["id_encuesta", "creado"]
 

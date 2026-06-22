@@ -85,7 +85,7 @@ class EncuestaPisoViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [AllowAny]
 
     serializer_class = EncuestaPisoSerializer
-    queryset = EncuestaPiso.objects.all().order_by("-creado")
+    queryset = EncuestaPiso.objects.all().order_by("-creado_en")
 
     def get_queryset(self):
         qs = super().get_queryset()
