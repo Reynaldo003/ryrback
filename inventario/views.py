@@ -82,7 +82,7 @@ def get_inventario(request):
         WHERE {where_sql}
     """
 
-    with connections["sqlserver"].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         columns = [col[0] for col in cursor.description]
         rows = [dict(zip(columns, row)) for row in cursor.fetchall()]
@@ -108,7 +108,7 @@ def get_inventario_por_agencia(request):
         ORDER BY total DESC
     """
 
-    with connections["sqlserver"].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -133,7 +133,7 @@ def get_inventario_por_estatus(request):
         ORDER BY total DESC
     """
 
-    with connections["sqlserver"].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -159,7 +159,7 @@ def get_inventario_por_marca(request):
         ORDER BY total DESC
     """
 
-    with connections["sqlserver"].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -184,7 +184,7 @@ def get_inventario_nuevo_usado(request):
         ORDER BY DN_Atual
     """
 
-    with connections["sqlserver"].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -214,7 +214,7 @@ def get_inventario_nacional_importado(request):
         ORDER BY total DESC
     """
 
-    with connections["sqlserver"].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
