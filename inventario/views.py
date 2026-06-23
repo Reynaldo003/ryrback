@@ -1,10 +1,8 @@
 # inventario/views.py
 from django.db import connections
 from django.http import JsonResponse
+from datetime import date
 
-
-# Mapeo de código de agencia (DN_Atual) -> nombre legible.
-# Si llega a abrirse una agencia nueva, solo hay que agregarla aquí.
 AGENCIAS = {
     "2923": "Córdoba",
     "2924": "Orizaba",
@@ -13,7 +11,6 @@ AGENCIAS = {
     "2929": "Tuxpan",
 }
 
-# Catálogo de Status del Stock (StEstoque), tal cual el desplegable del sistema origen.
 ESTATUS_STOCK = {
     "V": "Vendido",
     "E": "En Stock",
@@ -25,13 +22,10 @@ ESTATUS_STOCK = {
     "C": "En Consignación",
 }
 
+ESTATUS_EXCLUIDOS = ["V", "O", "C", "D", "P"]
+
 
 def _filtros_desde_request(request):
-    """
-    Lee los filtros globales que manda el front (agencia y estatus) y regresa
-    el fragmento WHERE junto con sus parámetros, listos para usarse con cursor.execute.
-    Siempre excluye DN_Atual = '0' (registro basura sin agencia real).
-    """
     condiciones = ["DN_Atual IS NOT NULL", "DN_Atual <> '0'"]
     parametros = []
 
@@ -60,16 +54,45 @@ def _estatus_nombre(codigo):
     return ESTATUS_STOCK.get(codigo, codigo or "Sin estatus")
 
 
+def _calcular_dias(dt_recebim):
+    """Calcula días en stock desde DtRecebim (formato 'YYYYMMDD' o 'YYYY-MM-DD')."""
+    if not dt_recebim:
+        return None
+    try:
+        s = str(dt_recebim).strip().replace("-", "")
+        if len(s) < 8:
+            return None
+        fecha = date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
+        return (date.today() - fecha).days
+    except Exception:
+        return None
+
+
+def _antiguedad_bucket(dias):
+    if dias is None:
+        return None
+    if dias <= 30:
+        return "0-30"
+    elif dias <= 60:
+        return "31-60"
+    elif dias <= 90:
+        return "61-90"
+    elif dias <= 120:
+        return "91-120"
+    else:
+        return "+120"
+
+
 def get_inventario(request):
     """
-    Listado crudo de vehículos (detalle fila por fila), respetando los filtros
-    globales de agencia / estatus si vienen en el querystring.
+    Listado crudo — ahora incluye NrChassi, DtRecebim, VrNF_Compra y días calculados.
     """
     where_sql, parametros = _filtros_desde_request(request)
 
     query = f"""
         SELECT
             DN_Atual,
+            NrChassi,
             NmFamilia,
             NmMarca,
             SitVeiculo,
@@ -77,7 +100,9 @@ def get_inventario(request):
             TpNacImp,
             ModalVda,
             EdiModelo,
-            CondUso
+            CondUso,
+            DtRecebim,
+            VrNF_Compra
         FROM dbo.Listado_Vehiculos_VW
         WHERE {where_sql}
     """
@@ -90,16 +115,71 @@ def get_inventario(request):
     for row in rows:
         row["agenciaNombre"] = _agencia_nombre(row.get("DN_Atual"))
         row["estatusNombre"] = _estatus_nombre(row.get("StEstoque"))
+        dias = _calcular_dias(row.get("DtRecebim"))
+        row["diasEnStock"] = dias
+        row["VrNF_Compra"] = float(row["VrNF_Compra"]) if row.get("VrNF_Compra") is not None else None
 
     return JsonResponse({"data": rows})
 
 
-def get_inventario_por_agencia(request):
+# Costo total del inventario ─────────────────────────────────────────
+
+def get_inventario_costo(request):
     """
-    Gráfica principal: total de vehículos agrupados por agencia (DN_Atual).
+    Suma de VrNF_Compra para los vehículos activos (excluye V, O, C, D, P).
     """
     where_sql, parametros = _filtros_desde_request(request)
+    excluidos = ",".join(f"'{e}'" for e in ESTATUS_EXCLUIDOS)
 
+    query = f"""
+        SELECT COALESCE(SUM(VrNF_Compra), 0) AS costo_total
+        FROM dbo.Listado_Vehiculos_VW
+        WHERE {where_sql}
+          AND StEstoque NOT IN ({excluidos})
+    """
+
+    with connections["sqlserver_inv"].cursor() as cursor:
+        cursor.execute(query, parametros)
+        row = cursor.fetchone()
+
+    return JsonResponse({"costo_total": float(row[0]) if row else 0})
+
+
+# ── NUEVO: Antigüedad en stock ─────────────────────────────────────────────────
+
+def get_inventario_antiguedad(request):
+    """
+    Distribución de vehículos activos por rango de días en stock.
+    """
+    where_sql, parametros = _filtros_desde_request(request)
+    excluidos = ",".join(f"'{e}'" for e in ESTATUS_EXCLUIDOS)
+
+    query = f"""
+        SELECT DtRecebim
+        FROM dbo.Listado_Vehiculos_VW
+        WHERE {where_sql}
+          AND StEstoque NOT IN ({excluidos})
+    """
+
+    with connections["sqlserver_inv"].cursor() as cursor:
+        cursor.execute(query, parametros)
+        rows = cursor.fetchall()
+
+    buckets = {"0-30": 0, "31-60": 0, "61-90": 0, "91-120": 0, "+120": 0}
+    for (dt,) in rows:
+        dias = _calcular_dias(dt)
+        bucket = _antiguedad_bucket(dias)
+        if bucket:
+            buckets[bucket] += 1
+
+    data = [{"rango": k, "total": v} for k, v in buckets.items()]
+    return JsonResponse({"data": data})
+
+
+# ── Endpoints existentes (sin cambios) ────────────────────────────────────────
+
+def get_inventario_por_agencia(request):
+    where_sql, parametros = _filtros_desde_request(request)
     query = f"""
         SELECT DN_Atual, COUNT(*) AS total
         FROM dbo.Listado_Vehiculos_VW
@@ -107,24 +187,15 @@ def get_inventario_por_agencia(request):
         GROUP BY DN_Atual
         ORDER BY total DESC
     """
-
     with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
-
-    data = [
-        {"agencia": codigo, "agenciaNombre": _agencia_nombre(codigo), "total": total}
-        for codigo, total in rows
-    ]
+    data = [{"agencia": c, "agenciaNombre": _agencia_nombre(c), "total": t} for c, t in rows]
     return JsonResponse({"data": data})
 
 
 def get_inventario_por_estatus(request):
-    """
-    Distribución de vehículos por Status del Stock (StEstoque).
-    """
     where_sql, parametros = _filtros_desde_request(request)
-
     query = f"""
         SELECT StEstoque, COUNT(*) AS total
         FROM dbo.Listado_Vehiculos_VW
@@ -132,25 +203,15 @@ def get_inventario_por_estatus(request):
         GROUP BY StEstoque
         ORDER BY total DESC
     """
-
     with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
-
-    data = [
-        {"estatus": (codigo or "").strip(), "estatusNombre": _estatus_nombre(codigo), "total": total}
-        for codigo, total in rows
-    ]
+    data = [{"estatus": (c or "").strip(), "estatusNombre": _estatus_nombre(c), "total": t} for c, t in rows]
     return JsonResponse({"data": data})
 
 
 def get_inventario_por_marca(request):
-    """
-    Inventario agrupado por marca / familia de vehículo.
-    Se limita a las familias con más volumen para no saturar la gráfica.
-    """
     where_sql, parametros = _filtros_desde_request(request)
-
     query = f"""
         SELECT NmMarca, NmFamilia, COUNT(*) AS total
         FROM dbo.Listado_Vehiculos_VW
@@ -158,24 +219,15 @@ def get_inventario_por_marca(request):
         GROUP BY NmMarca, NmFamilia
         ORDER BY total DESC
     """
-
     with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
-
-    data = [
-        {"marca": marca, "familia": familia, "total": total}
-        for marca, familia, total in rows
-    ]
+    data = [{"marca": m, "familia": f, "total": t} for m, f, t in rows]
     return JsonResponse({"data": data})
 
 
 def get_inventario_nuevo_usado(request):
-    """
-    Nuevo (N) vs Usado (U) por agencia, según CondUso.
-    """
     where_sql, parametros = _filtros_desde_request(request)
-
     query = f"""
         SELECT DN_Atual, CondUso, COUNT(*) AS total
         FROM dbo.Listado_Vehiculos_VW
@@ -183,29 +235,23 @@ def get_inventario_nuevo_usado(request):
         GROUP BY DN_Atual, CondUso
         ORDER BY DN_Atual
     """
-
     with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
-
     data = [
         {
-            "agencia": codigo,
-            "agenciaNombre": _agencia_nombre(codigo),
+            "agencia": c,
+            "agenciaNombre": _agencia_nombre(c),
             "condicion": "Nuevo" if (cond or "").strip() == "N" else "Usado" if (cond or "").strip() == "U" else (cond or "Sin dato"),
-            "total": total,
+            "total": t,
         }
-        for codigo, cond, total in rows
+        for c, cond, t in rows
     ]
     return JsonResponse({"data": data})
 
 
 def get_inventario_nacional_importado(request):
-    """
-    Nacional (N) vs Importado (I) según TpNacImp.
-    """
     where_sql, parametros = _filtros_desde_request(request)
-
     query = f"""
         SELECT TpNacImp, COUNT(*) AS total
         FROM dbo.Listado_Vehiculos_VW
@@ -213,24 +259,15 @@ def get_inventario_nacional_importado(request):
         GROUP BY TpNacImp
         ORDER BY total DESC
     """
-
     with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
-
     etiquetas = {"N": "Nacional", "I": "Importado"}
-    data = [
-        {"tipo": (tipo or "").strip(), "tipoNombre": etiquetas.get((tipo or "").strip(), tipo or "Sin dato"), "total": total}
-        for tipo, total in rows
-    ]
+    data = [{"tipo": (t or "").strip(), "tipoNombre": etiquetas.get((t or "").strip(), t or "Sin dato"), "total": tot} for t, tot in rows]
     return JsonResponse({"data": data})
 
 
 def get_inventario_filtros(request):
-    """
-    Catálogos para alimentar los selects del front (agencias y estatus de stock),
-    así el dropdown no se queda hardcodeado en el componente.
-    """
-    agencias = [{"codigo": cod, "nombre": nombre} for cod, nombre in AGENCIAS.items()]
-    estatus = [{"codigo": cod, "nombre": nombre} for cod, nombre in ESTATUS_STOCK.items()]
+    agencias = [{"codigo": c, "nombre": n} for c, n in AGENCIAS.items()]
+    estatus  = [{"codigo": c, "nombre": n} for c, n in ESTATUS_STOCK.items()]
     return JsonResponse({"agencias": agencias, "estatus": estatus})
