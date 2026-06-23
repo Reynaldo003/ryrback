@@ -3,6 +3,7 @@ from django.db import connections
 from django.http import JsonResponse
 from datetime import date
 
+
 AGENCIAS = {
     "2923": "Córdoba",
     "2924": "Orizaba",
@@ -54,12 +55,12 @@ def _estatus_nombre(codigo):
     return ESTATUS_STOCK.get(codigo, codigo or "Sin estatus")
 
 
-def _calcular_dias(dt_recebim):
-    """Calcula días en stock desde DtRecebim (formato 'YYYYMMDD' o 'YYYY-MM-DD')."""
-    if not dt_recebim:
+def _calcular_dias(dt_valor):
+    """Acepta datetime, date, o string con formato YYYY-MM-DD o YYYYMMDD."""
+    if not dt_valor:
         return None
     try:
-        s = str(dt_recebim).strip().replace("-", "")
+        s = str(dt_valor).strip()[:10].replace("-", "")
         if len(s) < 8:
             return None
         fecha = date(int(s[0:4]), int(s[4:6]), int(s[6:8]))
@@ -84,9 +85,6 @@ def _antiguedad_bucket(dias):
 
 
 def get_inventario(request):
-    """
-    Listado crudo — ahora incluye NrChassi, DtRecebim, VrNF_Compra y días calculados.
-    """
     where_sql, parametros = _filtros_desde_request(request)
 
     query = f"""
@@ -101,7 +99,7 @@ def get_inventario(request):
             ModalVda,
             EdiModelo,
             CondUso,
-            DtRecebim,
+            DtFaturamento,
             VrNF_Compra
         FROM dbo.Listado_Vehiculos_VW
         WHERE {where_sql}
@@ -115,19 +113,16 @@ def get_inventario(request):
     for row in rows:
         row["agenciaNombre"] = _agencia_nombre(row.get("DN_Atual"))
         row["estatusNombre"] = _estatus_nombre(row.get("StEstoque"))
-        dias = _calcular_dias(row.get("DtRecebim"))
-        row["diasEnStock"] = dias
-        row["VrNF_Compra"] = float(row["VrNF_Compra"]) if row.get("VrNF_Compra") is not None else None
+        row["diasEnStock"]   = _calcular_dias(row.get("DtFaturamento"))
+        row["DtFaturamento"] = str(row.get("DtFaturamento") or "")[:10]
+        row["VrNF_Compra"]   = float(row["VrNF_Compra"]) if row.get("VrNF_Compra") is not None else None
 
     return JsonResponse({"data": rows})
 
 
-# Costo total del inventario ─────────────────────────────────────────
+# ── Costo total del inventario ─────────────────────────────────────────────────
 
 def get_inventario_costo(request):
-    """
-    Suma de VrNF_Compra para los vehículos activos (excluye V, O, C, D, P).
-    """
     where_sql, parametros = _filtros_desde_request(request)
     excluidos = ",".join(f"'{e}'" for e in ESTATUS_EXCLUIDOS)
 
@@ -145,17 +140,14 @@ def get_inventario_costo(request):
     return JsonResponse({"costo_total": float(row[0]) if row else 0})
 
 
-# ── NUEVO: Antigüedad en stock ─────────────────────────────────────────────────
+# ── Antigüedad en stock ────────────────────────────────────────────────────────
 
 def get_inventario_antiguedad(request):
-    """
-    Distribución de vehículos activos por rango de días en stock.
-    """
     where_sql, parametros = _filtros_desde_request(request)
     excluidos = ",".join(f"'{e}'" for e in ESTATUS_EXCLUIDOS)
 
     query = f"""
-        SELECT DtRecebim
+        SELECT DtFaturamento
         FROM dbo.Listado_Vehiculos_VW
         WHERE {where_sql}
           AND StEstoque NOT IN ({excluidos})
@@ -167,8 +159,7 @@ def get_inventario_antiguedad(request):
 
     buckets = {"0-30": 0, "31-60": 0, "61-90": 0, "91-120": 0, "+120": 0}
     for (dt,) in rows:
-        dias = _calcular_dias(dt)
-        bucket = _antiguedad_bucket(dias)
+        bucket = _antiguedad_bucket(_calcular_dias(dt))
         if bucket:
             buckets[bucket] += 1
 
@@ -263,7 +254,10 @@ def get_inventario_nacional_importado(request):
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
     etiquetas = {"N": "Nacional", "I": "Importado"}
-    data = [{"tipo": (t or "").strip(), "tipoNombre": etiquetas.get((t or "").strip(), t or "Sin dato"), "total": tot} for t, tot in rows]
+    data = [
+        {"tipo": (t or "").strip(), "tipoNombre": etiquetas.get((t or "").strip(), t or "Sin dato"), "total": tot}
+        for t, tot in rows
+    ]
     return JsonResponse({"data": data})
 
 
