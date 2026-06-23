@@ -115,7 +115,8 @@ INSTALLED_APPS = [
     'meta_ads',
     'retencion',
     'jdpower',
-    'hojaingresos'
+    'hojaingresos',
+    'inventario'
 ]
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True
@@ -223,6 +224,18 @@ DATABASES = {
     'sqlserver': {
         'ENGINE': 'mssql',
         'NAME': 'TotalDealer_CO',
+        'USER': 'Israel',
+        'PASSWORD': 'Isr4el@2025',
+        'HOST': '187.141.69.254',
+        'PORT': '1433',
+        'OPTIONS': {
+            'driver': 'ODBC Driver 18 for SQL Server',
+            "extra_params": "TrustServerCertificate=yes",
+        }
+    },
+    'sqlserver_inv': {
+        'ENGINE': 'mssql',
+        'NAME': 'TDSQL_VW',
         'USER': 'Israel',
         'PASSWORD': 'Isr4el@2025',
         'HOST': '187.141.69.254',
