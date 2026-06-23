@@ -23,6 +23,7 @@ urlpatterns = [
     path("campanas-meta/", include("meta_ads.urls")),
     path("retencion/", include("retencion.urls")),
     path("jdpower/", include("jdpower.urls")),
+    path("inventario/", include("inventario.urls")),
     path("hojaingresos/", include("hojaingresos.urls")),
     path("api/notificaciones/", include("notificaciones.urls")),
     path("conformidad/api/auth/token/refresh/",TokenRefreshView.as_view(),name="token_refresh",),
