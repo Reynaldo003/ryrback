@@ -83,7 +83,10 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
     def _resolver_cliente(self, validated_data, instance=None):
         cliente_id = validated_data.pop("cliente_id", None)
-        nombre = str(validated_data.pop("cliente_nombre", "") or "").strip()
+        nombre_form = str(validated_data.pop("cliente_nombre", "") or "").strip()
+        nombre_modelo = str(validated_data.get("nombre_cliente", "") or "").strip()
+        nombre = nombre_form or nombre_modelo
+
         telefono_raw = str(validated_data.pop("cliente_telefono", "") or "").strip()
         correo = str(validated_data.pop("cliente_correo_electronico", "") or "").strip()
 
@@ -110,22 +113,21 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
         if nombre:
             asignar_si_existe(cliente, "nombre", nombre)
-            asignar_si_existe(cliente, "nombre_cliente", nombre)
 
         if correo:
-            asignar_si_existe(cliente, "correo_electronico", correo)
             asignar_si_existe(cliente, "correo", correo)
-            asignar_si_existe(cliente, "email", correo)
 
         cliente.save()
 
-        if nombre:
-            validated_data["nombre_cliente"] = nombre
-        elif not validated_data.get("nombre_cliente"):
-            validated_data["nombre_cliente"] = obtener_atributo(
-                cliente,
-                ["nombre", "nombre_cliente", "cliente"],
-            )
+        # Evita que una edición accidental con nombre vacío borre el nombre anterior.
+        nombre_existente = (
+            nombre
+            or getattr(instance, "nombre_cliente", "")
+            or obtener_atributo(cliente, ["nombre"])
+        )
+
+        if nombre_existente:
+            validated_data["nombre_cliente"] = nombre_existente
 
         return cliente
 
