@@ -10,4 +10,6 @@ urlpatterns = [
     path("nuevo-usado/", views.get_inventario_nuevo_usado, name="get_inventario_nuevo_usado"),
     path("nacional-importado/", views.get_inventario_nacional_importado, name="get_inventario_nacional_importado"),
     path("filtros/", views.get_inventario_filtros, name="get_inventario_filtros"),
+    path("costo/", views.get_inventario_costo, name="inventario-costo"),
+    path("antiguedad/", views.get_inventario_antiguedad, name="inventario-antiguedad"),
 ]
