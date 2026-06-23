@@ -20,7 +20,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes, parser_classes, authentication_classes
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
 from rest_framework.exceptions import PermissionDenied
 
@@ -74,9 +74,13 @@ _cat_logger = logging.getLogger(__name__)
 class ProspectosViewSet(viewsets.ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
+    serializer_class = ProspectoSerializer
+    parser_classes = [JSONParser, MultiPartParser, FormParser]
+
     queryset = (
         ExpedienteDigital.objects
         .select_related("cliente")
+        .prefetch_related("evidencias")
         .all()
         .order_by(
             "-ultimo_contacto_asesor",
@@ -86,8 +90,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             "-creado",
         )
     )
-    serializer_class = ProspectoSerializer
-
 
 # ── Vistas simples ────────────────────────────────────────────────────────────
 

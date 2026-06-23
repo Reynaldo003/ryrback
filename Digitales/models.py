@@ -1,7 +1,8 @@
 # Digitales/models.py
 from django.db import models
 from django.utils import timezone
-
+import os
+import uuid
 from citas.models import ClienteComercial, normaliza_tel_mx
 
 IA_CONFIG_GLOBAL_KEY = "GLOBAL"
@@ -32,6 +33,16 @@ class ExpedienteDigital(models.Model):
     uso_vehiculo = models.CharField(max_length=255, blank=True, default="")
     plazo_compra = models.CharField(max_length=120, blank=True, default="")
     comprobacion_ingresos = models.CharField(max_length=200, blank=True, default="")
+
+    # Seguimiento de cotización / crédito / facturación
+    id_cotizacion = models.CharField(max_length=80, blank=True, default="")
+    folio_solicitud_credito = models.CharField(max_length=120, blank=True, default="")
+    solicitud_credito_estado = models.CharField(max_length=30, blank=True, default="")
+    # autorizado | rechazado | condicionado
+
+    vin_facturado = models.CharField(max_length=32, blank=True, default="")
+    vin_estatus_entrega = models.CharField(max_length=30, blank=True, default="")
+    # entregado | cancelado
 
     # Control operativo de IA
     ia_pausada = models.BooleanField(default=False)
@@ -125,6 +136,48 @@ class ExpedienteDigital(models.Model):
     def __str__(self):
         return f"ExpedienteDigital #{self.cliente_id} - {self.cliente.telefono}"
 
+def evidencia_prospecto_upload_path(instance, filename):
+    _, ext = os.path.splitext(filename or "")
+    ext = ext.lower() or ".bin"
+
+    telefono = ""
+    try:
+        telefono = instance.expediente.cliente.telefono or ""
+    except Exception:
+        telefono = "sin_telefono"
+
+    return f"digitales/evidencias/{instance.expediente_id}/{telefono}/{uuid.uuid4().hex}{ext}"
+
+
+class EvidenciaProspectoDigital(models.Model):
+    expediente = models.ForeignKey(
+        ExpedienteDigital,
+        on_delete=models.CASCADE,
+        related_name="evidencias",
+    )
+
+    archivo = models.FileField(
+        upload_to=evidencia_prospecto_upload_path,
+        max_length=500,
+    )
+
+    nombre_original = models.CharField(max_length=255, blank=True, default="")
+    mime_type = models.CharField(max_length=120, blank=True, default="")
+    size_bytes = models.PositiveIntegerField(default=0)
+
+    subido_por = models.CharField(max_length=120, blank=True, default="")
+    creado = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "expediente_digital_evidencias"
+        ordering = ["-creado"]
+        indexes = [
+            models.Index(fields=["expediente", "-creado"]),
+        ]
+
+    def __str__(self):
+        return f"Evidencia #{self.id} | expediente {self.expediente_id}"
+    
 class ConversacionIA(models.Model):
     expediente = models.ForeignKey(
         ExpedienteDigital,

@@ -7,8 +7,7 @@ from django.utils import timezone
 from rest_framework import serializers
 
 from citas.models import ClienteComercial, normaliza_tel_mx
-from .models import ExpedienteDigital, MensajeWhatsApp
-
+from .models import ExpedienteDigital, MensajeWhatsApp, EvidenciaProspectoDigital
 
 EDIT_WINDOW_MINUTES = 15
 
@@ -285,6 +284,28 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
 
         return []
 
+class EvidenciaProspectoDigitalSerializer(serializers.ModelSerializer):
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = EvidenciaProspectoDigital
+        fields = [
+            "id",
+            "nombre_original",
+            "mime_type",
+            "size_bytes",
+            "url",
+            "creado",
+        ]
+
+    def get_url(self, obj):
+        if not obj.archivo:
+            return ""
+
+        request = self.context.get("request")
+        url = obj.archivo.url
+
+        return request.build_absolute_uri(url) if request else url
 
 class ProspectoSerializer(serializers.ModelSerializer):
     nombre = serializers.CharField(write_only=True, required=False, allow_blank=True)
@@ -299,6 +320,20 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
     tiempo_respuesta_asesor_min = serializers.SerializerMethodField()
     tiempo_respuesta_asesor_label = serializers.SerializerMethodField()
+
+    evidencias = EvidenciaProspectoDigitalSerializer(many=True, read_only=True)
+
+    evidencias_nuevas = serializers.ListField(
+        child=serializers.FileField(),
+        write_only=True,
+        required=False,
+    )
+
+    delete_evidencia_ids = serializers.ListField(
+        child=serializers.IntegerField(),
+        write_only=True,
+        required=False,
+    )
 
     # Compatibilidad temporal con frontend viejo.
     # Recomendado: en React usa los nombres nuevos.
@@ -337,6 +372,16 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "uso_vehiculo",
             "plazo_compra",
             "comprobacion_ingresos",
+            
+            "id_cotizacion",
+            "folio_solicitud_credito",
+            "solicitud_credito_estado",
+            "vin_facturado",
+            "vin_estatus_entrega",
+
+            "evidencias",
+            "evidencias_nuevas",
+            "delete_evidencia_ids",
 
             "ia_pausada",
             "ia_pausada_motivo",
@@ -396,6 +441,47 @@ class ProspectoSerializer(serializers.ModelSerializer):
             obj.primer_contacto_asesor,
         )
 
+    def _get_username_request(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+
+        if user and getattr(user, "is_authenticated", False):
+            return (
+                getattr(user, "usuario", "")
+                or getattr(user, "username", "")
+                or str(user)
+            ).strip()
+
+        return ""
+
+    def _guardar_evidencias(self, expediente, archivos):
+        if not archivos:
+            return
+
+        subido_por = self._get_username_request()
+
+        for archivo in archivos:
+            EvidenciaProspectoDigital.objects.create(
+                expediente=expediente,
+                archivo=archivo,
+                nombre_original=getattr(archivo, "name", "") or "",
+                mime_type=getattr(archivo, "content_type", "") or "",
+                size_bytes=getattr(archivo, "size", 0) or 0,
+                subido_por=subido_por,
+            )
+
+    def _eliminar_evidencias(self, expediente, evidencia_ids):
+        if not evidencia_ids:
+            return
+
+        qs = expediente.evidencias.filter(id__in=evidencia_ids)
+
+        for evidencia in qs:
+            if evidencia.archivo:
+                evidencia.archivo.delete(save=False)
+
+            evidencia.delete()
+
     def get_tiempo_respuesta_asesor_label(self, obj):
         minutes = self.get_tiempo_respuesta_asesor_min(obj)
         return format_duration_minutes(minutes)
@@ -447,6 +533,9 @@ class ProspectoSerializer(serializers.ModelSerializer):
         return cli
 
     def create(self, validated_data):
+        evidencias_nuevas = validated_data.pop("evidencias_nuevas", [])
+        validated_data.pop("delete_evidencia_ids", [])
+
         nombre = validated_data.pop("nombre", "")
         telefono = validated_data.pop("telefono", "")
         correo = validated_data.pop("correo", "")
@@ -476,9 +565,14 @@ class ProspectoSerializer(serializers.ModelSerializer):
                 cambios.append("actualizado")
                 exp.save(update_fields=list(dict.fromkeys(cambios)))
 
-        return exp
+        self._guardar_evidencias(exp, evidencias_nuevas)
 
+        return exp
+    
     def update(self, instance, validated_data):
+        evidencias_nuevas = validated_data.pop("evidencias_nuevas", [])
+        delete_evidencia_ids = validated_data.pop("delete_evidencia_ids", [])
+
         nombre = validated_data.pop("nombre", None)
         telefono = validated_data.pop("telefono", None)
         correo = validated_data.pop("correo", None)
@@ -530,6 +624,9 @@ class ProspectoSerializer(serializers.ModelSerializer):
         cambios = []
 
         for campo, valor in validated_data.items():
+            if campo == "vin_facturado" and isinstance(valor, str):
+                valor = valor.strip().upper()
+
             if getattr(instance, campo) != valor:
                 setattr(instance, campo, valor)
                 cambios.append(campo)
@@ -539,5 +636,8 @@ class ProspectoSerializer(serializers.ModelSerializer):
             instance.save(update_fields=list(dict.fromkeys(cambios)))
         else:
             instance.save()
+
+        self._eliminar_evidencias(instance, delete_evidencia_ids)
+        self._guardar_evidencias(instance, evidencias_nuevas)
 
         return instance
