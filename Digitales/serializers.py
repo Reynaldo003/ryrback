@@ -12,6 +12,27 @@ from .models import ExpedienteDigital, MensajeWhatsApp, EvidenciaProspectoDigita
 
 EDIT_WINDOW_MINUTES = 15
 
+def absolute_backend_url(url_o_path: str) -> str:
+    value = str(url_o_path or "").strip()
+
+    if not value:
+        return ""
+
+    if value.startswith("http://") or value.startswith("https://"):
+        return value.replace(" ", "%20")
+
+    base = str(
+        getattr(settings, "PUBLIC_API_BASE_URL", "")
+        or "https://crm.grupoautomotrizryr.com"
+    ).rstrip("/")
+
+    if value.startswith("//"):
+        return f"https:{value}".replace(" ", "%20")
+
+    if not value.startswith("/"):
+        value = f"/{value}"
+
+    return f"{base}{value}".replace(" ", "%20")
 
 def tel_normalizado_valido(tel: str) -> bool:
     tel = "".join(c for c in str(tel or "") if c.isdigit())
@@ -173,7 +194,6 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
         return timezone.now() <= (obj.created_at + timedelta(minutes=EDIT_WINDOW_MINUTES))
 
     def _media_proxy_url(self, media_id: str, obj):
-        req = self.context.get("request")
         path = reverse("digitales-media-proxy", args=[media_id])
 
         numero_asesor = str(getattr(obj, "numero_asesor", "") or "").strip()
@@ -181,7 +201,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
         if numero_asesor:
             path = f"{path}?numero_asesor={numero_asesor}"
 
-        return req.build_absolute_uri(path) if req else path
+        return absolute_backend_url(path)
 
     def get_attachments(self, obj):
         raw = obj.raw or {}
@@ -209,7 +229,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
                     {
                         "id": media_id or local_url,
                         "kind": "file" if kind == "document" else kind,
-                        "url": local_url,
+                        "url": absolute_backend_url(local_url),
                         "mime": raw.get("content_type") or "",
                         "name": raw.get("filename") or "",
                         "size": 0,

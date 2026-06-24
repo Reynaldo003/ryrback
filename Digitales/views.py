@@ -660,6 +660,29 @@ def _guardar_mensaje_fallido(
         )
 
 
+def _absolute_backend_url(url_o_path: str) -> str:
+    value = str(url_o_path or "").strip()
+
+    if not value:
+        return ""
+
+    if value.startswith("http://") or value.startswith("https://"):
+        return value.replace(" ", "%20")
+
+    base = str(
+        getattr(settings, "PUBLIC_API_BASE_URL", "")
+        or "https://crm.grupoautomotrizryr.com"
+    ).rstrip("/")
+
+    if value.startswith("//"):
+        return f"https:{value}".replace(" ", "%20")
+
+    if not value.startswith("/"):
+        value = f"/{value}"
+
+    return f"{base}{value}".replace(" ", "%20")
+
+
 def _guardar_upload_whatsapp_local(
     file_obj,
     *,
@@ -688,8 +711,9 @@ def _guardar_upload_whatsapp_local(
     except Exception:
         pass
 
-    return default_storage.url(saved_path)
+    local_url = default_storage.url(saved_path)
 
+    return _absolute_backend_url(local_url)
 
 def _cache_media_meta_en_segundo_plano(*, media_id: str, numero_asesor: str):
     close_old_connections()
