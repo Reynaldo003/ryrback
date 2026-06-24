@@ -182,20 +182,6 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
 
         return req.build_absolute_uri(path) if req else path
 
-
-        def _absolute_media_url(self, url):
-        url = str(url or "").strip()
-
-        if not url:
-            return url
-
-        if url.startswith("http://") or url.startswith("https://"):
-            return url
-
-        request = self.context.get("request")
-
-        return request.build_absolute_uri(url) if request else url
-
     def get_attachments(self, obj):
         raw = obj.raw or {}
 
@@ -222,7 +208,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
                     {
                         "id": media_id or local_url,
                         "kind": "file" if kind == "document" else kind,
-                        "url": self._absolute_media_url(local_url),
+                        "url": local_url,
                         "mime": raw.get("content_type") or "",
                         "name": raw.get("filename") or "",
                         "size": 0,
@@ -266,7 +252,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
                     {
                         "id": raw.get("wa_message_id") or raw.get("filename") or media_url,
                         "kind": "file" if kind == "document" else kind,
-                        "url": self._absolute_media_url(local_url),
+                        "url": media_url,
                         "mime": raw.get("content_type") or default_mime,
                         "name": raw.get("filename") or "",
                         "size": 0,
