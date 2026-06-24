@@ -79,23 +79,30 @@ SUCURSALES_VW: list[dict] = [
 
 IA_CONFIG_GLOBAL_KEY = "GLOBAL"
 
-
 def _obtener_config_ia(numero_asesor: str) -> dict:
+    """
+    Obtiene la configuración propia de IA para el número de WhatsApp.
+
+    Antes:
+    - Si no encontraba configuración del número, usaba GLOBAL.
+
+    Ahora:
+    - Solo usa configuración propia del número.
+    - Si el número no tiene configuración o está inactiva, devuelve {}.
+    """
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
 
-    cfg = None
+    if not numero_asesor:
+        return {}
 
-    if numero_asesor:
-        cfg = ConfiguracionIAWhatsApp.objects.filter(
-            numero_asesor=numero_asesor,
-        ).first()
-
-    if not cfg:
-        cfg = ConfiguracionIAWhatsApp.objects.filter(
-            numero_asesor=IA_CONFIG_GLOBAL_KEY,
-        ).first()
+    cfg = ConfiguracionIAWhatsApp.objects.filter(
+        numero_asesor=numero_asesor,
+    ).first()
 
     if not cfg:
+        return {}
+
+    if not cfg.activo:
         return {}
 
     return {

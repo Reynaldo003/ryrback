@@ -23,7 +23,7 @@ from .sett import WHATSAPP_LINES
 
 IA_CONFIG_GLOBAL_KEY = "GLOBAL"
 
-def _normalizar_numero_config_ia(value: str, permitir_global: bool = True) -> str:
+def _normalizar_numero_config_ia(value: str, permitir_global: bool = False) -> str:
     raw = str(value or "").strip()
 
     if permitir_global and raw.upper() in ("GLOBAL", "TODOS", "ALL", "*"):
@@ -32,27 +32,32 @@ def _normalizar_numero_config_ia(value: str, permitir_global: bool = True) -> st
     return normaliza_tel_mx(raw)
 
 
+def _normalizar_numero_linea_ia(value: str) -> str:
+    numero = _normalizar_numero_config_ia(value, permitir_global=False)
+
+    if not numero:
+        return ""
+
+    if numero not in WHATSAPP_LINES:
+        return ""
+
+    return numero
+
+
 def obtener_config_ia_para_numero(numero_asesor: str):
-    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    numero_asesor = _normalizar_numero_linea_ia(numero_asesor)
 
-    config_especifica = None
+    if not numero_asesor:
+        return None, ""
 
-    if numero_asesor:
-        config_especifica = ConfiguracionIAWhatsApp.objects.filter(
-            numero_asesor=numero_asesor,
-        ).first()
-
-    if config_especifica:
-        return config_especifica, "especifica"
-
-    config_global = ConfiguracionIAWhatsApp.objects.filter(
-        numero_asesor=IA_CONFIG_GLOBAL_KEY,
+    config = ConfiguracionIAWhatsApp.objects.filter(
+        numero_asesor=numero_asesor,
     ).first()
 
-    if config_global:
-        return config_global, "global"
+    if not config:
+        return None, ""
 
-    return None, ""
+    return config, "especifica"
 
 def _parse_hora_ia(value):
     try:
@@ -204,26 +209,35 @@ def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expedie
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def ia_lineas_whatsapp(request):
+    """
+    Lista las líneas reales de WhatsApp y muestra si cada una tiene
+    configuración propia de IA.
+
+    Ya no usa configuración GLOBAL como respaldo.
+    """
     configs = {
         item.numero_asesor: item
-        for item in ConfiguracionIAWhatsApp.objects.all()
+        for item in ConfiguracionIAWhatsApp.objects
+        .exclude(numero_asesor=IA_CONFIG_GLOBAL_KEY)
+        .all()
     }
-    config_global = configs.get(IA_CONFIG_GLOBAL_KEY)
 
     items = []
 
     for numero, cfg in WHATSAPP_LINES.items():
-        config = configs.get(numero) or config_global
-        config_origen = "especifica" if configs.get(numero) else ("global" if config_global else "")
+        config = configs.get(numero)
         en_horario = _ia_esta_en_horario(config.horarios if config else {}) if config else False
+
         bloqueos = []
 
         if not config:
             bloqueos.append("configuracion_ia_no_existe")
-        elif not config.activo:
-            bloqueos.append("configuracion_ia_inactiva")
-        elif not en_horario:
-            bloqueos.append("fuera_de_horario")
+        else:
+            if not config.activo:
+                bloqueos.append("configuracion_ia_inactiva")
+
+            if not en_horario:
+                bloqueos.append("fuera_de_horario")
 
         items.append({
             "numero": numero,
@@ -233,13 +247,16 @@ def ia_lineas_whatsapp(request):
             "agencia": cfg.get("agencia", ""),
             "business": cfg.get("business", ""),
             "phone_number_id": cfg.get("phone_number_id", ""),
+
+            # Estado real de configuración por número.
             "ia_configurada": bool(config),
             "ia_activa": bool(config.activo) if config else False,
             "en_horario": en_horario,
             "puede_responder_linea": bool(config and config.activo and en_horario),
             "bloqueos_linea": bloqueos,
+
             "horarios": config.horarios if config else {},
-            "config_origen": config_origen,
+            "config_origen": "especifica" if config else "",
             "numero_config": config.numero_asesor if config else "",
         })
 
@@ -247,16 +264,6 @@ def ia_lineas_whatsapp(request):
         "ok": True,
         "items": items,
     })
-
-CONDICIONES_FIJAS_DEFAULT = """
-[CONDICIONES NO NEGOCIABLES]
-- No inventar precios, mensualidades, promociones ni disponibilidad.
-- No compartir datos de otros clientes.
-- No hablar de marcas fuera del catálogo configurado.
-- Si el cliente pide cotización formal, marcar pendiente de cotización y canalizar a asesor.
-- La IA solo debe pausarse cuando un asesor lo haga manualmente desde el CRM.
-""".strip()
-
 
 def _usuario_request(request) -> str:
     user = getattr(request, "user", None)
@@ -290,11 +297,22 @@ def _numero_desde_request(request) -> str:
     return normaliza_tel_mx(numero)
 
 def _serializar_config(item):
+    numero = item.numero_asesor or ""
+    linea = WHATSAPP_LINES.get(numero, {})
+
     return {
         "id": item.id,
-        "numero_asesor": item.numero_asesor,
+        "numero_asesor": numero,
+
+        "key": linea.get("key", ""),
+        "asesor_digital": linea.get("asesor_digital", ""),
+        "agencia": linea.get("agencia", ""),
+        "business": linea.get("business", ""),
+        "phone_number_id": linea.get("phone_number_id", ""),
+
         "activo": item.activo,
         "horarios": item.horarios or {},
+
         "identidad": item.identidad or "",
         "precios": item.precios or "",
         "perfilamiento": item.perfilamiento or "",
@@ -303,10 +321,20 @@ def _serializar_config(item):
         "condiciones_fijas": item.condiciones_fijas or "",
         "promociones_eventos": item.promociones_eventos or "",
         "actualizado_por": item.actualizado_por or "",
+
+        "config_origen": "especifica",
     }
 
 def _get_or_create_config(numero_asesor: str) -> ConfiguracionIAWhatsApp:
-    numero_asesor = _normalizar_numero_config_ia(numero_asesor)
+    """
+    Crea o recupera la configuración propia de una línea.
+
+    Ya no permite crear configuración GLOBAL desde los endpoints operativos.
+    """
+    numero_asesor = _normalizar_numero_linea_ia(numero_asesor)
+
+    if not numero_asesor:
+        raise ValueError("Número de asesor inválido o no registrado en WHATSAPP_LINES.")
 
     item, _ = ConfiguracionIAWhatsApp.objects.get_or_create(
         numero_asesor=numero_asesor,
@@ -318,7 +346,6 @@ def _get_or_create_config(numero_asesor: str) -> ConfiguracionIAWhatsApp:
     )
 
     return item
-
 
 def _aplicar_payload_config(
     item: ConfiguracionIAWhatsApp,
@@ -356,8 +383,21 @@ def _aplicar_payload_config(
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def ia_config_list(request):
+    """
+    GET:
+    - Devuelve únicamente configuraciones por número real.
+    - No devuelve GLOBAL como configuración operativa.
+
+    POST:
+    - Crea/actualiza configuración para un número específico.
+    """
     if request.method == "GET":
-        qs = ConfiguracionIAWhatsApp.objects.all().order_by("numero_asesor")
+        qs = (
+            ConfiguracionIAWhatsApp.objects
+            .exclude(numero_asesor=IA_CONFIG_GLOBAL_KEY)
+            .filter(numero_asesor__in=WHATSAPP_LINES.keys())
+            .order_by("numero_asesor")
+        )
 
         return Response(
             {
@@ -367,18 +407,30 @@ def ia_config_list(request):
             status=status.HTTP_200_OK,
         )
 
-    numero_asesor = _normalizar_numero_config_ia(request.data.get("numero_asesor", "GLOBAL"))
+    numero_asesor = _normalizar_numero_linea_ia(
+        request.data.get("numero_asesor", "")
+    )
 
     if not numero_asesor:
         return Response(
             {
                 "ok": False,
-                "error": "Falta numero_asesor.",
+                "error": "Falta numero_asesor válido. Debe ser una línea registrada en WHATSAPP_LINES.",
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    item = _get_or_create_config(numero_asesor)
+    try:
+        item = _get_or_create_config(numero_asesor)
+    except ValueError as exc:
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     item = _aplicar_payload_config(
         item,
         request.data or {},
@@ -394,23 +446,39 @@ def ia_config_list(request):
         status=status.HTTP_200_OK,
     )
 
-
 @api_view(["GET", "PATCH", "PUT"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def ia_config_detail(request, numero_asesor: str):
-    numero_asesor = _normalizar_numero_config_ia(numero_asesor)
+    """
+    Consulta o actualiza la configuración propia de una línea.
+
+    Nota:
+    - El número válido es el del path:
+      /digitales/ia/config/<numero_asesor>/
+    - No se toma GLOBAL ni se hereda configuración de otra línea.
+    """
+    numero_asesor = _normalizar_numero_linea_ia(numero_asesor)
 
     if not numero_asesor:
         return Response(
             {
                 "ok": False,
-                "error": "Número de asesor inválido.",
+                "error": "Número de asesor inválido o no registrado en WHATSAPP_LINES.",
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    item = _get_or_create_config(numero_asesor)
+    try:
+        item = _get_or_create_config(numero_asesor)
+    except ValueError as exc:
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     if request.method == "GET":
         return Response(
@@ -440,15 +508,32 @@ def ia_config_detail(request, numero_asesor: str):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def ia_config_publicar(request, numero_asesor: str):
-    numero_asesor = _normalizar_numero_config_ia(numero_asesor)
+    """
+    Activa/publica únicamente la configuración del número indicado.
+    No activa GLOBAL ni afecta otras líneas.
+    """
+    numero_asesor = _normalizar_numero_linea_ia(numero_asesor)
 
     if not numero_asesor:
         return Response(
-            {"ok": False, "error": "Número de asesor inválido."},
+            {
+                "ok": False,
+                "error": "Número de asesor inválido o no registrado en WHATSAPP_LINES.",
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    item = _get_or_create_config(numero_asesor)
+    try:
+        item = _get_or_create_config(numero_asesor)
+    except ValueError as exc:
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
     item.activo = True
     item.actualizado_por = _usuario_request(request)
     item.save(update_fields=["activo", "actualizado_por"])

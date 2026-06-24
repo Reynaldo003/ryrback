@@ -50,7 +50,6 @@ class EncuestaSatisfaccionSerializer(serializers.ModelSerializer):
 
         return attrs
 
-
 class EncuestaServicioSerializer(serializers.ModelSerializer):
     class Meta:
         model = EncuestaServicio

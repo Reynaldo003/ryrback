@@ -1,91 +1,108 @@
-#hojaingresos/serializers.py
+# hojaingresos/serializers.py
 from rest_framework import serializers
 
 from citas.models import ClienteComercial, normaliza_tel_mx
 from .models import HojaIngresos
 
 
-def obtener_atributo(obj, nombres, default=""):
-    for nombre in nombres:
-        valor = getattr(obj, nombre, None)
-        if valor not in (None, ""):
-            return valor
-    return default
-
-
-def asignar_si_existe(obj, campo, valor):
-    if valor not in (None, "") and hasattr(obj, campo):
-        setattr(obj, campo, valor)
-
-
 class HojaIngresosSerializer(serializers.ModelSerializer):
+    # Campos de salida del cliente
     telefono = serializers.CharField(source="cliente.telefono", read_only=True)
     correo = serializers.CharField(source="cliente.correo", read_only=True)
-    cliente_nombre = serializers.CharField(source="cliente.nombre", read_only=True)
 
+    # Este campo se recibe desde frontend, pero también lo devolvemos manualmente
+    cliente_nombre = serializers.CharField(required=False, allow_blank=True, write_only=True)
+
+    # Campos auxiliares de entrada
     cliente_id = serializers.IntegerField(required=False, allow_null=True, write_only=True)
     cliente_telefono = serializers.CharField(required=False, allow_blank=True, write_only=True)
     cliente_correo_electronico = serializers.CharField(required=False, allow_blank=True, write_only=True)
 
     citado = serializers.BooleanField(required=False)
     asistencia = serializers.BooleanField(required=False)
-    agendado_por = serializers.CharField(read_only=True)
-
 
     class Meta:
         model = HojaIngresos
         fields = "__all__"
         extra_kwargs = {
             "cliente": {"required": False},
-        }
-        
-    def get_cliente(self, obj):
-        cliente = getattr(obj, "cliente", None)
-
-        if not cliente:
-            return None
-
-        return {
-            "id": getattr(cliente, "id_cliente", None),
-            "nombre": obtener_atributo(cliente, ["nombre", "nombre_cliente", "cliente"]),
-            "telefono": obtener_atributo(cliente, ["telefono", "celular", "telefono_cliente"]),
-            "correo_electronico": obtener_atributo(
-                cliente,
-                ["correo_electronico", "correo", "email"],
-            ),
+            # Si ya no quieres que el frontend modifique este duplicado directamente:
+            "nombre_cliente": {"required": False, "allow_blank": True},
         }
 
-    def get_telefono(self, obj):
-        cliente = getattr(obj, "cliente", None)
-        if not cliente:
-            return ""
-        return obtener_atributo(cliente, ["telefono", "celular", "telefono_cliente"])
+    def to_representation(self, instance):
+        data = super().to_representation(instance)
 
-    def get_correo_electronico(self, obj):
-        cliente = getattr(obj, "cliente", None)
-        if not cliente:
-            return ""
-        return obtener_atributo(cliente, ["correo_electronico", "correo", "email"])
+        cliente = getattr(instance, "cliente", None)
+
+        nombre_cliente = ""
+        telefono = ""
+        correo = ""
+
+        if cliente:
+            nombre_cliente = str(getattr(cliente, "nombre", "") or "").strip()
+            telefono = str(getattr(cliente, "telefono", "") or "").strip()
+            correo = str(getattr(cliente, "correo", "") or "").strip()
+
+        # Fuente real para frontend
+        data["cliente_nombre"] = nombre_cliente
+        data["telefono"] = telefono
+        data["correo"] = correo
+
+        # Para compatibilidad con tu frontend actual y datos viejos.
+        # Pero ya debe reflejar lo que hay en ClienteComercial.
+        data["nombre_cliente"] = nombre_cliente or str(getattr(instance, "nombre_cliente", "") or "").strip()
+
+        return data
 
     def validate(self, attrs):
         request = self.context.get("request")
         metodo = getattr(request, "method", "").upper()
 
         cliente_id = attrs.get("cliente_id")
-        telefono = attrs.get("cliente_telefono", "")
+        telefono = str(attrs.get("cliente_telefono", "") or "").strip()
 
-        if metodo == "POST" and not cliente_id and not str(telefono).strip():
-            raise serializers.ValidationError({
-                "cliente_telefono": "El teléfono del cliente es obligatorio."
-            })
+        nombre_payload = (
+            str(attrs.get("cliente_nombre", "") or "").strip()
+            or str(attrs.get("nombre_cliente", "") or "").strip()
+        )
+
+        cliente_existente = None
+
+        if cliente_id:
+            cliente_existente = ClienteComercial.objects.filter(
+                id_cliente=cliente_id
+            ).first()
+
+            if not cliente_existente:
+                raise serializers.ValidationError({
+                    "cliente_id": "El cliente indicado no existe."
+                })
+
+        nombre_existente = ""
+        if cliente_existente:
+            nombre_existente = str(getattr(cliente_existente, "nombre", "") or "").strip()
+
+        if metodo == "POST":
+            if not cliente_id and not telefono:
+                raise serializers.ValidationError({
+                    "cliente_telefono": "El teléfono del cliente es obligatorio."
+                })
+
+            if not nombre_payload and not nombre_existente:
+                raise serializers.ValidationError({
+                    "cliente_nombre": "El nombre del cliente es obligatorio."
+                })
 
         return attrs
 
     def _resolver_cliente(self, validated_data, instance=None):
         cliente_id = validated_data.pop("cliente_id", None)
-        nombre_form = str(validated_data.pop("cliente_nombre", "") or "").strip()
-        nombre_modelo = str(validated_data.get("nombre_cliente", "") or "").strip()
-        nombre = nombre_form or nombre_modelo
+
+        nombre = (
+            str(validated_data.pop("cliente_nombre", "") or "").strip()
+            or str(validated_data.pop("nombre_cliente", "") or "").strip()
+        )
 
         telefono_raw = str(validated_data.pop("cliente_telefono", "") or "").strip()
         correo = str(validated_data.pop("cliente_correo_electronico", "") or "").strip()
@@ -109,25 +126,18 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             cliente = ClienteComercial()
 
         if telefono_normalizado:
-            asignar_si_existe(cliente, "telefono", telefono_normalizado)
+            cliente.telefono = telefono_normalizado
 
         if nombre:
-            asignar_si_existe(cliente, "nombre", nombre)
+            cliente.nombre = nombre
 
         if correo:
-            asignar_si_existe(cliente, "correo", correo)
+            cliente.correo = correo
 
         cliente.save()
 
-        # Evita que una edición accidental con nombre vacío borre el nombre anterior.
-        nombre_existente = (
-            nombre
-            or getattr(instance, "nombre_cliente", "")
-            or obtener_atributo(cliente, ["nombre"])
-        )
-
-        if nombre_existente:
-            validated_data["nombre_cliente"] = nombre_existente
+        if cliente.nombre:
+            validated_data["nombre_cliente"] = cliente.nombre
 
         return cliente
 
@@ -146,6 +156,10 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
         for campo, valor in validated_data.items():
             setattr(instance, campo, valor)
+
+        # Blindaje final: si el cliente tiene nombre, sincronizamos.
+        if cliente.nombre:
+            instance.nombre_cliente = cliente.nombre
 
         instance.save()
         return instance
