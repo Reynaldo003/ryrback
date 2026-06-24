@@ -79,6 +79,5 @@ class HojaIngresos(models.Model):
 
     def __str__(self):
         telefono = getattr(self.cliente, "telefono", "") or "Sin teléfono"
-        cliente = self.nombre_cliente or getattr(self.cliente, "nombre", "") or "Sin cliente"
-
+        cliente = getattr(self.cliente, "nombre", "") or self.nombre_cliente or "Sin cliente"
         return f"Ingreso #{self.id} - {cliente} - {telefono}"
