@@ -23,6 +23,12 @@ from .sett import WHATSAPP_LINES
 
 IA_CONFIG_GLOBAL_KEY = "GLOBAL"
 
+CONDICIONES_FIJAS_DEFAULT = """- No proporcionar precios finales ni cotizaciones cerradas.
+- No comprometer disponibilidad de unidades sin verificación previa.
+- No inventar precios, mensualidades, promociones ni descuentos.
+- Siempre derivar al asesor humano para cierre comercial o cotización formal.
+- Mantener el tono institucional de Grupo Automotriz R&R."""
+
 def _normalizar_numero_config_ia(value: str, permitir_global: bool = False) -> str:
     raw = str(value or "").strip()
 
@@ -327,9 +333,12 @@ def _serializar_config(item):
 
 def _get_or_create_config(numero_asesor: str) -> ConfiguracionIAWhatsApp:
     """
-    Crea o recupera la configuración propia de una línea.
+    Crea o recupera la configuración propia de una línea real de WhatsApp.
 
-    Ya no permite crear configuración GLOBAL desde los endpoints operativos.
+    Importante:
+    - No permite GLOBAL.
+    - No hereda configuración de otra línea.
+    - Si la línea no tiene configuración, crea una configuración vacía e inactiva.
     """
     numero_asesor = _normalizar_numero_linea_ia(numero_asesor)
 
@@ -341,7 +350,14 @@ def _get_or_create_config(numero_asesor: str) -> ConfiguracionIAWhatsApp:
         defaults={
             "activo": False,
             "horarios": {},
+            "identidad": "",
+            "precios": "",
+            "perfilamiento": "",
+            "limites": "",
+            "personalidad": "",
             "condiciones_fijas": CONDICIONES_FIJAS_DEFAULT,
+            "promociones_eventos": "",
+            "actualizado_por": "",
         },
     )
 

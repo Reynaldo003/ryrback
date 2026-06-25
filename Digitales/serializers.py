@@ -273,7 +273,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
                     {
                         "id": raw.get("wa_message_id") or raw.get("filename") or media_url,
                         "kind": "file" if kind == "document" else kind,
-                        "url": media_url,
+                        "url": absolute_backend_url(media_url),
                         "mime": raw.get("content_type") or default_mime,
                         "name": raw.get("filename") or "",
                         "size": 0,
