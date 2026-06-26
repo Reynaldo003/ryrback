@@ -8,7 +8,7 @@ class Rol(models.Model):
 
     class Meta:
         db_table = "roles"
-        managed = False
+        managed = True
 
     def __str__(self):
         return self.nombre
