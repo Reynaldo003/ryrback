@@ -24,6 +24,8 @@ from .views import (
     catalogo_precios_actuales,
     mark_unread_view,
     llamar_whatsapp,
+      evidencias_prospecto_view,
+    evidencia_prospecto_delete_view, 
 )
 
 from .ia_config import (
@@ -70,6 +72,9 @@ urlpatterns = [
     path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),
     path("api/prospectos/<int:prospecto_id>/generar-resumen/",generar_resumen_prospecto_view,),
+
+    path("api/prospectos/<int:prospecto_id>/evidencias/", evidencias_prospecto_view),
+    path("api/prospectos/<int:prospecto_id>/evidencias/<int:evidencia_id>/", evidencia_prospecto_delete_view),
 
     path("media/<str:media_id>/",media_proxy_view,name="digitales-media-proxy",),
     path("catalogo/precios/",catalogo_precios_actuales,name="catalogo-precios",),

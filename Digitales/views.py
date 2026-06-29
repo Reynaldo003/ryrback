@@ -39,6 +39,7 @@ from .models import (
     ConfiguracionIAWhatsApp,
     ConversacionIA,
     CatalogoVehiculos,
+    EvidenciaProspectoDigital,
 )
 from .serializers import ProspectoSerializer, WhatsAppMessageSerializer
 from .services import generar_y_guardar_resumen, debe_generar_resumen_al_llegar_a_6
@@ -2060,6 +2061,88 @@ def mark_unread_view(request):
         lectura.last_read_at = None
         lectura.save(update_fields=["last_read_at", "updated_at"])
 
+    return Response({"ok": True}, status=200)
+
+    @api_view(["GET", "POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser, JSONParser])
+def evidencias_prospecto_view(request, prospecto_id: int):
+    exp = ExpedienteDigital.objects.filter(id=prospecto_id).first()
+    if not exp:
+        return Response({"ok": False, "error": "Prospecto no encontrado"}, status=404)
+
+    if request.method == "GET":
+        evidencias = exp.evidencias.all()
+        data = [
+            {
+                "id": e.id,
+                "name": e.nombre_original or os.path.basename(e.archivo.name or ""),
+                "url": _absolute_backend_url(e.archivo.url) if e.archivo else "",
+                "type": e.mime_type or "",
+                "size": e.size_bytes or 0,
+                "creado": e.creado.isoformat() if e.creado else "",
+                "subido_por": e.subido_por or "",
+            }
+            for e in evidencias
+        ]
+        return Response(data, status=200)
+
+    
+    archivos = request.FILES.getlist("archivos")
+    if not archivos:
+        return Response({"ok": False, "error": "No se recibieron archivos"}, status=400)
+
+    subido_por = ""
+    user = getattr(request, "user", None)
+    if user and getattr(user, "is_authenticated", False):
+        subido_por = getattr(user, "usuario", "") or getattr(user, "username", "") or ""
+
+    creadas = []
+    for archivo in archivos:
+        nombre = getattr(archivo, "name", "archivo") or "archivo"
+        ct = getattr(archivo, "content_type", "") or mimetypes.guess_type(nombre)[0] or ""
+        size = getattr(archivo, "size", 0) or 0
+
+        ev = EvidenciaProspectoDigital.objects.create(
+            expediente=exp,
+            archivo=archivo,
+            nombre_original=nombre,
+            mime_type=ct,
+            size_bytes=size,
+            subido_por=subido_por,
+        )
+
+        creadas.append({
+            "id": ev.id,
+            "name": ev.nombre_original,
+            "url": _absolute_backend_url(ev.archivo.url) if ev.archivo else "",
+            "type": ev.mime_type,
+            "size": ev.size_bytes,
+        })
+
+    return Response({"ok": True, "creadas": creadas, "total": len(creadas)}, status=201)
+
+
+@api_view(["DELETE"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def evidencia_prospecto_delete_view(request, prospecto_id: int, evidencia_id: int):
+    ev = EvidenciaProspectoDigital.objects.filter(
+        id=evidencia_id,
+        expediente_id=prospecto_id,
+    ).first()
+
+    if not ev:
+        return Response({"ok": False, "error": "Evidencia no encontrada"}, status=404)
+
+    try:
+        if ev.archivo and default_storage.exists(ev.archivo.name):
+            default_storage.delete(ev.archivo.name)
+    except Exception as e:
+        logger.warning("No se pudo borrar el archivo físico: %s", str(e))
+
+    ev.delete()
     return Response({"ok": True}, status=200)
 
 def obtener_productos(request):
