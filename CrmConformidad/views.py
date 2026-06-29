@@ -414,3 +414,17 @@ class AdminUsuariosCreateView(APIView):
             },
             status=status.HTTP_201_CREATED,
         )
+    
+class PerfilUsuarioView(APIView):
+    permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser]
+
+    def patch(self, request):
+        usuario = request.user  # ajustar según tu modelo
+        for field in ['nombre', 'apellidos', 'usuario', 'correo', 'telefono']:
+            if field in request.data:
+                setattr(usuario, field, request.data[field])
+        if 'foto' in request.FILES:
+            usuario.foto = request.FILES['foto']
+        usuario.save()
+        return Response({'detail': 'Perfil actualizado'})
