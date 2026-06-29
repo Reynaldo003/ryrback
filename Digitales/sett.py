@@ -76,7 +76,7 @@ WHATSAPP_LINES = {
         "agencia": "VW Cordoba",
         "business": "Nuevos",
         "responder_ia": True,
-        "template_names": ["saludo_seguimiento", "informacion_seguimiento"],
+        "template_names": [],
         **meta_ads_linea(META_ADS_CORDOBA),
     },
 
@@ -90,7 +90,7 @@ WHATSAPP_LINES = {
         "agencia": "VW Orizaba",
         "business": "Nuevos",
         "responder_ia": False,
-        "template_names": ["saludo_seguimiento", "confirmacion_cita", "informacion_seguimiento", "seguimiento_sin_respuesta", "primer_contacto_nuevos", "primer_contacto_nuevo_dos", "confirmacion_visita", "seguimiento_pendiente_visita", "reagenda_cita", "address_update"],
+        "template_names": ["saludo_seguimiento", "confirmacion_cita", "informacion_seguimiento", "seguimiento_sin_respuesta", "primer_contacto_nuevos", "primer_contacto_nuevo_dos", "confirmacion_visita", "seguimiento_pendiente_visita", "reagenda_cita", "address_update", "seguimiento_sf"],
         **meta_ads_linea(META_ADS_ORIZABA),
     },
 
@@ -117,7 +117,7 @@ WHATSAPP_LINES = {
         "agencia": "VW Cordoba Usados",
         "business": "Usados",
         "responder_ia": False,
-        "template_names": ["saludo_seguimiento", "informacion_seguimiento"],
+        "template_names": ["saludo_seguimiento", "informacion_seguimiento", "primer_mensaje"],
         **meta_ads_linea(META_ADS_CORDOBA),
     },
 
@@ -252,6 +252,14 @@ WHATSAPP_TEMPLATE_UI = {
         "help": "",
         "labels": {
             "body_1": "ayer",
+        },
+    },
+    "seguimiento_sf": {
+        "title": "",
+        "help": "",
+        "labels": {
+            "body_1": "nombre",
+            "body_2": "modelo",
         },
     },
 }
