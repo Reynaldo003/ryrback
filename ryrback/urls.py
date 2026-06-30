@@ -28,6 +28,7 @@ urlpatterns = [
     path("hojaingresos/", include("hojaingresos.urls")),
     path("api/notificaciones/", include("notificaciones.urls")),
     path("conformidad/api/auth/token/refresh/",TokenRefreshView.as_view(),name="token_refresh",),
+    path("api/BitacoraMantenimiento/", include("BitacoraMantenimiento.urls")),
 ]
 
 if settings.DEBUG:

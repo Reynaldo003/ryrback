@@ -2067,4 +2067,4 @@ def obtener_productos(request):
         {"nombre": "Producto A", "precio": 150.50},
         {"nombre": "Producto B", "precio": 200.00}
     ]
-    return JsonResponse(datos, safe=False) 
+    return JsonResponse(datos, safe=False)
