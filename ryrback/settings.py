@@ -116,7 +116,8 @@ INSTALLED_APPS = [
     'retencion',
     'jdpower',
     'hojaingresos',
-    'inventario'
+    'inventario',
+    'flujo',
 ]
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
 USE_X_FORWARDED_HOST = True

@@ -11,6 +11,7 @@ urlpatterns = [
 
     path("conformidad/", include("CrmConformidad.urls")),
     path("digitales/", include("Digitales.urls")),
+    path("flujo/", include("flujo.urls")),
     path("citas/", include("citas.urls")),
     path("api/clickup/", include("clickup.urls")),
     path("financieros/", include("Financieros.urls")),
