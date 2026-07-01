@@ -204,14 +204,6 @@ CORS_ALLOWED_ORIGINS = [
 
 
 DATABASES = {
-#'default': {
-#        'ENGINE': 'django.db.backends.postgresql',
-#        'NAME': 'ryrcorp',
-#        'USER': 'postgres',
-#        'PASSWORD': '1234',
-#        'HOST': 'localhost',
-#        'PORT': '5432'
-#    }
     "default": {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "crm_ryr",
