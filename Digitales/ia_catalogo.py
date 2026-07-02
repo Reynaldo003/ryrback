@@ -276,47 +276,228 @@ def catalogo_vehiculo_detail(request, vehiculo_id: int):
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
+@api_view(["GET", "POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def catalogo_vehiculos_list(request):
+    if request.method == "GET":
+        modelo = (request.query_params.get("modelo") or "").strip()
+        marca = (request.query_params.get("marca") or "").strip()
+        activo_param = request.query_params.get("activo", "true").strip().lower()
+
+        try:
+            limite = int(request.query_params.get("limit", 300))
+        except (TypeError, ValueError):
+            limite = 300
+
+        limite = max(1, min(limite, 1000))
+
+        qs = CatalogoVehiculos.objects.all()
+
+        if activo_param not in ("todos", "all", "*", ""):
+            activo = activo_param not in ("0", "false", "no", "inactivo")
+            qs = qs.filter(activo=activo)
+
+        if modelo:
+            qs = qs.filter(modelo__icontains=modelo)
+
+        if marca:
+            qs = qs.filter(marca__icontains=marca)
+
+        qs = qs.order_by("marca", "modelo", "ano", "version")[:limite]
+
+        return Response({
+            "ok": True,
+            "items": [_serializar_vehiculo(item) for item in qs],
+        })
+
+    data = request.data or {}
+
+    if not str(data.get("modelo") or "").strip():
+        return Response(
+            {"ok": False, "error": "Falta modelo."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not str(data.get("ano") or "").strip():
+        return Response(
+            {"ok": False, "error": "Falta año."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    item = CatalogoVehiculos()
+    item.marca = "Volkswagen"
+    item.modelo = ""
+    item.ano = int(data.get("ano"))
+
+    try:
+        item = _aplicar_payload_vehiculo(item, data)
+        item.full_clean()
+        item.save()
+    except IntegrityError:
+        return Response(
+            {
+                "ok": False,
+                "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except (ValueError, TypeError, ValidationError) as exc:
+        logger.exception(
+            "ERROR VALIDANDO CATÁLOGO VEHÍCULO CREATE | payload=%s | error=%s",
+            dict(data),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except DatabaseError as exc:
+        logger.exception(
+            "ERROR DB CATÁLOGO VEHÍCULO CREATE | payload=%s | error=%s",
+            dict(data),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error de base de datos al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    except Exception as exc:
+        logger.exception(
+            "ERROR GENERAL CATÁLOGO VEHÍCULO CREATE | payload=%s | error=%s",
+            dict(data),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error inesperado al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response(
+        {
+            "ok": True,
+            "item": _serializar_vehiculo(item),
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
 @api_view(["GET", "PATCH", "PUT", "DELETE"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def catalogo_vehiculo_detail(request, vehiculo_id: int):
-    item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
+    try:
+        item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
 
-    if not item:
-        return Response(
-            {"ok": False, "error": "Vehículo no encontrado."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    if request.method == "GET":
-        return Response({
-            "ok": True,
-            "item": _serializar_vehiculo(item),
-        })
-
-    if request.method in ("PATCH", "PUT"):
-        item = _aplicar_payload_vehiculo(item, request.data or {})
-
-        try:
-            item.save()
-        except IntegrityError:
+        if not item:
             return Response(
                 {
                     "ok": False,
-                    "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
+                    "error": "Vehículo no encontrado.",
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_404_NOT_FOUND,
             )
+
+        if request.method == "GET":
+            return Response({
+                "ok": True,
+                "item": _serializar_vehiculo(item),
+            })
+
+        if request.method in ("PATCH", "PUT"):
+            item = _aplicar_payload_vehiculo(item, request.data or {})
+
+            try:
+                item.full_clean()
+                item.save()
+            except IntegrityError:
+                return Response(
+                    {
+                        "ok": False,
+                        "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return Response({
+                "ok": True,
+                "item": _serializar_vehiculo(item),
+            })
+
+        item.activo = False
+        item.save(update_fields=["activo"])
 
         return Response({
             "ok": True,
-            "item": _serializar_vehiculo(item),
+            "mensaje": "Vehículo desactivado correctamente.",
         })
 
-    item.activo = False
-    item.save(update_fields=["activo"])
+    except (ValueError, TypeError, ValidationError) as exc:
+        logger.exception(
+            "ERROR VALIDANDO CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
 
-    return Response({
-        "ok": True,
-        "mensaje": "Vehículo desactivado correctamente.",
-    })
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    except DatabaseError as exc:
+        logger.exception(
+            "ERROR DB CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error de base de datos al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "ERROR GENERAL CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error inesperado al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
