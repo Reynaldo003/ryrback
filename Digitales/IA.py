@@ -22,6 +22,7 @@ from .contacto import (
     enviar_texto_whatsapp,
     enviar_documento_whatsapp_por_link,
     enviar_imagen_whatsapp_por_link,
+    enviar_video_whatsapp_por_link,
     replace_start,
     download_media_whatsapp,
     enviar_indicador_escribiendo_whatsapp,
@@ -209,6 +210,17 @@ def _imagenes_de_version(version: str) -> list[str]:
     imagenes = item.get("imagenes") or []
 
     return imagenes if isinstance(imagenes, list) else []
+
+def _videos_de_version(version: str) -> list[str]:
+    catalogo = _obtener_catalogo_dict()
+    item = catalogo.get(str(version or "").strip().upper())
+
+    if not item:
+        return []
+
+    videos = item.get("videos") or []
+
+    return videos if isinstance(videos, list) else []
 
 def _lada_de_telefono(telefono: str) -> str:
     """Extrae la LADA (3 dígitos) de un número mexicano normalizado (10 dígitos sin +52)."""
@@ -1815,7 +1827,7 @@ def responder_mensaje_automatico(
     )
 
     (
-        respuesta_texto, version_contexto, enviar_pdf, enviar_imagenes,
+        respuesta_texto, version_contexto, enviar_pdf, enviar_imagenes, enviar_videos,
         requiere_asesor, detected_profile, raw_decision, accion_ofrecida,
         nueva_etapa_perfilado,
     ) = construir_respuesta_informativa(
@@ -1954,6 +1966,43 @@ def responder_mensaje_automatico(
             image_results.append(image_res)
             if image_error:
                 image_errors.append(image_error)
+    
+    # Envio de videos
+    video_results: list = []
+    video_errors: list = []
+    if enviar_videos and version_contexto:
+        for videos_relativa in _videos_de_version(version_contexto):
+            video_url = _resolver_url_media(videos_relativa)
+            filename = videos_relativa.rsplit("/", 1)[-1]
+            video_error = ""
+            try:
+                video_res = enviar_video_whatsapp_por_link(
+                    to=telefono, link=video_url, numero_asesor=numero_asesor,
+                    caption=f"Video de {version_contexto.title()}",
+                )
+            except Exception as exc:
+                video_error = str(exc)
+                video_res = {"ok": False, "error": video_error}
+
+            video_message_id = ""
+            try:
+                video_message_id = (video_res.get("messages") or [{}])[0].get("id", "") or ""
+            except Exception:
+                pass
+
+            _guardar_salida(
+                telefono=telefono, numero_asesor=numero_asesor, cliente=cliente,
+                texto=f"[FILE:{filename}]", wa_message_id=video_message_id,
+                raw={"reply_to": wa_message_id_entrante, "version_contexto": version_contexto,
+                     "meta_type": "video", "filename": filename, "media_link": video_url,
+                     "accion_ofrecida": "continuar_contexto",
+                     "conversation_meta": {"accion_ofrecida": "continuar_contexto"},
+                     "wa_response": video_res, "image_error": video_error},
+                status_msg="accepted" if video_message_id else "failed",
+            )
+            video_results.append(video_res)
+            if video_error:
+                video_errors.append(video_error)
 
     # Envio de PDF
     pdf_res = None
@@ -2084,9 +2133,9 @@ def responder_mensaje_automatico(
         "ok": True, "telefono": telefono, "numero_asesor": numero_asesor,
         "cliente_id": cliente.id_cliente, "expediente_id": expediente.pk,
         "respuesta": respuesta_texto, "version_detectada": version_contexto,
-        "pdf_enviado": enviar_pdf, "imagenes_enviadas": enviar_imagenes,
-        "requiere_asesor": requiere_asesor, "accion_ofrecida": accion_ofrecida,
-        "accion_ofrecida_previa": accion_ofrecida_previa,
+        "pdf_enviado": enviar_pdf, "imagenes_enviadas": enviar_imagenes, 
+        "videos_enviados": enviar_videos, "requiere_asesor": requiere_asesor,
+        "accion_ofrecida": accion_ofrecida,"accion_ofrecida_previa": accion_ofrecida_previa,
         "etapa_perfilado_anterior": etapa_perfilado,
         "etapa_perfilado_nueva": nueva_etapa_perfilado,
         "detected_profile": detected_profile, "decision": raw_decision,

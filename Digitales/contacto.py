@@ -996,6 +996,28 @@ def enviar_imagen_whatsapp_por_link(
 
     return _post_messages_api(cfg, payload)
 
+def enviar_video_whatsapp_por_link(
+    to: str,
+    link: str,
+    numero_asesor: str,
+    caption: str = "",
+) -> dict:
+    cfg = obtener_config_linea(numero_asesor=numero_asesor)
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "recipient_type": "individual",
+        "to": to,
+        "type": "video",
+        "video": {
+            "link": link,
+        },
+    }
+
+    if caption:
+        payload["video"]["caption"] = caption
+
+    return _post_messages_api(cfg, payload)
 
 def enviar_documento_whatsapp_por_link(
     to: str,
