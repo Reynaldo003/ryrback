@@ -85,7 +85,8 @@ CSRF_TRUSTED_ORIGINS = [
     "https://graficos-entrega-txp.vercel.app",
     "https://graficos-entrega-pzr.vercel.app",
     "https://graficos-entrega-txt.vercel.app",
-
+    
+    "https://bitacora-mantenimiento-showroom.vercel.app",
 ]
 
 # Application definition
@@ -202,6 +203,8 @@ CORS_ALLOWED_ORIGINS = [
     "https://graficos-entrega-txp.vercel.app",
     "https://graficos-entrega-pzr.vercel.app",
     "https://graficos-entrega-txt.vercel.app",
+
+    "https://bitacora-mantenimiento-showroom.vercel.app",
 ]
 
 
