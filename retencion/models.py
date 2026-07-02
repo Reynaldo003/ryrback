@@ -2,51 +2,112 @@
 from django.db import models
 
 
-class OrdenServicioVW(models.Model):
-    chassi = models.TextField(db_column="Chassi", blank=True, null=True)
-    cliente_veiculo = models.TextField(db_column="Cliente_Veiculo", blank=True, null=True)
-    marca_auto = models.TextField(db_column="Marca_Auto", blank=True, null=True)
-    modelo_auto = models.TextField(db_column="Modelo_Auto", blank=True, null=True)
-
-    num_os = models.TextField(
-        db_column="Num_OS",
-        primary_key=True,
+class OrdenServicioVentaVW(models.Model):
+    vin = models.TextField(db_column="VIN", primary_key=True)
+    agencia = models.TextField(db_column="Agencia", blank=True, null=True)
+    fecha_venta = models.DateField(db_column="FechaVenta", blank=True, null=True)
+    fecha_salida = models.DateField(db_column="FechaSalida", blank=True, null=True)
+    numero_nota = models.TextField(db_column="NumeroNota", blank=True, null=True)
+    total_nota = models.DecimalField(
+        db_column="TotalNota", max_digits=18, decimal_places=2, blank=True, null=True
     )
-
-    fecha_os = models.DateField(db_column="Fecha_OS", blank=True, null=True)
-    fecha_emision = models.DateField(db_column="Fecha_Emision", blank=True, null=True)
-    fecha_salida = models.DateField(db_column="Fecha_Salida", blank=True, null=True)
-
-    estado = models.CharField(db_column="Estado", max_length=8, blank=True, null=True)
-    dias_os_a_actual = models.IntegerField(
-        db_column="Dias_OS_A_Actual",
-        blank=True,
-        null=True,
+    marca = models.TextField(db_column="Marca", blank=True, null=True)
+    modelo_codigo = models.TextField(db_column="ModeloCodigo", blank=True, null=True)
+    modelo_nombre = models.TextField(db_column="ModeloNombre", blank=True, null=True)
+    condicion_vehiculo = models.CharField(
+        db_column="CondicionVehiculo", max_length=10, blank=True, null=True
     )
-
-    segmento = models.CharField(db_column="Segmento", max_length=10, blank=True, null=True)
-    meses_actual_a_emision = models.IntegerField(
-        db_column="Meses_Actual_A_Emision",
-        blank=True,
-        null=True,
+    nombre_cliente = models.TextField(db_column="NombreCliente", blank=True, null=True)
+    telefono_cliente = models.TextField(db_column="TelefonoCliente", blank=True, null=True)
+    correo_cliente = models.TextField(db_column="CorreoCliente", blank=True, null=True)
+    ultima_orden_servicio = models.TextField(
+        db_column="UltimaOrdenServicio", blank=True, null=True
     )
-
-    num_nota = models.TextField(db_column="Num_Nota", blank=True, null=True)
-    total_nota = models.TextField(db_column="Total_Nota", blank=True, null=True)
-    subtipo_os = models.TextField(db_column="Subtipo_OS", blank=True, null=True)
-
-    telefono = models.TextField(db_column="telefono", blank=True, null=True)
-    correo = models.TextField(db_column="correo", blank=True, null=True)
-    nombre = models.TextField(db_column="nombre", blank=True, null=True)
-    serie = models.TextField(db_column="Serie", blank=True, null=True)
-
-    total_servicio = models.TextField(db_column="Total_Servicio", blank=True, null=True)
+    tipo_orden = models.CharField(db_column="TipoOrden", max_length=20, blank=True, null=True)
+    subtipo_orden = models.CharField(
+        db_column="SubtipoOrden", max_length=20, blank=True, null=True
+    )
+    fecha_ultima_os = models.DateField(db_column="FechaUltimaOS", blank=True, null=True)
+    situacion_os = models.CharField(
+        db_column="SituacionOS", max_length=20, blank=True, null=True
+    )
+    cliente_vehiculo = models.TextField(db_column="ClienteVeiculo", blank=True, null=True)
+    placa_vehiculo = models.TextField(db_column="PlacaVeiculo", blank=True, null=True)
+    kilometraje = models.TextField(db_column="Quilometragem", blank=True, null=True)
+    medio_contacto = models.TextField(db_column="MedioContacto", blank=True, null=True)
+    total_ultimo_servicio = models.DecimalField(
+        db_column="TotalUltimoServicio", max_digits=18, decimal_places=2, blank=True, null=True
+    )
+    estado_actividad = models.CharField(
+        db_column="EstadoActividad", max_length=10, blank=True, null=True
+    )
+    meses_desde_venta = models.IntegerField(
+        db_column="MesesDesdeVenta", blank=True, null=True
+    )
+    segmento = models.CharField(db_column="Segmento", max_length=20, blank=True, null=True)
 
     class Meta:
         managed = False
-        db_table = "Ordenes_Servicio_VW"
-        verbose_name = "Orden de Servicio Retención"
-        verbose_name_plural = "Órdenes de Servicio Retención"
+        db_table = "Ordenes_Servicio_Ventas_VW"
+        verbose_name = "Orden Venta Retención"
+        verbose_name_plural = "Órdenes Venta Retención"
 
     def __str__(self):
-        return f"{self.num_os} - {self.cliente_veiculo or self.nombre or 'Sin cliente'}"
+        return f"{self.vin} - {self.nombre_cliente or 'Sin cliente'}"
+
+
+class OrdenServicioCompletaVW(models.Model):
+    vin = models.TextField(db_column="VIN", blank=True, null=True, db_index=True)
+    agencia = models.TextField(db_column="Agencia", blank=True, null=True)
+    fecha_venta = models.DateField(db_column="FechaVenta", blank=True, null=True)
+    fecha_salida = models.DateField(db_column="FechaSalida", blank=True, null=True)
+    numero_nota = models.TextField(db_column="NumeroNota", blank=True, null=True)
+    total_nota = models.DecimalField(
+        db_column="TotalNota", max_digits=18, decimal_places=2, blank=True, null=True
+    )
+    marca = models.TextField(db_column="Marca", blank=True, null=True)
+    modelo_codigo = models.TextField(db_column="ModeloCodigo", blank=True, null=True)
+    modelo_nombre = models.TextField(db_column="ModeloNombre", blank=True, null=True)
+    condicion_vehiculo = models.CharField(
+        db_column="CondicionVehiculo", max_length=10, blank=True, null=True
+    )
+    nombre_cliente = models.TextField(db_column="NombreCliente", blank=True, null=True)
+    telefono_cliente = models.TextField(db_column="TelefonoCliente", blank=True, null=True)
+    correo_cliente = models.TextField(db_column="CorreoCliente", blank=True, null=True)
+
+    numero_orden_servicio = models.TextField(
+        db_column="NumeroOrdenServicio",
+        primary_key=True,
+    )
+
+    tipo_orden = models.CharField(db_column="TipoOrden", max_length=20, blank=True, null=True)
+    subtipo_orden = models.CharField(
+        db_column="SubtipoOrden", max_length=20, blank=True, null=True
+    )
+    fecha_os = models.DateField(db_column="FechaOS", blank=True, null=True)
+    situacion_os = models.CharField(
+        db_column="SituacionOS", max_length=20, blank=True, null=True
+    )
+    cliente_vehiculo = models.TextField(db_column="ClienteVeiculo", blank=True, null=True)
+    placa_vehiculo = models.TextField(db_column="PlacaVeiculo", blank=True, null=True)
+    kilometraje = models.TextField(db_column="Quilometragem", blank=True, null=True)
+    medio_contacto = models.TextField(db_column="MedioContacto", blank=True, null=True)
+    total_servicio = models.DecimalField(
+        db_column="TotalServicio", max_digits=18, decimal_places=2, blank=True, null=True
+    )
+    estado_actividad = models.CharField(
+        db_column="EstadoActividad", max_length=20, blank=True, null=True
+    )
+    meses_desde_venta = models.IntegerField(
+        db_column="MesesDesdeVenta", blank=True, null=True
+    )
+    segmento = models.CharField(db_column="Segmento", max_length=20, blank=True, null=True)
+
+    class Meta:
+        managed = False
+        db_table = "Ventas_Ordenes_Servicio_Completas_VW"
+        verbose_name = "Orden Servicio Completa"
+        verbose_name_plural = "Órdenes Servicio Completas"
+
+    def __str__(self):
+        return f"{self.numero_orden_servicio} - {self.vin}"
