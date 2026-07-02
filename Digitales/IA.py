@@ -1,6 +1,6 @@
 #Digitales/IA.py
 from __future__ import annotations
-
+import logging
 from functools import lru_cache
 import json
 import re
@@ -28,6 +28,8 @@ from .contacto import (
     enviar_indicador_escribiendo_whatsapp,
 )
 from .ia_catalogo import obtener_catalogo_activo_para_ia
+
+logger = logging.getLogger(__name__)
 
 # Sucursales y geolocalización por LADA 
 SUCURSALES_VW: list[dict] = [
@@ -321,8 +323,7 @@ SALUDO_BASE = (
 )
 
 RESPUESTA_MEDIA = (
-    "Por ahora te puedo apoyar por texto con informacion de todos nuestros modelos, "
-    "ademas de precio, imagenes y ficha tecnica en PDF."
+    "Recibí tu archivo. Dame un momento para revisarlo y continuar con tu atención."
 )
 
 RESPUESTA_FALLBACK = (
@@ -1803,6 +1804,223 @@ Devuelve máximo 8 líneas.
             f"automáticamente. Tipo detectado: {media.get('type')}. Error interno: {str(exc)[:180]}"
         )
 
+TIPOS_MEDIA_IA = {
+    "image",
+    "video",
+    "audio",
+    "sticker",
+    "document",
+}
+
+MIME_FALLBACK_MEDIA = {
+    "image": "image/jpeg",
+    "video": "video/mp4",
+    "audio": "audio/ogg",
+    "sticker": "image/webp",
+    "document": "application/pdf",
+}
+
+
+def _extraer_media_entrante(raw_message: Optional[dict]) -> dict[str, Any]:
+    """
+    Extrae metadata del media entrante de WhatsApp Cloud API.
+
+    Soporta:
+    - image
+    - video
+    - audio
+    - sticker
+    - document
+
+    WhatsApp envía el archivo como media_id.
+    Después nosotros lo descargamos con download_media_whatsapp().
+    """
+    if not isinstance(raw_message, dict):
+        return {}
+
+    tipo = str(raw_message.get("type") or "").lower().strip()
+
+    if tipo not in TIPOS_MEDIA_IA:
+        return {}
+
+    payload = raw_message.get(tipo) or {}
+
+    if not isinstance(payload, dict):
+        return {}
+
+    media_id = str(payload.get("id") or "").strip()
+
+    if not media_id:
+        return {}
+
+    caption = ""
+
+    if tipo in ("image", "video", "document"):
+        caption = str(payload.get("caption") or "").strip()
+
+    return {
+        "type": tipo,
+        "media_id": media_id,
+        "mime_type": str(payload.get("mime_type") or "").strip(),
+        "sha256": str(payload.get("sha256") or "").strip(),
+        "filename": str(payload.get("filename") or "").strip(),
+        "caption": caption,
+    }
+
+
+def _mime_para_gemini(tipo: str, content_type: str = "") -> str:
+    """
+    Normaliza MIME type para que Gemini pueda interpretar el archivo.
+
+    Cuando Meta no manda content-type claro, usamos un fallback por tipo.
+    """
+    tipo = str(tipo or "").lower().strip()
+    content_type = str(content_type or "").split(";")[0].lower().strip()
+
+    if content_type and content_type != "application/octet-stream":
+        return content_type
+
+    return MIME_FALLBACK_MEDIA.get(tipo, "application/octet-stream")
+
+
+def _instruccion_analisis_multimedia(
+    *,
+    tipo: str,
+    caption: str = "",
+    texto_usuario: str = "",
+) -> str:
+    """
+    Prompt corto para que Gemini convierta media en texto útil para el CRM.
+    No buscamos que cierre la venta aquí, solo que describa el archivo.
+    """
+    tipo = str(tipo or "media").lower().strip()
+    caption = str(caption or "").strip()
+    texto_usuario = str(texto_usuario or "").strip()
+
+    reglas_por_tipo = {
+        "image": (
+            "Analiza la imagen. Describe objetos visibles, texto legible, "
+            "si aparece un auto, marca/modelo/color/estado aparente, documentos visibles "
+            "y cualquier intención comercial probable."
+        ),
+        "sticker": (
+            "Analiza el sticker como reacción del cliente. Describe emoción probable "
+            "sin exagerar: aprobación, duda, risa, molestia, sorpresa o rechazo."
+        ),
+        "video": (
+            "Analiza el video. Resume qué ocurre, si aparece un vehículo, "
+            "detalles visibles, posibles preguntas del cliente y señales comerciales."
+        ),
+        "audio": (
+            "Transcribe y resume el audio. Extrae intención, modelo de auto mencionado, "
+            "presupuesto, forma de pago, enganche, dudas y datos importantes del prospecto."
+        ),
+        "document": (
+            "Analiza el documento. Resume contenido relevante, datos visibles, "
+            "si parece comprobante, identificación, ficha, cotización o archivo comercial."
+        ),
+    }
+
+    instruccion_tipo = reglas_por_tipo.get(
+        tipo,
+        "Analiza el archivo y resume su contenido útil para atención comercial.",
+    )
+
+    return f"""
+Eres un asistente de CRM automotriz.
+
+Tu tarea es analizar el archivo que envió el cliente y convertirlo en contexto útil
+para que otra IA pueda responder por WhatsApp.
+
+{instruccion_tipo}
+
+Reglas:
+- Responde en español.
+- No inventes datos que no aparezcan.
+- Si no puedes identificar algo, dilo como incertidumbre.
+- No des respuesta comercial final; solo entrega análisis del contenido.
+- Sé breve pero útil.
+- Máximo 900 caracteres.
+
+Contexto textual adicional del mensaje:
+{texto_usuario or "Sin texto adicional."}
+
+Caption del archivo:
+{caption or "Sin caption."}
+""".strip()
+
+
+def _analizar_media_con_gemini(
+    *,
+    media: dict[str, Any],
+    blob: bytes,
+    content_type: str,
+    texto_usuario: str,
+    numero_asesor: str,
+) -> str:
+    """
+    Envía el archivo descargado desde Meta a Gemini para convertirlo en texto.
+
+    Para archivos pequeños usamos inline bytes.
+    Si el archivo es muy grande, no lo mandamos para evitar romper el request.
+    """
+    if not blob:
+        return ""
+
+    max_bytes = int(
+        getattr(
+            settings,
+            "GEMINI_MAX_INLINE_MEDIA_BYTES",
+            18 * 1024 * 1024,
+        )
+    )
+
+    tipo = str(media.get("type") or "media").lower().strip()
+
+    if len(blob) > max_bytes:
+        return (
+            f"El cliente envió un archivo de tipo {tipo}, "
+            f"pero pesa {round(len(blob) / 1024 / 1024, 2)} MB y supera el límite "
+            "configurado para análisis automático."
+        )
+
+    mime_type = _mime_para_gemini(tipo, content_type)
+
+    if mime_type == "application/octet-stream":
+        return f"El cliente envió un archivo de tipo {tipo}, pero no se pudo determinar el formato."
+
+    prompt = _instruccion_analisis_multimedia(
+        tipo=tipo,
+        caption=media.get("caption", ""),
+        texto_usuario=texto_usuario,
+    )
+
+    client = _get_gemini_client()
+
+    modelo_multimodal = getattr(
+        settings,
+        "GEMINI_MULTIMODAL_MODEL",
+        getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+    )
+
+    respuesta = client.models.generate_content(
+        model=modelo_multimodal,
+        contents=[
+            types.Part.from_bytes(
+                data=blob,
+                mime_type=mime_type,
+            ),
+            prompt,
+        ],
+        config=types.GenerateContentConfig(
+            temperature=0.2,
+        ),
+    )
+
+    texto = str(getattr(respuesta, "text", "") or "").strip()
+
+    return _limitar_texto(texto, max_len=1200)
+
 
 def _enriquecer_texto_usuario_con_media(
     *,
@@ -1810,28 +2028,66 @@ def _enriquecer_texto_usuario_con_media(
     raw_message: Optional[dict],
     numero_asesor: str,
 ) -> str:
+    """
+    Si el cliente mandó media, descarga el archivo de Meta, lo analiza con Gemini
+    y agrega el resultado al texto que ya usa tu flujo conversacional.
+
+    Esto permite que tu función construir_respuesta_informativa() siga funcionando
+    sin reescribir toda la lógica comercial.
+    """
+    texto_usuario = str(texto_usuario or "").strip()
+
     media = _extraer_media_entrante(raw_message)
 
     if not media:
         return texto_usuario
 
-    descripcion = _describir_media_entrante_con_ia(
-        raw_message=raw_message,
-        numero_asesor=numero_asesor,
-    )
-
-    caption = str(media.get("caption") or "").strip()
     tipo = media.get("type") or "media"
+    caption = str(media.get("caption") or "").strip()
+    media_id = str(media.get("media_id") or "").strip()
+
+    descripcion = ""
+
+    try:
+        blob, content_type_descargado = download_media_whatsapp(
+            media_id,
+            numero_asesor=numero_asesor,
+        )
+
+        content_type = media.get("mime_type") or content_type_descargado
+
+        descripcion = _analizar_media_con_gemini(
+            media=media,
+            blob=blob,
+            content_type=content_type,
+            texto_usuario=texto_usuario,
+            numero_asesor=numero_asesor,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "No se pudo analizar media con Gemini | tipo=%s media_id=%s numero_asesor=%s error=%s",
+            tipo,
+            media_id,
+            numero_asesor,
+            str(exc),
+        )
+
+        descripcion = (
+            f"El cliente envió un archivo de tipo {tipo}, "
+            "pero no se pudo analizar automáticamente."
+        )
 
     partes = []
 
-    if texto_usuario and texto_usuario.strip() not in {
+    if texto_usuario and texto_usuario not in {
         "[IMAGE]",
         "[VIDEO]",
         "[AUDIO]",
         "[STICKER]",
+        "[DOCUMENT]",
     }:
-        partes.append(texto_usuario.strip())
+        partes.append(texto_usuario)
 
     if caption:
         partes.append(f"Caption del cliente: {caption}")
@@ -1840,11 +2096,11 @@ def _enriquecer_texto_usuario_con_media(
         partes.append(
             "[CONTEXTO MULTIMEDIA ANALIZADO]\n"
             f"Tipo: {tipo}\n"
+            f"Media ID: {media_id}\n"
             f"Resumen: {descripcion}"
         )
 
     return "\n\n".join(partes).strip() or f"El cliente envió un archivo de tipo {tipo}."
-
 
 def _dividir_mensaje_whatsapp(
     texto: str,

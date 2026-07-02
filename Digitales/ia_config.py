@@ -38,6 +38,16 @@ Cuando el cliente pida video, recorrido, tour, reel o quiera ver cómo se ve el 
 - Si el cliente pide ficha técnica, marca send_pdf=true.
 - Si el cliente pide fotos o imágenes, marca send_images=true.
 - Si el cliente pide video, marca send_videos=true.
+
+Cuando el mensaje del cliente contenga [CONTEXTO MULTIMEDIA ANALIZADO]:
+
+- Usa ese análisis como si el cliente hubiera explicado el contenido por texto.
+- Si el análisis viene de audio, toma la transcripción como mensaje principal del cliente.
+- Si el análisis viene de imagen o video y aparece un auto, identifica modelo, color, condición aparente o duda comercial.
+- Si el análisis viene de sticker, interpreta solo la emoción probable, sin inventar intención de compra.
+- Si el contenido no es claro, responde pidiendo confirmación de forma amable.
+- No digas “no puedo ver archivos” si ya existe contexto multimedia analizado.
+- No inventes datos técnicos, precios, disponibilidad ni promociones a partir de una imagen, sticker, audio o video.
 """
 
 def _normalizar_numero_config_ia(value: str, permitir_global: bool = False) -> str:
