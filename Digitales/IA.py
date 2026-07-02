@@ -599,7 +599,9 @@ def _detectar_intencion_minima(texto_usuario: str) -> dict[str, bool]:
         ]),
         "pregunta_imagenes": any(k in t for k in [
             "IMAGEN", "IMAGENES", "FOTO", "FOTOS", "FOTOGRAFIA",
-            "PIC", "PICS", "VER", "COMO SE VE", "MUESTRAME",
+            "PIC", "PICS", "MUESTRAME FOTOS","MUESTRAME IMAGENES",
+            "MANDAME FOTOS", "MANDAME IMAGENES", "PASAME FOTOS",
+            "PASAME IMAGENES", "COMO SE VE",
         ]),
         "pregunta_videos": any(k in t for k in [
             "VIDEO", "VIDEOS", "GRABACION", "GRABACIÓN", "RECORRIDO",
@@ -1574,22 +1576,65 @@ def construir_respuesta_informativa(
         or auto_interes_actual
     )
 
+    senales_media = _detectar_intencion_minima(texto_usuario)
+
+    t_norm = _normalizar_texto(texto_usuario)
+
+    pide_pdf_explicito = any(k in t_norm for k in [
+        "PDF",
+        "FICHA",
+        "FICHA TECNICA",
+        "FICHA TÉCNICA",
+        "BROCHURE",
+        "CATALOGO",
+        "CATÁLOGO",
+        "ESPECIFICACIONES",
+    ])
+
+    pide_imagenes_explicito = bool(senales_media.get("pregunta_imagenes"))
+    pide_videos_explicito = bool(senales_media.get("pregunta_videos"))
+
+    es_peticion_media = bool(
+        selected_version
+        and (
+            pide_pdf_explicito
+            or pide_imagenes_explicito
+            or pide_videos_explicito
+        )
+    )
+
     requiere_asesor = bool(decision.get("requiere_asesor"))
 
+    # IMPORTANTE:
+    # Si el cliente pidió fotos, video o ficha, NO debemos bloquear el envío
+    # aunque Gemini haya escrito una frase de canalización.
+    if es_peticion_media:
+        requiere_asesor = False
+        decision["requiere_asesor"] = False
+
     send_pdf = (
-        bool(decision.get("send_pdf"))
+        (
+            bool(decision.get("send_pdf"))
+            or pide_pdf_explicito
+        )
         and bool(selected_version)
         and not requiere_asesor
     )
 
     send_images = (
-        bool(decision.get("send_images"))
+        (
+            bool(decision.get("send_images"))
+            or pide_imagenes_explicito
+        )
         and bool(selected_version)
         and not requiere_asesor
     )
 
     send_videos = (
-        bool(decision.get("send_videos"))
+        (
+            bool(decision.get("send_videos"))
+            or pide_videos_explicito
+        )
         and bool(selected_version)
         and not requiere_asesor
     )
@@ -1599,6 +1644,27 @@ def construir_respuesta_informativa(
     reply_text = _limitar_texto(
         (decision.get("reply_text") or RESPUESTA_FALLBACK).strip()
     )
+
+    if es_peticion_media:
+        # Prioridad correcta:
+        # si pide video, NO mandar fotos aunque el texto diga "ver".
+        if pide_videos_explicito:
+            send_videos = True
+            send_images = False
+            send_pdf = False
+            reply_text = f"¡Claro! Te comparto un video de {selected_version.title()}."
+
+        elif pide_imagenes_explicito:
+            send_images = True
+            send_videos = False
+            send_pdf = False
+            reply_text = f"¡Claro! Te comparto unas imágenes de {selected_version.title()}."
+
+        elif pide_pdf_explicito:
+            send_pdf = True
+            send_images = False
+            send_videos = False
+            reply_text = f"¡Claro! Te comparto la ficha técnica de {selected_version.title()}."
 
     accion_ofrecida = (decision.get("accion_ofrecida") or "ninguna").strip()
 

@@ -4,7 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from django.db import IntegrityError
+import logging
+
+from django.core.exceptions import ValidationError
+from django.db import IntegrityError, DatabaseError
+from django.utils.dateparse import parse_date
 from django.db.models import Q
 from rest_framework import status
 from rest_framework.decorators import api_view, authentication_classes, permission_classes
@@ -15,6 +19,7 @@ from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
 from .models import CatalogoVehiculos
 
+logger = logging.getLogger(__name__)
 
 def _int_o_none(valor):
     if valor in (None, ""):
@@ -40,7 +45,7 @@ def _serializar_vehiculo(item: CatalogoVehiculos) -> dict[str, Any]:
         "ficha_tecnica": item.ficha_tecnica,
         "url_ficha_tecnica": item.url_ficha_tecnica,
         "imagenes": item.imagenes,
-        "videos": item.videos,
+        "videos": getattr(item, "videos", []) or [],
         "ultima_actualizacion": item.ultima_actualizacion.isoformat() if item.ultima_actualizacion else None,
         "activo": item.activo,
         "creado": item.creado.isoformat() if item.creado else None,
@@ -77,6 +82,45 @@ def buscar_vehiculos_para_ia(texto: str, limite: int = 10) -> list[dict[str, Any
     return [_serializar_vehiculo(item) for item in qs]
 
 
+def _lista_texto_o_vacia(valor) -> list[str]:
+    if valor in (None, ""):
+        return []
+
+    if isinstance(valor, list):
+        return [
+            str(item or "").strip()
+            for item in valor
+            if str(item or "").strip()
+        ]
+
+    if isinstance(valor, str):
+        return [
+            linea.strip()
+            for linea in valor.splitlines()
+            if linea.strip()
+        ]
+
+    return []
+
+
+def _fecha_o_none(valor):
+    if valor in (None, ""):
+        return None
+
+    if hasattr(valor, "year") and hasattr(valor, "month") and hasattr(valor, "day"):
+        return valor
+
+    texto = str(valor or "").strip()
+
+    # Soporta valores tipo "2026-07-02" o "2026-07-02T00:00:00"
+    fecha = parse_date(texto[:10])
+
+    if not fecha:
+        raise ValueError("ultima_actualizacion debe tener formato YYYY-MM-DD.")
+
+    return fecha
+
+
 def _aplicar_payload_vehiculo(item: CatalogoVehiculos, data: dict[str, Any]) -> CatalogoVehiculos:
     campos_texto = [
         "marca",
@@ -92,8 +136,11 @@ def _aplicar_payload_vehiculo(item: CatalogoVehiculos, data: dict[str, Any]) -> 
 
     if "ano" in data:
         ano = _int_o_none(data.get("ano"))
-        if ano:
-            item.ano = ano
+
+        if not ano:
+            raise ValueError("El año es obligatorio y debe ser numérico.")
+
+        item.ano = ano
 
     for campo in ["precio_lista", "precio_contado", "precio_financiado"]:
         if campo in data:
@@ -101,24 +148,133 @@ def _aplicar_payload_vehiculo(item: CatalogoVehiculos, data: dict[str, Any]) -> 
 
     if "ficha_tecnica" in data:
         ficha = data.get("ficha_tecnica")
-        item.ficha_tecnica = ficha if isinstance(ficha, dict) else {}
+
+        if ficha in (None, ""):
+            item.ficha_tecnica = {}
+        elif isinstance(ficha, dict):
+            item.ficha_tecnica = ficha
+        else:
+            raise ValueError("ficha_tecnica debe ser un objeto JSON válido.")
 
     if "imagenes" in data:
-        imagenes = data.get("imagenes")
-        item.imagenes = imagenes if isinstance(imagenes, list) else []
-    
+        item.imagenes = _lista_texto_o_vacia(data.get("imagenes"))
+
     if "videos" in data:
-        videos = data.get("videos")
-        item.videos = videos if isinstance(videos, list) else []
+        if not hasattr(item, "videos"):
+            raise ValueError("El modelo CatalogoVehiculos todavía no tiene el campo videos cargado en runtime.")
+
+        item.videos = _lista_texto_o_vacia(data.get("videos"))
 
     if "ultima_actualizacion" in data:
-        item.ultima_actualizacion = data.get("ultima_actualizacion") or None
+        item.ultima_actualizacion = _fecha_o_none(data.get("ultima_actualizacion"))
 
     if "activo" in data:
         item.activo = bool(data.get("activo"))
 
     return item
 
+@api_view(["GET", "PATCH", "PUT", "DELETE"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def catalogo_vehiculo_detail(request, vehiculo_id: int):
+    try:
+        item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
+
+        if not item:
+            return Response(
+                {
+                    "ok": False,
+                    "error": "Vehículo no encontrado.",
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if request.method == "GET":
+            return Response({
+                "ok": True,
+                "item": _serializar_vehiculo(item),
+            })
+
+        if request.method in ("PATCH", "PUT"):
+            item = _aplicar_payload_vehiculo(item, request.data or {})
+
+            try:
+                item.full_clean()
+                item.save()
+            except IntegrityError:
+                return Response(
+                    {
+                        "ok": False,
+                        "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return Response({
+                "ok": True,
+                "item": _serializar_vehiculo(item),
+            })
+
+        item.activo = False
+        item.save(update_fields=["activo"])
+
+        return Response({
+            "ok": True,
+            "mensaje": "Vehículo desactivado correctamente.",
+        })
+
+    except (ValueError, TypeError, ValidationError) as exc:
+        logger.exception(
+            "ERROR VALIDANDO CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    except DatabaseError as exc:
+        logger.exception(
+            "ERROR DB CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error de base de datos al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "ERROR GENERAL CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error inesperado al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
 
 @api_view(["GET", "POST"])
 @authentication_classes([CRMJWTAuthentication])
@@ -128,8 +284,6 @@ def catalogo_vehiculos_list(request):
         modelo = (request.query_params.get("modelo") or "").strip()
         marca = (request.query_params.get("marca") or "").strip()
         activo_param = request.query_params.get("activo", "true").strip().lower()
-        
-        activo = activo_param not in ("0", "false", "no", "inactivo")
 
         try:
             limite = int(request.query_params.get("limit", 300))
@@ -139,7 +293,7 @@ def catalogo_vehiculos_list(request):
         limite = max(1, min(limite, 1000))
 
         qs = CatalogoVehiculos.objects.all()
-        
+
         if activo_param not in ("todos", "all", "*", ""):
             activo = activo_param not in ("0", "false", "no", "inactivo")
             qs = qs.filter(activo=activo)
@@ -176,9 +330,9 @@ def catalogo_vehiculos_list(request):
     item.modelo = ""
     item.ano = int(data.get("ano"))
 
-    item = _aplicar_payload_vehiculo(item, data)
-
     try:
+        item = _aplicar_payload_vehiculo(item, data)
+        item.full_clean()
         item.save()
     except IntegrityError:
         return Response(
@@ -187,6 +341,53 @@ def catalogo_vehiculos_list(request):
                 "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
             },
             status=status.HTTP_400_BAD_REQUEST,
+        )
+    except (ValueError, TypeError, ValidationError) as exc:
+        logger.exception(
+            "ERROR VALIDANDO CATÁLOGO VEHÍCULO CREATE | payload=%s | error=%s",
+            dict(data),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    except DatabaseError as exc:
+        logger.exception(
+            "ERROR DB CATÁLOGO VEHÍCULO CREATE | payload=%s | error=%s",
+            dict(data),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error de base de datos al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    except Exception as exc:
+        logger.exception(
+            "ERROR GENERAL CATÁLOGO VEHÍCULO CREATE | payload=%s | error=%s",
+            dict(data),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error inesperado al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
 
     return Response(
@@ -202,43 +403,101 @@ def catalogo_vehiculos_list(request):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def catalogo_vehiculo_detail(request, vehiculo_id: int):
-    item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
+    try:
+        item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
 
-    if not item:
-        return Response(
-            {"ok": False, "error": "Vehículo no encontrado."},
-            status=status.HTTP_404_NOT_FOUND,
-        )
-
-    if request.method == "GET":
-        return Response({
-            "ok": True,
-            "item": _serializar_vehiculo(item),
-        })
-
-    if request.method in ("PATCH", "PUT"):
-        item = _aplicar_payload_vehiculo(item, request.data or {})
-
-        try:
-            item.save()
-        except IntegrityError:
+        if not item:
             return Response(
                 {
                     "ok": False,
-                    "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
+                    "error": "Vehículo no encontrado.",
                 },
-                status=status.HTTP_400_BAD_REQUEST,
+                status=status.HTTP_404_NOT_FOUND,
             )
+
+        if request.method == "GET":
+            return Response({
+                "ok": True,
+                "item": _serializar_vehiculo(item),
+            })
+
+        if request.method in ("PATCH", "PUT"):
+            item = _aplicar_payload_vehiculo(item, request.data or {})
+
+            try:
+                item.full_clean()
+                item.save()
+            except IntegrityError:
+                return Response(
+                    {
+                        "ok": False,
+                        "error": "Ya existe un vehículo con la misma marca, modelo, año y versión.",
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            return Response({
+                "ok": True,
+                "item": _serializar_vehiculo(item),
+            })
+
+        item.activo = False
+        item.save(update_fields=["activo"])
 
         return Response({
             "ok": True,
-            "item": _serializar_vehiculo(item),
+            "mensaje": "Vehículo desactivado correctamente.",
         })
 
-    item.activo = False
-    item.save(update_fields=["activo"])
+    except (ValueError, TypeError, ValidationError) as exc:
+        logger.exception(
+            "ERROR VALIDANDO CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
 
-    return Response({
-        "ok": True,
-        "mensaje": "Vehículo desactivado correctamente.",
-    })
+        return Response(
+            {
+                "ok": False,
+                "error": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    except DatabaseError as exc:
+        logger.exception(
+            "ERROR DB CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error de base de datos al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "ERROR GENERAL CATÁLOGO VEHÍCULO | id=%s | payload=%s | error=%s",
+            vehiculo_id,
+            dict(request.data or {}),
+            str(exc),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": "Error inesperado al guardar el vehículo.",
+                "detalle": str(exc),
+                "tipo": exc.__class__.__name__,
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
