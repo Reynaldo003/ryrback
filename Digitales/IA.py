@@ -599,7 +599,9 @@ def _detectar_intencion_minima(texto_usuario: str) -> dict[str, bool]:
         ]),
         "pregunta_imagenes": any(k in t for k in [
             "IMAGEN", "IMAGENES", "FOTO", "FOTOS", "FOTOGRAFIA",
-            "PIC", "PICS", "VER", "COMO SE VE", "MUESTRAME",
+            "PIC", "PICS", "MUESTRAME FOTOS","MUESTRAME IMAGENES",
+            "MANDAME FOTOS", "MANDAME IMAGENES", "PASAME FOTOS",
+            "PASAME IMAGENES", "COMO SE VE",
         ]),
         "pregunta_videos": any(k in t for k in [
             "VIDEO", "VIDEOS", "GRABACION", "GRABACIÓN", "RECORRIDO",
@@ -1644,11 +1646,24 @@ def construir_respuesta_informativa(
     )
 
     if es_peticion_media:
-        if send_images:
-            reply_text = f"¡Claro! Te comparto unas imágenes de {selected_version.title()}."
-        elif send_videos:
+        # Prioridad correcta:
+        # si pide video, NO mandar fotos aunque el texto diga "ver".
+        if pide_videos_explicito:
+            send_videos = True
+            send_images = False
+            send_pdf = False
             reply_text = f"¡Claro! Te comparto un video de {selected_version.title()}."
-        elif send_pdf:
+
+        elif pide_imagenes_explicito:
+            send_images = True
+            send_videos = False
+            send_pdf = False
+            reply_text = f"¡Claro! Te comparto unas imágenes de {selected_version.title()}."
+
+        elif pide_pdf_explicito:
+            send_pdf = True
+            send_images = False
+            send_videos = False
             reply_text = f"¡Claro! Te comparto la ficha técnica de {selected_version.title()}."
 
     accion_ofrecida = (decision.get("accion_ofrecida") or "ninguna").strip()
