@@ -1,7 +1,9 @@
+#views/bitacoras
 import json
 
 from django.db import transaction
 from rest_framework import status
+from rest_framework.generics import ListAPIView
 from rest_framework.parsers import MultiPartParser
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -43,10 +45,16 @@ class BitacoraCreateView(APIView):
                 observaciones=r.get("observaciones", ""),
             )
 
-            # Los archivos vienen con nombre de campo "evidencia_<reactivo_id>"
             archivos = request.FILES.getlist(f"evidencia_{reactivo.reactivo_id}")
             for archivo in archivos:
                 Evidencia.objects.create(reactivo=reactivo, archivo=archivo)
 
         serializer = BitacoraSerializer(bitacora)
         return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+
+class BitacoraListView(ListAPIView):
+    serializer_class = BitacoraSerializer
+    queryset = Bitacora.objects.prefetch_related(
+        "reactivos__evidencias"
+    ).order_by("-creado_en")
