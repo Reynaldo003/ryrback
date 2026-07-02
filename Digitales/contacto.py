@@ -953,6 +953,15 @@ def obtener_mensaje_whatsapp(message: dict) -> str:
         if interactive.get("type") == "button_reply":
             return interactive.get("button_reply", {}).get("title", "")
 
+    if message_type == "reaction":
+        reaction = message.get("reaction") or {}
+        emoji = str(reaction.get("emoji") or "").strip()
+
+        if emoji:
+            return f"[REACTION:{emoji}]"
+
+        return "[REACTION_REMOVED]"
+
     if message_type in ("image", "document", "video", "audio", "sticker"):
         caption = ""
 
@@ -961,8 +970,7 @@ def obtener_mensaje_whatsapp(message: dict) -> str:
 
         return caption.strip() or f"[{message_type.upper()}]"
 
-    return "mensaje no procesado"
-
+    return "[UNSUPPORTED_MESSAGE]"
 
 def replace_start(s: str) -> str:
     digits = "".join(char for char in str(s or "") if char.isdigit())

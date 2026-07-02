@@ -849,6 +849,129 @@ def _procesar_respuesta_flow_enc_piso(msg: dict) -> bool:
         logger.exception("ERROR PROCESANDO FLOW ENC_PISO | error=%s", str(e))
         return False
     
+def _extraer_reaccion_whatsapp(msg: dict) -> dict:
+    if not isinstance(msg, dict):
+        return {}
+
+    if str(msg.get("type") or "").lower() != "reaction":
+        return {}
+
+    reaction = msg.get("reaction") or {}
+
+    if not isinstance(reaction, dict):
+        return {}
+
+    target_message_id = str(reaction.get("message_id") or "").strip()
+    emoji = str(reaction.get("emoji") or "").strip()
+
+    if not target_message_id:
+        return {}
+
+    return {
+        "target_message_id": target_message_id,
+        "emoji": emoji,
+        "removed": not bool(emoji),
+    }
+
+
+def _aplicar_reaccion_a_mensaje_original(
+    *,
+    msg: dict,
+    raw_msg: dict,
+    telefono: str,
+    numero_asesor: str,
+    cliente=None,
+) -> bool:
+    data = _extraer_reaccion_whatsapp(msg)
+
+    if not data:
+        return False
+
+    target_message_id = data["target_message_id"]
+    emoji = data["emoji"]
+    removed = data["removed"]
+
+    mensaje_objetivo = (
+        MensajeWhatsApp.objects
+        .filter(
+            numero_asesor=numero_asesor,
+            wa_message_id=target_message_id,
+        )
+        .order_by("-id")
+        .first()
+    )
+
+    # Guardamos también un evento oculto para que el polling del frontend lo reciba.
+    # Este evento NO se va a pintar como burbuja.
+    wa_reaction_id = str(msg.get("id") or "").strip()
+
+    MensajeWhatsApp.objects.get_or_create(
+        wa_message_id=wa_reaction_id,
+        numero_asesor=numero_asesor,
+        defaults={
+            "telefono": telefono,
+            "cliente": cliente,
+            "direction": "in",
+            "body": "",
+            "status": "received",
+            "raw": {
+                **raw_msg,
+                "is_reaction_event": True,
+                "reaction_target_id": target_message_id,
+                "reaction_emoji": emoji,
+                "reaction_removed": removed,
+            },
+        },
+    )
+
+    if not mensaje_objetivo:
+        logger.info(
+            "REACTION SIN MENSAJE OBJETIVO | target=%s emoji=%s tel=%s numero_asesor=%s",
+            target_message_id,
+            emoji,
+            telefono,
+            numero_asesor,
+        )
+        return True
+
+    raw_objetivo = dict(mensaje_objetivo.raw or {})
+
+    reactions = raw_objetivo.get("reactions")
+    if not isinstance(reactions, list):
+        reactions = []
+
+    # Solo dejamos una reacción activa por cliente sobre ese mensaje.
+    reactions = [
+        item for item in reactions
+        if str(item.get("telefono") or "") != str(telefono or "")
+    ]
+
+    if not removed and emoji:
+        reactions.append({
+            "telefono": telefono,
+            "emoji": emoji,
+            "from": "cliente",
+            "reaction_message_id": wa_reaction_id,
+            "created_at": timezone.now().isoformat(),
+        })
+
+    raw_objetivo["reactions"] = reactions
+    raw_objetivo["last_reaction_payload"] = raw_msg
+
+    mensaje_objetivo.raw = raw_objetivo
+    mensaje_objetivo.save(update_fields=["raw"])
+
+    logger.info(
+        "REACTION APLICADA | target=%s emoji=%s removed=%s tel=%s numero_asesor=%s",
+        target_message_id,
+        emoji,
+        removed,
+        telefono,
+        numero_asesor,
+    )
+
+    return True
+
 # ── Webhook ───────────────────────────────────────────────────────────────────
 
 @csrf_exempt
@@ -946,7 +1069,21 @@ def webhook(request):
                     raw_msg["phone_number_id"] = metadata.get("phone_number_id", "")
                     raw_msg["display_phone_number"] = metadata.get("display_phone_number", "")
                     raw_msg["atribucion_meta"] = resultado_atribucion_meta
-
+                    if _aplicar_reaccion_a_mensaje_original(
+                        msg=msg,
+                        raw_msg=raw_msg,
+                        telefono=tel,
+                        numero_asesor=numero_asesor,
+                        cliente=cliente,
+                    ):
+                        logger.info(
+                            "WEBHOOK REACTION PROCESADA SIN IA | tel=%s wa_id=%s numero_asesor=%s",
+                            tel,
+                            wa_id,
+                            numero_asesor,
+                        )
+                        continue
+                    
                     mensaje_entrante, created = MensajeWhatsApp.objects.get_or_create(
                         wa_message_id=wa_id,
                         numero_asesor=numero_asesor,
