@@ -40,7 +40,7 @@ def _serializar_vehiculo(item: CatalogoVehiculos) -> dict[str, Any]:
         "ficha_tecnica": item.ficha_tecnica,
         "url_ficha_tecnica": item.url_ficha_tecnica,
         "imagenes": item.imagenes,
-        "videos": item.videos,
+        "videos": getattr(item, "videos", []) or [],
         "ultima_actualizacion": item.ultima_actualizacion.isoformat() if item.ultima_actualizacion else None,
         "activo": item.activo,
         "creado": item.creado.isoformat() if item.creado else None,
@@ -107,7 +107,7 @@ def _aplicar_payload_vehiculo(item: CatalogoVehiculos, data: dict[str, Any]) -> 
         imagenes = data.get("imagenes")
         item.imagenes = imagenes if isinstance(imagenes, list) else []
     
-    if "videos" in data:
+    if "videos" in data and hasattr(item, "videos"):
         videos = data.get("videos")
         item.videos = videos if isinstance(videos, list) else []
 
