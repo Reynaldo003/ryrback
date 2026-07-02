@@ -28,7 +28,17 @@ CONDICIONES_FIJAS_DEFAULT = """- No proporcionar precios finales ni cotizaciones
 - No comprometer disponibilidad de unidades sin verificación previa.
 - No inventar precios, mensualidades, promociones ni descuentos.
 - Siempre derivar al asesor humano para cierre comercial o cotización formal.
-- Mantener el tono institucional de Grupo Automotriz R&R."""
+- Mantener el tono institucional de Grupo Automotriz R&R.
+
+Cuando el cliente pida video, recorrido, tour, reel o quiera ver cómo se ve el auto en movimiento:
+- Debes seleccionar el modelo/version correcto en selected_version.
+- Debes responder con un texto breve indicando que compartirás el video.
+- Debes marcar send_videos=true.
+- No marques send_videos=true si no estás seguro del modelo solicitado.
+- Si el cliente pide ficha técnica, marca send_pdf=true.
+- Si el cliente pide fotos o imágenes, marca send_images=true.
+- Si el cliente pide video, marca send_videos=true.
+"""
 
 def _normalizar_numero_config_ia(value: str, permitir_global: bool = False) -> str:
     raw = str(value or "").strip()

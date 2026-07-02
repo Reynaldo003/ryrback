@@ -1,4 +1,3 @@
-# rrhh/serializers.py
 from rest_framework import serializers
 
 from .models import (
@@ -8,13 +7,8 @@ from .models import (
     EvaluacionPuesto,
 )
 
-
 class CandidatoReclutamientoSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(source="id_candidato", read_only=True)
-
-    # El CV se muestra en la respuesta, pero se carga desde archivos separados:
-    # cv_archivo_0, cv_archivo_1, etc.
-    cv = serializers.FileField(read_only=True)
 
     class Meta:
         model = CandidatoReclutamiento
@@ -29,7 +23,7 @@ class CandidatoReclutamientoSerializer(serializers.ModelSerializer):
             "puesto_postulado",
             "fuente",
             "estatus",
-            "cv",
+            "cv",          # ✅ NUEVO
             "fecha_entrevista_do",
             "fecha_entrevista_gerente",
             "fecha_respuesta_gerente",
@@ -48,13 +42,7 @@ class CandidatoReclutamientoSerializer(serializers.ModelSerializer):
             "creado_at",
             "actualizado_at",
         ]
-        read_only_fields = [
-            "id",
-            "id_candidato",
-            "cv",
-            "creado_at",
-            "actualizado_at",
-        ]
+        read_only_fields = ["id", "id_candidato", "creado_at", "actualizado_at"]
 
     def validate(self, data):
         campos_obligatorios = {
@@ -69,7 +57,6 @@ class CandidatoReclutamientoSerializer(serializers.ModelSerializer):
 
         for campo, mensaje in campos_obligatorios.items():
             valor = data.get(campo)
-
             if valor is not None and not str(valor).strip():
                 raise serializers.ValidationError({campo: mensaje})
 
@@ -128,7 +115,6 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
 
         for campo, mensaje in campos_obligatorios.items():
             valor = data.get(campo)
-
             if valor is not None and not str(valor).strip():
                 raise serializers.ValidationError({campo: mensaje})
 
@@ -136,16 +122,14 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         candidatos_data = validated_data.pop("candidatos", [])
-        archivos = self.context.get("archivos", {})
+        archivos = self.context.get("archivos", {})  # ✅ NUEVO
 
         vacante = VacanteReclutamiento.objects.create(**validated_data)
 
         for index, candidato_data in enumerate(candidatos_data):
-            archivo_cv = archivos.get(f"cv_archivo_{index}")
-
+            archivo_cv = archivos.get(f"cv_archivo_{index}")  # ✅ NUEVO
             if archivo_cv:
-                candidato_data["cv"] = archivo_cv
-
+                candidato_data["cv"] = archivo_cv              # ✅ NUEVO
             CandidatoReclutamiento.objects.create(
                 vacante=vacante,
                 **candidato_data,
@@ -169,9 +153,6 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
     def _sincronizar_candidatos(self, vacante, candidatos_data):
         raw_candidatos = self.initial_data.get("candidatos", [])
 
-        if not isinstance(raw_candidatos, list):
-            raw_candidatos = []
-
         archivos = self.context.get("archivos", {})
 
         candidatos_existentes = {
@@ -185,7 +166,6 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
             raw = raw_candidatos[index] if index < len(raw_candidatos) else {}
 
             id_candidato = raw.get("id_candidato") or raw.get("id")
-
             if id_candidato:
                 try:
                     id_candidato = int(id_candidato)
@@ -217,19 +197,20 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
 
                 ids_recibidos.append(candidato.id_candidato)
 
-        vacante.candidatos.exclude(id_candidato__in=ids_recibidos).delete()
-
+        vacante.candidatos.exclude(
+            id_candidato__in=ids_recibidos
+        ).delete()
 
 class PuestoSerializer(serializers.ModelSerializer):
     class Meta:
         model = Puesto
-        fields = "__all__"
+        fields = '__all__'
 
 
 class EvaluacionPuestoSerializer(serializers.ModelSerializer):
-    puesto_nombre = serializers.CharField(source="puesto.nombre", read_only=True)
+    puesto_nombre = serializers.CharField(source='puesto.nombre', read_only=True)
 
     class Meta:
         model = EvaluacionPuesto
-        fields = "__all__"
-        read_only_fields = ["fecha", "creado_at"]
+        fields = '__all__'
+        read_only_fields = ['fecha', 'creado_at']

@@ -601,6 +601,12 @@ def _detectar_intencion_minima(texto_usuario: str) -> dict[str, bool]:
             "IMAGEN", "IMAGENES", "FOTO", "FOTOS", "FOTOGRAFIA",
             "PIC", "PICS", "VER", "COMO SE VE", "MUESTRAME",
         ]),
+        "pregunta_videos": any(k in t for k in [
+            "VIDEO", "VIDEOS", "GRABACION", "GRABACIÓN", "RECORRIDO",
+            "TOUR", "REEL", "COMO SE VE EN VIDEO", "MANDAME VIDEO",
+            "MÁNDAME VIDEO", "PASAME VIDEO", "PÁSAME VIDEO",
+            "QUIERO VERLO EN VIDEO", "VERLO EN VIDEO",
+        ]),
         "cotizacion_personalizada": any(k in t for k in PALABRAS_COTIZACION),
         "intencion_compra": any(k in t for k in PALABRAS_COMPRA),
         "pregunta_desempeno": any(k in t for k in [
@@ -849,6 +855,7 @@ GEMINI_DECISION_SCHEMA = {
         },
         "send_pdf": {"type": "BOOLEAN"},
         "send_images": {"type": "BOOLEAN"},
+        "send_videos": {"type": "BOOLEAN"},
         "requiere_asesor": {"type": "BOOLEAN"},
         "accion_ofrecida": {"type": "STRING"},
         "nueva_etapa_perfilado": {"type": "INTEGER"},
@@ -886,6 +893,7 @@ GEMINI_DECISION_SCHEMA = {
         "selected_version",
         "send_pdf",
         "send_images",
+        "send_videos",
         "requiere_asesor",
         "accion_ofrecida",
         "nueva_etapa_perfilado",
@@ -1042,6 +1050,7 @@ def _decision_conversacional_ia(
     salida.setdefault("selected_version", None)
     salida.setdefault("send_pdf", False)
     salida.setdefault("send_images", False)
+    salida.setdefault("send_videos", False)
     salida.setdefault("requiere_asesor", False)
     salida.setdefault("accion_ofrecida", "ninguna")
     salida.setdefault("nueva_etapa_perfilado", etapa_perfilado)
@@ -1056,6 +1065,7 @@ def _decision_conversacional_ia(
 
     salida["send_pdf"] = bool(salida.get("send_pdf")) and bool(version)
     salida["send_images"] = bool(salida.get("send_images")) and bool(version)
+    salida["send_videos"] = bool(salida.get("send_videos")) and bool(version)
     salida["requiere_asesor"] = bool(salida.get("requiere_asesor"))
     if salida["accion_ofrecida"] in ("lead_calificado", "confirmar_canalizacion"):
         salida["requiere_asesor"] = True
@@ -1078,6 +1088,7 @@ def _decision_conversacional_ia(
     if salida["requiere_asesor"]:
         salida["send_pdf"] = False
         salida["send_images"] = False
+        salida["send_videos"] = False
         if salida["accion_ofrecida"] not in ("lead_calificado", "confirmar_canalizacion"):
             salida["accion_ofrecida"] = "confirmar_canalizacion"
 
@@ -1406,6 +1417,20 @@ def _fallback_respuesta(
             "accion_ofrecida": "pedir_buro",
             "nueva_etapa_perfilado": ETAPA_PERFILADO["pedir_buro"],
         }
+    
+    if version_final and senales.get("pregunta_videos"):
+        return {
+            "reply_text": f"Claro, te comparto un video de {version_final.title()}.",
+            "selected_version": version_final,
+            "send_pdf": False,
+            "send_images": False,
+            "send_videos": True,
+            "requiere_asesor": False,
+            "detected_profile": {},
+            "reasoning_tags": ["fallback_videos"],
+            "accion_ofrecida": "continuar_contexto",
+            "nueva_etapa_perfilado": etapa_perfilado,
+        }
 
     if version_final and any([
         senales["pregunta_pdf"],
@@ -1481,16 +1506,39 @@ def construir_respuesta_informativa(
     buro_registrado: str = "",
     es_primer_mensaje: bool = False,
     nombre_cliente: str = "",
-) -> tuple[str, Optional[str], bool, bool, bool, dict[str, Any], dict[str, Any], str, int]:
+) -> tuple[
+    str,
+    Optional[str],
+    bool,
+    bool,
+    bool,
+    bool,
+    dict[str, Any],
+    dict[str, Any],
+    str,
+    int,
+]:
     texto_usuario = (texto_usuario or "").strip()
     historial_reciente = historial_reciente or []
 
     if texto_usuario.upper() in {"[IMAGE]", "[VIDEO]", "[AUDIO]", "[DOCUMENT]", "[STICKER]"}:
-        return RESPUESTA_MEDIA, auto_interes_actual, False, False, False, {}, {"reasoning_tags": ["media_placeholder"]}, "ninguna", etapa_perfilado
+        return (
+            RESPUESTA_MEDIA,
+            auto_interes_actual,
+            False,  # send_pdf
+            False,  # send_images
+            False,  # send_videos
+            False,  # requiere_asesor
+            {},
+            {"reasoning_tags": ["media_placeholder"]},
+            "ninguna",
+            etapa_perfilado,
+        )
 
     auto_interes_actual = _normalizar_version_catalogo(auto_interes_actual)
 
     decision: dict[str, Any] = {}
+
     try:
         decision = _decision_conversacional_ia(
             numero_asesor=numero_asesor,
@@ -1511,42 +1559,91 @@ def construir_respuesta_informativa(
 
     if not decision:
         decision = _fallback_respuesta(
-            texto_usuario=texto_usuario, profile_name=profile_name,
-            version_contexto=auto_interes_actual, es_primer_mensaje=es_primer_mensaje,
-            etapa_perfilado=etapa_perfilado, nombre_cliente=nombre_cliente,
+            texto_usuario=texto_usuario,
+            profile_name=profile_name,
+            version_contexto=auto_interes_actual,
+            es_primer_mensaje=es_primer_mensaje,
+            etapa_perfilado=etapa_perfilado,
+            nombre_cliente=nombre_cliente,
             telefono=telefono,
         )
 
     selected_version = _normalizar_version_catalogo(
-        decision.get("selected_version") or _buscar_version_en_texto(texto_usuario) or auto_interes_actual
+        decision.get("selected_version")
+        or _buscar_version_en_texto(texto_usuario)
+        or auto_interes_actual
     )
+
     requiere_asesor = bool(decision.get("requiere_asesor"))
-    send_pdf = bool(decision.get("send_pdf")) and bool(selected_version) and not requiere_asesor
-    send_images = bool(decision.get("send_images")) and bool(selected_version) and not requiere_asesor
+
+    send_pdf = (
+        bool(decision.get("send_pdf"))
+        and bool(selected_version)
+        and not requiere_asesor
+    )
+
+    send_images = (
+        bool(decision.get("send_images"))
+        and bool(selected_version)
+        and not requiere_asesor
+    )
+
+    send_videos = (
+        bool(decision.get("send_videos"))
+        and bool(selected_version)
+        and not requiere_asesor
+    )
+
     detected_profile = decision.get("detected_profile") or {}
-    reply_text = _limitar_texto((decision.get("reply_text") or RESPUESTA_FALLBACK).strip())
+
+    reply_text = _limitar_texto(
+        (decision.get("reply_text") or RESPUESTA_FALLBACK).strip()
+    )
 
     accion_ofrecida = (decision.get("accion_ofrecida") or "ninguna").strip()
+
     if accion_ofrecida not in ACCIONES_OFRECIDAS_VALIDAS:
         accion_ofrecida = _determinar_accion_ofrecida(
-            reply_text=reply_text, send_pdf=send_pdf, requiere_asesor=requiere_asesor,
-            selected_version=selected_version, texto_usuario=texto_usuario,
+            reply_text=reply_text,
+            send_pdf=send_pdf,
+            requiere_asesor=requiere_asesor,
+            selected_version=selected_version,
+            texto_usuario=texto_usuario,
         )
 
     try:
-        nueva_etapa = max(etapa_perfilado, min(4, int(decision.get("nueva_etapa_perfilado", etapa_perfilado))))
+        nueva_etapa = max(
+            etapa_perfilado,
+            min(4, int(decision.get("nueva_etapa_perfilado", etapa_perfilado))),
+        )
     except (TypeError, ValueError):
         nueva_etapa = etapa_perfilado
 
     raw_decision = dict(decision)
+
     raw_decision.update({
-        "selected_version": selected_version, "send_pdf": send_pdf,
-        "send_images": send_images, "requiere_asesor": requiere_asesor,
-        "accion_ofrecida": accion_ofrecida, "reply_text": reply_text,
+        "selected_version": selected_version,
+        "send_pdf": send_pdf,
+        "send_images": send_images,
+        "send_videos": send_videos,
+        "requiere_asesor": requiere_asesor,
+        "accion_ofrecida": accion_ofrecida,
+        "reply_text": reply_text,
         "nueva_etapa_perfilado": nueva_etapa,
     })
 
-    return reply_text, selected_version, send_pdf, send_images, requiere_asesor, detected_profile, raw_decision, accion_ofrecida, nueva_etapa
+    return (
+        reply_text,
+        selected_version,
+        send_pdf,
+        send_images,
+        send_videos,
+        requiere_asesor,
+        detected_profile,
+        raw_decision,
+        accion_ofrecida,
+        nueva_etapa,
+    )
 
 TIPOS_MEDIA_PROCESABLE_IA = {"image", "sticker", "video", "audio"}
 
@@ -1971,10 +2068,15 @@ def responder_mensaje_automatico(
     video_results: list = []
     video_errors: list = []
     if enviar_videos and version_contexto:
-        for videos_relativa in _videos_de_version(version_contexto):
-            video_url = _resolver_url_media(videos_relativa)
-            filename = videos_relativa.rsplit("/", 1)[-1]
+        for video_relativo in _videos_de_version(version_contexto):
+            video_url = _resolver_url_media(video_relativo)
+
+            if not video_url:
+                continue
+
+            filename = video_relativo.rsplit("/", 1)[-1]
             video_error = ""
+
             try:
                 video_res = enviar_video_whatsapp_por_link(
                     to=telefono, link=video_url, numero_asesor=numero_asesor,
@@ -1997,7 +2099,7 @@ def responder_mensaje_automatico(
                      "meta_type": "video", "filename": filename, "media_link": video_url,
                      "accion_ofrecida": "continuar_contexto",
                      "conversation_meta": {"accion_ofrecida": "continuar_contexto"},
-                     "wa_response": video_res, "image_error": video_error},
+                     "wa_response": video_res, "video_error": video_error},
                 status_msg="accepted" if video_message_id else "failed",
             )
             video_results.append(video_res)
@@ -2141,4 +2243,5 @@ def responder_mensaje_automatico(
         "detected_profile": detected_profile, "decision": raw_decision,
         "wa_response": wa_res, "pdf_response": pdf_res, "pdf_error": pdf_error,
         "image_responses": image_results, "image_errors": image_errors,
+        "video_responses": video_results, "video_errors": video_errors,
     }

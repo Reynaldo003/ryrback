@@ -1,5 +1,5 @@
 from django.urls import path
-from .views import BitacoraCreateView
+from .views import BitacoraCreateView, BitacoraListView
 
 urlpatterns = [
     path("bitacoras/", BitacoraCreateView.as_view(), name="bitacora-create"),
