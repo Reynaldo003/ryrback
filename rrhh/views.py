@@ -1,10 +1,13 @@
 from django.db.models import Q
-from rest_framework import viewsets
+from rest_framework import viewsets, status
+from rest_framework.response import Response
 
 from .models import VacanteReclutamiento, Puesto, EvaluacionPuesto
-from .serializers import VacanteReclutamientoSerializer, PuestoSerializer, EvaluacionPuestoSerializer
-
-
+from .serializers import (
+    VacanteReclutamientoSerializer,
+    PuestoSerializer,
+    EvaluacionPuestoSerializer,
+)
 class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
     serializer_class = VacanteReclutamientoSerializer
     lookup_field = "id_vacante"
@@ -59,7 +62,29 @@ class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
             queryset = queryset.filter(filtros)
 
         return queryset.distinct()
+    
+    def create(self, request, *args, **kwargs):
+        serializer = self.get_serializer(
+            data=request.data,
+            context={"archivos": request.FILES},
+        )
+        serializer.is_valid(raise_exception=True)
+        self.perform_create(serializer)
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
+    def partial_update(self, request, *args, **kwargs):
+        instance = self.get_object()
+
+        serializer = self.get_serializer(
+            instance,
+            data=request.data,
+            partial=True,
+            context={"archivos": request.FILES},
+        )
+        serializer.is_valid(raise_exception=True)
+        self.perform_update(serializer)
+
+        return Response(serializer.data)
 
 # ========== VISTAS PARA PUESTOS Y EVALUACIONES ==========
 # Agregado para el módulo de Evaluación de Puestos

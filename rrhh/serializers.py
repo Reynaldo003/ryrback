@@ -152,7 +152,6 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
 
     def _sincronizar_candidatos(self, vacante, candidatos_data):
         raw_candidatos = self.initial_data.get("candidatos", [])
-
         archivos = self.context.get("archivos", {})
 
         candidatos_existentes = {
