@@ -148,12 +148,12 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="ligero")
     def ligero(self, request):
-        limite = request.query_params.get("limit", "50000")
+        limite = request.query_params.get("limit", "10000")
         try:
             limite = int(limite)
         except ValueError:
-            limite = 50000
-        limite = max(100, min(limite, 50000))
+            limite = 10000
+        limite = max(100, min(limite, 20000))
 
         campos = (
             "vin",
@@ -168,6 +168,9 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             "condicion_vehiculo",
             "nombre_cliente",
             "telefono_cliente",
+            "telefono_cliente2",
+            "telefono_cliente3",
+            "correo_cliente",
             "correo_cliente",
             "ultima_orden_servicio",
             "tipo_orden",

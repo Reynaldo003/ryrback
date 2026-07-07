@@ -19,6 +19,8 @@ class OrdenServicioVentaVW(models.Model):
     )
     nombre_cliente = models.TextField(db_column="NombreCliente", blank=True, null=True)
     telefono_cliente = models.TextField(db_column="TelefonoCliente", blank=True, null=True)
+    telefono_cliente2 = models.TextField(db_column="TelefonoCliente2", blank=True, null=True)
+    telefono_cliente3 = models.TextField(db_column="TelefonoCliente3", blank=True, null=True)
     correo_cliente = models.TextField(db_column="CorreoCliente", blank=True, null=True)
     ultima_orden_servicio = models.TextField(
         db_column="UltimaOrdenServicio", blank=True, null=True
