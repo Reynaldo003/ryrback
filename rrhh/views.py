@@ -1,6 +1,8 @@
 import json
+
 from django.db.models import Q
 from rest_framework import viewsets, status
+from rest_framework.response import Response   # <-- AGREGA ESTA LÍNEA
 
 from .models import VacanteReclutamiento, Puesto, EvaluacionPuesto
 from .serializers import (
@@ -8,6 +10,7 @@ from .serializers import (
     PuestoSerializer,
     EvaluacionPuestoSerializer,
 )
+
 class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
     serializer_class = VacanteReclutamientoSerializer
     lookup_field = "id_vacante"
@@ -92,16 +95,22 @@ class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
     def partial_update(self, request, *args, **kwargs):
         instance = self.get_object()
 
-        serializer = self.get_serializer(
-            instance,
-            data=self._construir_payload(request),
-            partial=True,
-            context={"archivos": request.FILES},
-        )
-        serializer.is_valid(raise_exception=True)
-        self.perform_update(serializer)
+        try:
+            serializer = self.get_serializer(
+                instance,
+                data=self._construir_payload(request),
+                partial=True,
+                context={"archivos": request.FILES},
+            )
+            serializer.is_valid(raise_exception=True)
+            self.perform_update(serializer)
 
-        return Response(serializer.data)
+            return Response(serializer.data)
+
+        except Exception:
+            import traceback
+            traceback.print_exc()
+            raise
 
 # ========== VISTAS PARA PUESTOS Y EVALUACIONES ==========
 # Agregado para el módulo de Evaluación de Puestos
