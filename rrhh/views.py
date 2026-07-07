@@ -1,6 +1,6 @@
+import json
 from django.db.models import Q
 from rest_framework import viewsets, status
-from rest_framework.response import Response
 
 from .models import VacanteReclutamiento, Puesto, EvaluacionPuesto
 from .serializers import (
@@ -63,9 +63,26 @@ class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
 
         return queryset.distinct()
     
+    def _construir_payload(self, request):
+        data = {
+            "estatus": request.data.get("estatus"),
+            "puesto": request.data.get("puesto"),
+            "dealer": request.data.get("dealer"),
+            "fuente_reclutamiento": request.data.get("fuente_reclutamiento"),
+            "solicitado_por": request.data.get("solicitado_por"),
+        }
+
+        candidatos_raw = request.data.get("candidatos")
+        try:
+            data["candidatos"] = json.loads(candidatos_raw) if candidatos_raw else []
+        except (TypeError, ValueError):
+            data["candidatos"] = []
+
+        return data
+    
     def create(self, request, *args, **kwargs):
         serializer = self.get_serializer(
-            data=request.data,
+            data=self._construir_payload(request),
             context={"archivos": request.FILES},
         )
         serializer.is_valid(raise_exception=True)
@@ -77,7 +94,7 @@ class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
 
         serializer = self.get_serializer(
             instance,
-            data=request.data,
+            data=self._construir_payload(request),
             partial=True,
             context={"archivos": request.FILES},
         )
