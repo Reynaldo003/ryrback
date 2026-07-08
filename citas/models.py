@@ -169,7 +169,7 @@ class Entregas(models.Model):
 
     version = models.CharField(max_length=255, blank=True, default="")
     color = models.CharField(max_length=255, blank=True, default="")
-
+    kilometraje = models.PositiveIntegerField(default=0, blank=True,)
     fecha_hora_entrega = models.DateTimeField(null=True, blank=True)
     entrega_reportada = models.BooleanField(default=False)
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")

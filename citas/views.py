@@ -448,6 +448,7 @@ def generar_pdf_entrega(entrega):
         ("Modelo", texto(entrega.modelo_version)),
         ("Version", texto(entrega.version)),
         ("Color", texto(entrega.color)),
+        ("Kilometraje", f"{entrega.kilometraje or 0} km"),
         ("VIN / Chasis", texto(entrega.vin)),
         ("Fecha y hora de entrega", fecha_legible(entrega.fecha_hora_entrega)),
         ("Asesor de ventas", texto(entrega.asesor_ventas)),
