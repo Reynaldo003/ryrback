@@ -794,6 +794,9 @@ class ResumenIAView(APIView):
             f"El resumen debe tener entre 6 y 8 oraciones, explicar los problemas identificados, "
             f"describir las estrategias implementadas, mencionar los resultados esperados, "
             f"ser un párrafo continuo sin listas y usar lenguaje profesional.\n\n"
+            f"IMPORTANTE: No incluyas ningún título ni encabezado al inicio. "
+            f"No uses markdown, ni asteriscos, ni negritas. "
+            f"Empieza directamente con el párrafo del resumen, sin ninguna introducción ni etiqueta antes.\n\n"
             f"Proyecto: {proyecto_nombre}\n"
             f"Equipo: {equipo_nombre}\n"
             f"Total de planes: {total}\n"
@@ -811,8 +814,9 @@ class ResumenIAView(APIView):
                         {"role": "user", "parts": [{"text": prompt}]}
                     ],
                     "generationConfig": {
-                        "maxOutputTokens": 600,
+                        "maxOutputTokens": 2000,
                         "temperature": 0.7,
+                        "thinkingConfig": {"thinkingBudget": 0},
                     },
                 },
                 timeout=30,
@@ -823,7 +827,14 @@ class ResumenIAView(APIView):
                 error_msg = data.get("error", {}).get("message", "Error desconocido de Gemini")
                 return Response({"detail": error_msg}, status=status.HTTP_502_BAD_GATEWAY)
 
-            resumen = data["candidates"][0]["content"]["parts"][0]["text"].strip()
+            candidates = data.get("candidates") or []
+            if not candidates:
+                motivo = data.get("promptFeedback", {}).get("blockReason", "sin candidatos en la respuesta")
+                return Response({"detail": f"Gemini no generó respuesta: {motivo}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+            resumen = candidates[0]["content"]["parts"][0]["text"].strip()
+            resumen = resumen.replace("**", "").replace("__", "").replace("##", "").strip()
+
             return Response({"resumen": resumen})
 
         except Exception as e:
