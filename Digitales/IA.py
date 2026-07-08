@@ -1008,10 +1008,37 @@ def _decision_conversacional_ia(
             "catalogo_anterior": sorted(PALABRAS_CATALOGO_ANTERIOR),
             "catalogo_actual": versiones_validas,
         },
+        "reglas_multimedia": {
+            "si_mensaje_contiene_contexto_multimedia_analizado": (
+                "Usa el análisis multimedia como contexto real del cliente. "
+                "No respondas que estás limitado a texto. "
+                "Si el cliente pregunta 'qué opinas', da una opinión comercial breve basada en el análisis. "
+                "No marques send_images, send_videos ni send_pdf salvo que el cliente lo pida explícitamente."
+            ),
+            "no_enviar_catalogo_por_defecto": (
+                "Si el cliente envió una imagen/video/audio/sticker, no envíes más fotos/videos/fichas "
+                "solo por haber recibido multimedia. Primero responde a la intención."
+            ),
+        },
     }
 
 
     instrucciones = _construir_instrucciones_desde_bd(config_ia)
+
+    instrucciones_extra = """
+Reglas adicionales obligatorias para este CRM:
+- Si el mensaje contiene [CONTEXTO MULTIMEDIA ANALIZADO], úsalo como contexto real.
+- Nunca digas que solo puedes procesar texto cuando ya existe contexto multimedia analizado.
+- Si el cliente manda una imagen y pregunta "qué opinas", responde con una opinión útil del vehículo o contenido.
+- No envíes imágenes, videos ni fichas técnicas solo porque el cliente mandó una imagen/video/audio.
+- Solo marca send_images=true, send_videos=true o send_pdf=true si el cliente lo pidió explícitamente.
+- Si no estás seguro del modelo exacto, usa lenguaje de probabilidad y pide confirmación.
+""".strip()
+
+    instrucciones = "\n\n".join(
+        parte for parte in [instrucciones, instrucciones_extra]
+        if str(parte or "").strip()
+    )
 
     if not instrucciones:
         return {}
@@ -1523,18 +1550,34 @@ def construir_respuesta_informativa(
 ]:
     texto_usuario = (texto_usuario or "").strip()
     historial_reciente = historial_reciente or []
+    es_contexto_multimedia = _tiene_contexto_multimedia_analizado(texto_usuario)
 
-    if texto_usuario.upper() in {"[IMAGE]", "[VIDEO]", "[AUDIO]", "[DOCUMENT]", "[STICKER]"}:
+    if texto_usuario.upper() in {
+        "[IMAGE]",
+        "[VIDEO]",
+        "[AUDIO]",
+        "[DOCUMENT]",
+        "[STICKER]",
+        "[LOCATION]",
+        "[CONTACTS]",
+        "[ORDER]",
+        "[SYSTEM]",
+        "[UNSUPPORTED_MESSAGE]",
+    }:
+        tipo_placeholder = texto_usuario.strip("[]").lower()
         return (
-            RESPUESTA_MEDIA,
+            (
+                "Recibí tu mensaje. Para ayudarte mejor, ¿me confirmas qué necesitas revisar "
+                "o qué modelo te interesa?"
+            ),
             auto_interes_actual,
             False,  # send_pdf
             False,  # send_images
             False,  # send_videos
             False,  # requiere_asesor
             {},
-            {"reasoning_tags": ["media_placeholder"]},
-            "ninguna",
+            {"reasoning_tags": [f"placeholder_{tipo_placeholder}"]},
+            "pedir_necesidad",
             etapa_perfilado,
         )
 
@@ -1613,9 +1656,13 @@ def construir_respuesta_informativa(
         requiere_asesor = False
         decision["requiere_asesor"] = False
 
+    # Si el cliente envió multimedia, Gemini puede interpretar que debe mandar más media.
+    # Lo bloqueamos salvo que el usuario lo pida explícitamente.
+    decision_puede_enviar_media = not es_contexto_multimedia
+
     send_pdf = (
         (
-            bool(decision.get("send_pdf"))
+            (bool(decision.get("send_pdf")) and decision_puede_enviar_media)
             or pide_pdf_explicito
         )
         and bool(selected_version)
@@ -1624,7 +1671,7 @@ def construir_respuesta_informativa(
 
     send_images = (
         (
-            bool(decision.get("send_images"))
+            (bool(decision.get("send_images")) and decision_puede_enviar_media)
             or pide_imagenes_explicito
         )
         and bool(selected_version)
@@ -1633,7 +1680,7 @@ def construir_respuesta_informativa(
 
     send_videos = (
         (
-            bool(decision.get("send_videos"))
+            (bool(decision.get("send_videos")) and decision_puede_enviar_media)
             or pide_videos_explicito
         )
         and bool(selected_version)
@@ -1645,6 +1692,21 @@ def construir_respuesta_informativa(
     reply_text = _limitar_texto(
         (decision.get("reply_text") or RESPUESTA_FALLBACK).strip()
     )
+
+    if es_contexto_multimedia and not es_peticion_media and _respuesta_quiere_enviar_media(reply_text):
+        send_pdf = False
+        send_images = False
+        send_videos = False
+        reply_text = _respuesta_desde_contexto_multimedia(
+            texto_usuario=texto_usuario,
+            selected_version=selected_version,
+            telefono=telefono,
+        )
+
+    if es_contexto_multimedia and not es_peticion_media:
+        send_pdf = False
+        send_images = False
+        send_videos = False
 
     if es_peticion_media:
         # Prioridad correcta:
@@ -1715,31 +1777,6 @@ def construir_respuesta_informativa(
 TIPOS_MEDIA_PROCESABLE_IA = {"image", "sticker", "video", "audio"}
 
 
-def _extraer_media_entrante(raw_message: Optional[dict]) -> dict[str, Any]:
-    if not isinstance(raw_message, dict):
-        return {}
-
-    media_type = str(raw_message.get("type") or "").lower().strip()
-
-    if media_type not in TIPOS_MEDIA_PROCESABLE_IA:
-        return {}
-
-    payload = raw_message.get(media_type) or {}
-    media_id = str(payload.get("id") or "").strip()
-
-    if not media_id:
-        return {}
-
-    return {
-        "type": media_type,
-        "id": media_id,
-        "mime_type": payload.get("mime_type") or "",
-        "caption": payload.get("caption") or "",
-        "sha256": payload.get("sha256") or "",
-        "filename": payload.get("filename") or "",
-    }
-
-
 def _describir_media_entrante_con_ia(
     *,
     raw_message: Optional[dict],
@@ -1756,7 +1793,7 @@ def _describir_media_entrante_con_ia(
 
     try:
         blob, content_type = download_media_whatsapp(
-            media["id"],
+            media.get("media_id") or media.get("id"),
             numero_asesor=numero_asesor,
         )
 
@@ -1890,8 +1927,11 @@ def _instruccion_analisis_multimedia(
     texto_usuario: str = "",
 ) -> str:
     """
-    Prompt corto para que Gemini convierta media en texto útil para el CRM.
-    No buscamos que cierre la venta aquí, solo que describa el archivo.
+    Prompt para convertir un archivo de WhatsApp en contexto textual útil.
+
+    Punto importante:
+    Esta función NO debe vender ni cerrar la conversación. Solo traduce el
+    contenido multimedia a texto para que el motor comercial responda mejor.
     """
     tipo = str(tipo or "media").lower().strip()
     caption = str(caption or "").strip()
@@ -1899,25 +1939,29 @@ def _instruccion_analisis_multimedia(
 
     reglas_por_tipo = {
         "image": (
-            "Analiza la imagen. Describe objetos visibles, texto legible, "
-            "si aparece un auto, marca/modelo/color/estado aparente, documentos visibles "
-            "y cualquier intención comercial probable."
+            "Analiza la imagen. Indica si parece una foto real, render, captura, "
+            "documento o publicidad. Si aparece un auto, describe marca visible, "
+            "modelo probable, color, ángulo, condición aparente y elementos relevantes. "
+            "Si el modelo no es seguro, dilo como probabilidad."
         ),
         "sticker": (
-            "Analiza el sticker como reacción del cliente. Describe emoción probable "
-            "sin exagerar: aprobación, duda, risa, molestia, sorpresa o rechazo."
+            "Analiza el sticker como reacción emocional del cliente. Describe la "
+            "emoción probable: aprobación, duda, risa, molestia, sorpresa, rechazo "
+            "o interés. No inventes intención de compra si no hay señales."
         ),
         "video": (
-            "Analiza el video. Resume qué ocurre, si aparece un vehículo, "
-            "detalles visibles, posibles preguntas del cliente y señales comerciales."
+            "Analiza el video. Resume qué ocurre, si aparece o se menciona un vehículo, "
+            "detalles visibles, sonido relevante, dudas del cliente y señales comerciales."
         ),
         "audio": (
-            "Transcribe y resume el audio. Extrae intención, modelo de auto mencionado, "
-            "presupuesto, forma de pago, enganche, dudas y datos importantes del prospecto."
+            "Transcribe primero la idea principal del audio y luego resume intención, "
+            "modelo mencionado, presupuesto, forma de pago, enganche, buró, cita, "
+            "ubicación o cualquier dato útil del prospecto."
         ),
         "document": (
-            "Analiza el documento. Resume contenido relevante, datos visibles, "
-            "si parece comprobante, identificación, ficha, cotización o archivo comercial."
+            "Analiza el documento. Resume datos visibles y clasifica si parece "
+            "identificación, comprobante, ficha técnica, cotización, captura, recibo "
+            "u otro archivo comercial. No extraigas datos sensibles innecesarios."
         ),
     }
 
@@ -1927,20 +1971,29 @@ def _instruccion_analisis_multimedia(
     )
 
     return f"""
-Eres un asistente de CRM automotriz.
+Eres un asistente de CRM automotriz especializado en WhatsApp.
 
 Tu tarea es analizar el archivo que envió el cliente y convertirlo en contexto útil
-para que otra IA pueda responder por WhatsApp.
+para que otra IA responda de forma natural y comercial.
 
 {instruccion_tipo}
 
-Reglas:
+Reglas estrictas:
 - Responde en español.
-- No inventes datos que no aparezcan.
-- Si no puedes identificar algo, dilo como incertidumbre.
-- No des respuesta comercial final; solo entrega análisis del contenido.
+- No inventes datos que no aparezcan, se vean o se escuchen.
+- Si no puedes identificar modelo, versión o documento, dilo claramente.
+- No digas que estás limitado a texto.
+- No ofrezcas enviar fotos, videos ni fichas; eso lo decide otra parte del flujo.
+- No cierres venta ni prometas disponibilidad, precio final o promoción.
 - Sé breve pero útil.
-- Máximo 900 caracteres.
+- Máximo 1200 caracteres.
+
+Devuelve el análisis con este formato:
+Contenido detectado:
+Vehículo o documento:
+Intención probable del cliente:
+Datos útiles para responder:
+Nivel de certeza:
 
 Contexto textual adicional del mensaje:
 {texto_usuario or "Sin texto adicional."}
@@ -1948,6 +2001,7 @@ Contexto textual adicional del mensaje:
 Caption del archivo:
 {caption or "Sin caption."}
 """.strip()
+
 
 
 def _analizar_media_con_gemini(
@@ -2102,6 +2156,106 @@ def _enriquecer_texto_usuario_con_media(
 
     return "\n\n".join(partes).strip() or f"El cliente envió un archivo de tipo {tipo}."
 
+def _tiene_contexto_multimedia_analizado(texto: str) -> bool:
+    return "[CONTEXTO MULTIMEDIA ANALIZADO]" in str(texto or "")
+
+
+def _extraer_tipo_multimedia_analizado(texto: str) -> str:
+    match = re.search(r"Tipo:\s*([a-zA-Z0-9_-]+)", str(texto or ""), flags=re.IGNORECASE)
+    return match.group(1).lower().strip() if match else ""
+
+
+def _extraer_resumen_multimedia_analizado(texto: str) -> str:
+    """
+    Extrae solo el resumen del bloque multimedia para poder construir
+    una respuesta de respaldo sin mostrar Media ID ni marcadores internos.
+    """
+    value = str(texto or "")
+
+    if "[CONTEXTO MULTIMEDIA ANALIZADO]" not in value:
+        return ""
+
+    match = re.search(r"Resumen:\s*(.+)", value, flags=re.IGNORECASE | re.DOTALL)
+
+    if not match:
+        return ""
+
+    resumen = match.group(1).strip()
+
+    # Si en el futuro se agregan más secciones después del resumen, cortamos
+    # antes de otros encabezados internos comunes.
+    resumen = re.split(
+        r"\n(?:Media ID|Raw|Payload|Contexto interno):",
+        resumen,
+        maxsplit=1,
+        flags=re.IGNORECASE,
+    )[0].strip()
+
+    return _limitar_texto(resumen, max_len=700)
+
+
+def _respuesta_quiere_enviar_media(texto: str) -> bool:
+    t = _normalizar_texto(texto)
+    patrones = [
+        "TE COMPARTO UNAS IMAGENES",
+        "TE COMPARTO IMAGENES",
+        "TE COMPARTO FOTOS",
+        "TE COMPARTO UN VIDEO",
+        "TE COMPARTO VIDEO",
+        "TE COMPARTO LA FICHA",
+        "TE ENVIO IMAGENES",
+        "TE ENVIO FOTOS",
+        "TE ENVIO VIDEO",
+        "TE ENVIO LA FICHA",
+    ]
+
+    return any(patron in t for patron in patrones)
+
+
+def _respuesta_desde_contexto_multimedia(
+    *,
+    texto_usuario: str,
+    selected_version: Optional[str],
+    telefono: str = "",
+) -> str:
+    """
+    Respuesta de seguridad para cuando el cliente mandó una imagen/video/audio
+    y preguntó algo como "qué opinas", pero el modelo intentó mandar más media.
+    """
+    resumen = _extraer_resumen_multimedia_analizado(texto_usuario)
+    tipo = _extraer_tipo_multimedia_analizado(texto_usuario)
+
+    if selected_version:
+        base = (
+            f"Se ve interesante. Por lo que enviaste, parece relacionado con {selected_version.title()}. "
+        )
+    elif tipo == "sticker":
+        base = "Recibí tu sticker. Lo tomo como una reacción a la conversación. "
+    elif tipo == "audio":
+        base = "Escuché tu audio y tomé los puntos importantes. "
+    elif tipo == "document":
+        base = "Revisé el documento que enviaste. "
+    elif tipo == "video":
+        base = "Revisé el video que enviaste. "
+    else:
+        base = "Revisé la imagen que enviaste. "
+
+    if resumen:
+        return _limitar_texto(
+            f"{base}\n\n{resumen}\n\n"
+            "Si te interesa avanzar, puedo ayudarte con precio, ficha técnica, "
+            "opciones de financiamiento o agendar una visita.",
+            max_len=900,
+        )
+
+    return _limitar_texto(
+        f"{base}"
+        "Si quieres, puedo ayudarte a identificar el modelo, revisar opciones de precio "
+        "o canalizarte con un asesor para una propuesta formal.",
+        max_len=700,
+    )
+
+
 def _dividir_mensaje_whatsapp(
     texto: str,
     max_len: int = 500,
@@ -2221,6 +2375,12 @@ def responder_mensaje_automatico(
             "telefono": telefono, "numero_asesor": numero_asesor,
             "wa_message_id_entrante": wa_message_id_entrante,
         }
+
+    texto_usuario = _enriquecer_texto_usuario_con_media(
+        texto_usuario=texto_usuario,
+        raw_message=raw_message,
+        numero_asesor=numero_asesor,
+    )
 
     cliente, expediente = _get_or_create_cliente_y_expediente(
         telefono=telefono, numero_asesor=numero_asesor,

@@ -1,6 +1,7 @@
 #volkswagen
 # Digitales/contacto.py
 import hashlib
+import json
 import logging
 import mimetypes
 import random
@@ -932,26 +933,94 @@ def download_media_whatsapp(media_id: str, numero_asesor: str = "") -> tuple[byt
     return blob, content_type
 
 
-def obtener_mensaje_whatsapp(message: dict) -> str:
-    if not isinstance(message, dict) or "type" not in message:
-        return "mensaje no reconocido"
+def _texto_contacto_whatsapp(contacto: dict) -> str:
+    nombre = (
+        ((contacto.get("name") or {}).get("formatted_name"))
+        or ((contacto.get("name") or {}).get("first_name"))
+        or "Contacto"
+    )
 
-    message_type = message["type"]
+    telefonos = contacto.get("phones") or []
+    numeros = [
+        str(item.get("phone") or item.get("wa_id") or "").strip()
+        for item in telefonos
+        if str(item.get("phone") or item.get("wa_id") or "").strip()
+    ]
+
+    if numeros:
+        return f"{nombre}: {', '.join(numeros[:3])}"
+
+    return str(nombre or "Contacto").strip()
+
+
+def _texto_interactive_whatsapp(interactive: dict) -> str:
+    tipo_interactive = str(interactive.get("type") or "").lower().strip()
+
+    if tipo_interactive == "list_reply":
+        item = interactive.get("list_reply") or {}
+        title = str(item.get("title") or "").strip()
+        description = str(item.get("description") or "").strip()
+        return f"{title}\n{description}".strip() or "[INTERACTIVE_LIST_REPLY]"
+
+    if tipo_interactive == "button_reply":
+        item = interactive.get("button_reply") or {}
+        return str(item.get("title") or "").strip() or "[INTERACTIVE_BUTTON_REPLY]"
+
+    if tipo_interactive == "nfm_reply":
+        nfm_reply = interactive.get("nfm_reply") or {}
+        body = str(nfm_reply.get("body") or "").strip()
+        response_json = str(nfm_reply.get("response_json") or "").strip()
+
+        if response_json:
+            try:
+                data = json.loads(response_json)
+                partes = []
+
+                for key, value in data.items():
+                    if value in (None, "", [], {}):
+                        continue
+
+                    label = str(key or "").replace("_", " ").strip().title()
+                    partes.append(f"{label}: {value}")
+
+                if partes:
+                    return "Respuesta de formulario:\n" + "\n".join(partes[:12])
+            except Exception:
+                pass
+
+        return body or "Respuesta de formulario recibida."
+
+    # Otros interactive futuros.
+    return f"Respuesta interactiva recibida ({tipo_interactive or 'interactive'})."
+
+
+def obtener_mensaje_whatsapp(message: dict) -> str:
+    """
+    Convierte cualquier tipo de mensaje de WhatsApp Cloud API en texto seguro
+    para guardar en BD y pintar en el CRM.
+
+    Objetivo:
+    - Nunca regresar [UNSUPPORTED_MESSAGE] como texto visible.
+    - Mantener marcadores simples para media que después se renderiza con attachments.
+    - Dar texto útil para location, contacts, order, system e interactive.
+    """
+    if not isinstance(message, dict):
+        return "Mensaje recibido."
+
+    message_type = str(message.get("type") or "").lower().strip()
+
+    if not message_type:
+        return "Mensaje recibido."
 
     if message_type == "text":
-        return message.get("text", {}).get("body", "")
+        return str((message.get("text") or {}).get("body") or "").strip()
 
     if message_type == "button":
-        return message.get("button", {}).get("text", "")
+        button = message.get("button") or {}
+        return str(button.get("text") or button.get("payload") or "").strip() or "Botón presionado."
 
     if message_type == "interactive":
-        interactive = message.get("interactive", {})
-
-        if interactive.get("type") == "list_reply":
-            return interactive.get("list_reply", {}).get("title", "")
-
-        if interactive.get("type") == "button_reply":
-            return interactive.get("button_reply", {}).get("title", "")
+        return _texto_interactive_whatsapp(message.get("interactive") or {})
 
     if message_type == "reaction":
         reaction = message.get("reaction") or {}
@@ -963,14 +1032,79 @@ def obtener_mensaje_whatsapp(message: dict) -> str:
         return "[REACTION_REMOVED]"
 
     if message_type in ("image", "document", "video", "audio", "sticker"):
+        payload = message.get(message_type) or {}
         caption = ""
 
         if message_type in ("image", "video", "document"):
-            caption = (message.get(message_type) or {}).get("caption") or ""
+            caption = str(payload.get("caption") or "").strip()
 
-        return caption.strip() or f"[{message_type.upper()}]"
+        if caption:
+            return caption
 
-    return "[UNSUPPORTED_MESSAGE]"
+        labels = {
+            "image": "[IMAGE]",
+            "video": "[VIDEO]",
+            "audio": "[AUDIO]",
+            "document": "[DOCUMENT]",
+            "sticker": "[STICKER]",
+        }
+
+        return labels.get(message_type, f"[MEDIA:{message_type.upper()}]")
+
+    if message_type == "location":
+        location = message.get("location") or {}
+        name = str(location.get("name") or "").strip()
+        address = str(location.get("address") or "").strip()
+        lat = location.get("latitude")
+        lng = location.get("longitude")
+
+        partes = ["📍 Ubicación enviada"]
+
+        if name:
+            partes.append(name)
+
+        if address:
+            partes.append(address)
+
+        if lat is not None and lng is not None:
+            partes.append(f"{lat}, {lng}")
+
+        return "\n".join(partes)
+
+    if message_type == "contacts":
+        contacts = message.get("contacts") or []
+
+        if contacts:
+            textos = [_texto_contacto_whatsapp(item) for item in contacts[:5]]
+            return "👤 Contacto enviado:\n" + "\n".join(textos)
+
+        return "👤 Contacto enviado."
+
+    if message_type == "order":
+        order = message.get("order") or {}
+        product_items = order.get("product_items") or []
+        cantidad = len(product_items)
+        return f"🛒 Pedido recibido ({cantidad} producto{'s' if cantidad != 1 else ''})."
+
+    if message_type == "system":
+        system = message.get("system") or {}
+        body = str(system.get("body") or system.get("type") or "").strip()
+        return f"Mensaje del sistema: {body}" if body else "Mensaje del sistema recibido."
+
+    if message_type == "unsupported":
+        errors = message.get("errors") or []
+        detalle = ""
+
+        if errors:
+            detalle = str((errors[0] or {}).get("title") or (errors[0] or {}).get("message") or "").strip()
+
+        if detalle:
+            return f"Mensaje recibido en un formato no compatible: {detalle}."
+
+        return "Mensaje recibido en un formato no compatible."
+
+    return f"Mensaje recibido ({message_type})."
+
 
 def replace_start(s: str) -> str:
     digits = "".join(char for char in str(s or "") if char.isdigit())
