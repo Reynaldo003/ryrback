@@ -24,6 +24,8 @@ from .views import (
     catalogo_precios_actuales,
     mark_unread_view,
     llamar_whatsapp,
+    bloquear_contacto_whatsapp_view,
+    desbloquear_contacto_whatsapp_view,
 )
 
 from .ia_config import (
@@ -56,6 +58,8 @@ urlpatterns = [
     path("chats/", chats_list),
     path("chats/mark-read/", mark_read_view),
     path("chats/mark-unread/", mark_unread_view),
+    path("chats/bloquear/", bloquear_contacto_whatsapp_view),
+    path("chats/desbloquear/", desbloquear_contacto_whatsapp_view),
     path("contacto/", contacto_por_telefono),
     path("contacto/updates/", contacto_updates),
 

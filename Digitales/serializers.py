@@ -408,6 +408,12 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "ia_pausada_motivo",
             "ia_pausada_at",
 
+            "whatsapp_bloqueado",
+            "whatsapp_bloqueado_at",
+            "whatsapp_bloqueado_por",
+            "whatsapp_bloqueado_motivo",
+            "whatsapp_bloqueado_respuesta_meta",
+
             "requiere_asesor",
             "motivo_requiere_asesor",
 

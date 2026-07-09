@@ -50,6 +50,12 @@ class ExpedienteDigital(models.Model):
     ia_pausada_motivo = models.CharField(max_length=120, blank=True, default="")
     ia_pausada_at = models.DateTimeField(null=True, blank=True)
 
+    whatsapp_bloqueado = models.BooleanField(default=False, db_index=True)
+    whatsapp_bloqueado_at = models.DateTimeField(null=True, blank=True)
+    whatsapp_bloqueado_por = models.CharField(max_length=120, blank=True, default="")
+    whatsapp_bloqueado_motivo = models.CharField(max_length=255, blank=True, default="")
+    whatsapp_bloqueado_respuesta_meta = models.JSONField(default=dict, blank=True)
+
     requiere_asesor = models.BooleanField(default=False)
     motivo_requiere_asesor = models.CharField(max_length=120, blank=True, default="")
 

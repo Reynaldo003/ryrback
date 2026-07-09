@@ -55,8 +55,9 @@ from .contacto import (
     obtener_templates_whatsapp,
     MetaAPIError,
     MetaMediaError,
-        iniciar_llamada_whatsapp,
-
+    iniciar_llamada_whatsapp,
+    bloquear_usuario_whatsapp,
+    desbloquear_usuario_whatsapp,
 )
 from .catalogo_scraper import scrapear_precios
 from notificaciones.services import notificar_mensaje_whatsapp
@@ -1381,6 +1382,9 @@ def chats_list(request):
             "ia_estado": estado_ia,
             "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False),
             "ia_bloqueos": estado_ia.get("bloqueos", []),
+            "whatsapp_bloqueado": bool(getattr(exp, "whatsapp_bloqueado", False)),
+            "whatsapp_bloqueado_at": exp.whatsapp_bloqueado_at.isoformat() if exp.whatsapp_bloqueado_at else None,
+            "whatsapp_bloqueado_motivo": exp.whatsapp_bloqueado_motivo or "",
         })
 
     return Response(data, status=status.HTTP_200_OK)
@@ -1596,6 +1600,17 @@ def enviar_mensaje_view(request):
             numero_asesor=numero_asesor,
         )
 
+        if getattr(exp, "whatsapp_bloqueado", False):
+            return Response(
+                {
+                    "ok": False,
+                    "error": "Este contacto está bloqueado en WhatsApp. Desbloquéalo antes de enviar mensajes.",
+                    "tel": to,
+                    "numero_asesor": numero_asesor,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         exp.touch_contacto_asesor(save_now=True)
 
         wa_res = enviar_texto_whatsapp(
@@ -1748,6 +1763,17 @@ def enviar_media_view(request):
         tel=to,
         numero_asesor=numero_asesor,
     )
+
+    if getattr(exp, "whatsapp_bloqueado", False):
+        return Response(
+            {
+                "ok": False,
+                "error": "Este contacto está bloqueado en WhatsApp. Desbloquéalo antes de enviar mensajes.",
+                "tel": to,
+                "numero_asesor": numero_asesor,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
     exp.touch_contacto_asesor(save_now=True)
 
@@ -1962,6 +1988,17 @@ def enviar_plantilla_view(request):
             tel=to,
             numero_asesor=numero_asesor,
         )
+
+        if getattr(exp, "whatsapp_bloqueado", False):
+            return Response(
+                {
+                    "ok": False,
+                    "error": "Este contacto está bloqueado en WhatsApp. Desbloquéalo antes de enviar mensajes.",
+                    "tel": to,
+                    "numero_asesor": numero_asesor,
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         exp.touch_contacto_asesor(save_now=True)
 
@@ -2249,6 +2286,261 @@ def mark_unread_view(request):
         lectura.save(update_fields=["last_read_at", "updated_at"])
 
     return Response({"ok": True}, status=200)
+
+def _usuario_nombre_para_auditoria(request) -> str:
+    user = _get_usuario_request_obj(request)
+
+    if user:
+        return (
+            getattr(user, "usuario", "")
+            or getattr(user, "username", "")
+            or getattr(user, "email", "")
+            or ""
+        ).strip()
+
+    return _obtener_usuario_crm_request(request)
+
+
+def _meta_block_added(data: dict) -> list:
+    block_users = data.get("block_users") if isinstance(data, dict) else {}
+    if not isinstance(block_users, dict):
+        return []
+
+    return (
+        block_users.get("added_users")
+        or block_users.get("removed_users")
+        or []
+    )
+
+
+def _meta_block_failed(data: dict) -> list:
+    block_users = data.get("block_users") if isinstance(data, dict) else {}
+    if not isinstance(block_users, dict):
+        return []
+
+    return (
+        block_users.get("failed_users")
+        or block_users.get("errors")
+        or []
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def bloquear_contacto_whatsapp_view(request):
+    numero_asesor = _get_numero_asesor_request(request)
+    tel = normaliza_tel_mx(
+        request.data.get("tel", "")
+        or request.data.get("telefono", "")
+    )
+
+    motivo = str(
+        request.data.get("motivo", "")
+        or "Bloqueado manualmente desde CRM"
+    ).strip()[:255]
+
+    if not tel:
+        return Response(
+            {"ok": False, "error": "Falta tel"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cliente = ClienteComercial.objects.filter(telefono=tel).first()
+    expediente = (
+        ExpedienteDigital.objects.filter(cliente=cliente).first()
+        if cliente
+        else None
+    )
+
+    try:
+        meta_res = bloquear_usuario_whatsapp(
+            to=tel,
+            numero_asesor=numero_asesor,
+        )
+    except MetaAPIError as e:
+        return _response_meta_error(
+            e,
+            numero_asesor=numero_asesor,
+            extra={
+                "tipo": "block_user",
+                "tel": tel,
+            },
+        )
+    except Exception as e:
+        logger.exception(
+            "ERROR BLOQUEANDO CONTACTO WHATSAPP | tel=%s numero_asesor=%s error=%s",
+            tel,
+            numero_asesor,
+            str(e),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(e),
+                "numero_asesor": numero_asesor,
+                "tel": tel,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    agregados = _meta_block_added(meta_res)
+    fallidos = _meta_block_failed(meta_res)
+
+    if not agregados:
+        return Response(
+            {
+                "ok": False,
+                "error": (
+                    "Meta no confirmó el bloqueo. "
+                    "Recuerda que solo se puede bloquear si el cliente escribió en las últimas 24 horas."
+                ),
+                "numero_asesor": numero_asesor,
+                "tel": tel,
+                "meta": meta_res,
+                "fallidos": fallidos,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    usuario = _usuario_nombre_para_auditoria(request)
+
+    if expediente:
+        expediente.whatsapp_bloqueado = True
+        expediente.whatsapp_bloqueado_at = timezone.now()
+        expediente.whatsapp_bloqueado_por = usuario
+        expediente.whatsapp_bloqueado_motivo = motivo
+        expediente.whatsapp_bloqueado_respuesta_meta = meta_res
+
+        expediente.ia_pausada = True
+        expediente.ia_pausada_motivo = "cliente_bloqueado"
+        expediente.ia_pausada_at = timezone.now()
+
+        expediente.estado = "Descalificado"
+
+        expediente.save(update_fields=[
+            "whatsapp_bloqueado",
+            "whatsapp_bloqueado_at",
+            "whatsapp_bloqueado_por",
+            "whatsapp_bloqueado_motivo",
+            "whatsapp_bloqueado_respuesta_meta",
+            "ia_pausada",
+            "ia_pausada_motivo",
+            "ia_pausada_at",
+            "estado",
+            "actualizado",
+        ])
+
+    return Response(
+        {
+            "ok": True,
+            "bloqueado": True,
+            "tel": tel,
+            "numero_asesor": numero_asesor,
+            "meta": meta_res,
+        },
+        status=status.HTTP_200_OK,
+    )
+
+
+@api_view(["POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def desbloquear_contacto_whatsapp_view(request):
+    numero_asesor = _get_numero_asesor_request(request)
+    tel = normaliza_tel_mx(
+        request.data.get("tel", "")
+        or request.data.get("telefono", "")
+    )
+
+    if not tel:
+        return Response(
+            {"ok": False, "error": "Falta tel"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    cliente = ClienteComercial.objects.filter(telefono=tel).first()
+    expediente = (
+        ExpedienteDigital.objects.filter(cliente=cliente).first()
+        if cliente
+        else None
+    )
+
+    try:
+        meta_res = desbloquear_usuario_whatsapp(
+            to=tel,
+            numero_asesor=numero_asesor,
+        )
+    except MetaAPIError as e:
+        return _response_meta_error(
+            e,
+            numero_asesor=numero_asesor,
+            extra={
+                "tipo": "unblock_user",
+                "tel": tel,
+            },
+        )
+    except Exception as e:
+        logger.exception(
+            "ERROR DESBLOQUEANDO CONTACTO WHATSAPP | tel=%s numero_asesor=%s error=%s",
+            tel,
+            numero_asesor,
+            str(e),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(e),
+                "numero_asesor": numero_asesor,
+                "tel": tel,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    removidos = _meta_block_added(meta_res)
+    fallidos = _meta_block_failed(meta_res)
+
+    if not removidos:
+        return Response(
+            {
+                "ok": False,
+                "error": "Meta no confirmó el desbloqueo.",
+                "numero_asesor": numero_asesor,
+                "tel": tel,
+                "meta": meta_res,
+                "fallidos": fallidos,
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if expediente:
+        expediente.whatsapp_bloqueado = False
+        expediente.whatsapp_bloqueado_at = None
+        expediente.whatsapp_bloqueado_por = ""
+        expediente.whatsapp_bloqueado_motivo = ""
+        expediente.whatsapp_bloqueado_respuesta_meta = meta_res
+
+        expediente.save(update_fields=[
+            "whatsapp_bloqueado",
+            "whatsapp_bloqueado_at",
+            "whatsapp_bloqueado_por",
+            "whatsapp_bloqueado_motivo",
+            "whatsapp_bloqueado_respuesta_meta",
+            "actualizado",
+        ])
+
+    return Response(
+        {
+            "ok": True,
+            "bloqueado": False,
+            "tel": tel,
+            "numero_asesor": numero_asesor,
+            "meta": meta_res,
+        },
+        status=status.HTTP_200_OK,
+    )
 
 def obtener_productos(request):
     datos = [
