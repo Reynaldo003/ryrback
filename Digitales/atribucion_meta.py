@@ -602,9 +602,10 @@ def resolver_pauta_desde_meta_ads(
 
 def debe_reemplazar_pauta(expediente, resultado: dict) -> bool:
     """
-    Regla segura:
-    - Solo asigna pauta si el expediente no tiene pauta real.
-    - No pisa campañas existentes ni pautas asignadas manualmente.
+    Regla operativa:
+    - Si llega una nueva pauta real desde Meta, representa el interés actual.
+    - Por eso sí debe reemplazar la pauta anterior.
+    - Solo no reemplaza si la pauta nueva viene vacía.
     """
     pauta_actual = str(getattr(expediente, "pauta", "") or "").strip()
     pauta_nueva = str((resultado or {}).get("pauta") or "").strip()
@@ -612,14 +613,7 @@ def debe_reemplazar_pauta(expediente, resultado: dict) -> bool:
     if not pauta_nueva:
         return False
 
-    pautas_vacias_o_sistema = {
-        "",
-        "sin campaña detectada",
-        "sin campana detectada",
-        "sin pauta",
-    }
-
-    return pauta_actual.lower() in pautas_vacias_o_sistema
+    return pauta_actual != pauta_nueva
 
 def resolver_pauta_por_tipos_probables(
     id_fuente: str,

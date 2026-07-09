@@ -168,6 +168,42 @@ def eliminacion_datos_meta_view(request):
 
 # ── Helpers internos ──────────────────────────────────────────────────────────
 
+def _agregar_diagnostico_linea_vs_meta(resultado: dict, numero_asesor: str) -> dict:
+    resultado = dict(resultado or {})
+    cfg_linea = WHATSAPP_LINES.get(normaliza_tel_mx(numero_asesor or ""), {})
+
+    agencia_linea = (cfg_linea.get("agencia") or "").strip()
+    business_linea = (cfg_linea.get("business") or "").strip()
+    asesor_linea = (cfg_linea.get("asesor_digital") or "").strip()
+
+    sucursal_meta = str(resultado.get("sucursal") or "").strip()
+    pauta_meta = str(resultado.get("pauta") or "").strip()
+
+    resultado["linea_recibida"] = {
+        "numero_asesor": numero_asesor,
+        "agencia": agencia_linea,
+        "business": business_linea,
+        "asesor_digital": asesor_linea,
+    }
+
+    resultado["meta_resuelto"] = {
+        "sucursal": sucursal_meta,
+        "pauta": pauta_meta,
+        "nombre_campana": resultado.get("nombre_campana", ""),
+        "nombre_anuncio": resultado.get("nombre_anuncio", ""),
+        "nombre_conjunto": resultado.get("nombre_conjunto", ""),
+    }
+
+    resultado["requiere_revision_ruteo"] = bool(
+        resultado.get("ok")
+        and sucursal_meta
+        and agencia_linea
+        and sucursal_meta.lower() not in agencia_linea.lower()
+        and agencia_linea.lower() not in sucursal_meta.lower()
+    )
+
+    return resultado
+
 def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", numero_asesor: str = ""):
     tel = normaliza_tel_mx(tel)
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
@@ -185,6 +221,7 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
         cliente.save(update_fields=["nombre", "actualizado_en"])
 
     cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
+
     agencia_linea = (cfg_linea.get("agencia") or "").strip()
     business_linea = (cfg_linea.get("business") or "").strip()
     asesor_digital_linea = (cfg_linea.get("asesor_digital") or "").strip()
@@ -193,17 +230,16 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
 
     cambios = []
 
-    if agencia_linea and exp.agencia != agencia_linea:
-        exp.agencia = agencia_linea
-        cambios.append("agencia")
+    campos_linea = [
+        ("agencia", agencia_linea),
+        ("business", business_linea),
+        ("asesor_digital", asesor_digital_linea),
+    ]
 
-    if business_linea and exp.business != business_linea:
-        exp.business = business_linea
-        cambios.append("business")
-
-    if asesor_digital_linea and exp.asesor_digital != asesor_digital_linea:
-        exp.asesor_digital = asesor_digital_linea
-        cambios.append("asesor_digital")
+    for campo, valor in campos_linea:
+        if valor and getattr(exp, campo, "") != valor:
+            setattr(exp, campo, valor)
+            cambios.append(campo)
 
     if exp.canal_contacto != "WhatsApp":
         exp.canal_contacto = "WhatsApp"
@@ -218,7 +254,6 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
         exp.save(update_fields=list(dict.fromkeys(cambios)))
 
     return cliente, exp
-
 
 def _numero_linea_valido(numero: str) -> str:
     numero = normaliza_tel_mx(numero or "")
@@ -1060,9 +1095,25 @@ def webhook(request):
                     exp.touch_mensaje_cliente(save_now=True)
 
                     resultado_atribucion_meta = _aplicar_atribucion_meta_segura(
-                        expediente=exp, mensaje_whatsapp=msg,
-                        numero_asesor=numero_asesor, telefono=tel, wa_id=wa_id,
+                        expediente=exp,
+                        mensaje_whatsapp=msg,
+                        numero_asesor=numero_asesor,
+                        telefono=tel,
+                        wa_id=wa_id,
                     )
+
+                    resultado_atribucion_meta = _agregar_diagnostico_linea_vs_meta(
+                        resultado_atribucion_meta,
+                        numero_asesor,
+                    )
+
+                    if resultado_atribucion_meta.get("requiere_revision_ruteo"):
+                        logger.warning(
+                            "POSIBLE RUTEO INCORRECTO META VS WHATSAPP | tel=%s wa_id=%s resultado=%s",
+                            tel,
+                            wa_id,
+                            json.dumps(resultado_atribucion_meta, ensure_ascii=False),
+                        )
 
                     raw_msg = dict(msg)
                     raw_msg["numero_asesor"] = numero_asesor
