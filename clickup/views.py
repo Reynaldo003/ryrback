@@ -782,45 +782,59 @@ class ResumenIAView(APIView):
         ])
 
         from django.conf import settings
-        api_key = getattr(settings, "OPENAI_API_KEY", "")
+        api_key = getattr(settings, "GEMINI_API_KEY", "")
         if not api_key:
             return Response({"detail": "API key no configurada."}, status=status.HTTP_503_SERVICE_UNAVAILABLE)
 
+        modelo = getattr(settings, "GEMINI_MULTIMODAL_MODEL", "gemini-2.5-flash")
+
+        prompt = (
+            f"Eres un analista de mejora continua para una agencia Volkswagen. "
+            f"Genera un resumen ejecutivo profesional en español del siguiente proyecto de mejora continua.\n\n"
+            f"El resumen debe tener entre 6 y 8 oraciones, explicar los problemas identificados, "
+            f"describir las estrategias implementadas, mencionar los resultados esperados, "
+            f"ser un párrafo continuo sin listas y usar lenguaje profesional.\n\n"
+            f"IMPORTANTE: No incluyas ningún título ni encabezado al inicio. "
+            f"No uses markdown, ni asteriscos, ni negritas. "
+            f"Empieza directamente con el párrafo del resumen, sin ninguna introducción ni etiqueta antes.\n\n"
+            f"Proyecto: {proyecto_nombre}\n"
+            f"Equipo: {equipo_nombre}\n"
+            f"Total de planes: {total}\n"
+            f"Completados: {hecho} de {total}\n\n"
+            f"Contenido:\n{problemas_texto[:3000]}"
+        )
+
         try:
             resp = http_requests.post(
-                "https://api.openai.com/v1/chat/completions",
-                headers={
-                    "Content-Type": "application/json",
-                    "Authorization": f"Bearer {api_key}",
-                },
+                f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent",
+                headers={"Content-Type": "application/json"},
+                params={"key": api_key},
                 json={
-                    "model": "gpt-4o-mini",
-                    "max_tokens": 600,
-                    "messages": [
-                        {
-                            "role": "system",
-                            "content": "Eres un analista de mejora continua para una agencia Volkswagen. Generas resúmenes ejecutivos profesionales en español.",
-                        },
-                        {
-                            "role": "user",
-                            "content": (
-                                f"Genera un resumen ejecutivo del siguiente proyecto de mejora continua.\n\n"
-                                f"El resumen debe tener entre 6 y 8 oraciones, explicar los problemas identificados, "
-                                f"describir las estrategias implementadas, mencionar los resultados esperados, "
-                                f"ser un párrafo continuo sin listas y usar lenguaje profesional.\n\n"
-                                f"Proyecto: {proyecto_nombre}\n"
-                                f"Equipo: {equipo_nombre}\n"
-                                f"Total de planes: {total}\n"
-                                f"Completados: {hecho} de {total}\n\n"
-                                f"Contenido:\n{problemas_texto[:3000]}"
-                            ),
-                        },
+                    "contents": [
+                        {"role": "user", "parts": [{"text": prompt}]}
                     ],
+                    "generationConfig": {
+                        "maxOutputTokens": 2000,
+                        "temperature": 0.7,
+                        "thinkingConfig": {"thinkingBudget": 0},
+                    },
                 },
                 timeout=30,
             )
             data = resp.json()
-            resumen = data["choices"][0]["message"]["content"].strip()
+
+            if resp.status_code != 200:
+                error_msg = data.get("error", {}).get("message", "Error desconocido de Gemini")
+                return Response({"detail": error_msg}, status=status.HTTP_502_BAD_GATEWAY)
+
+            candidates = data.get("candidates") or []
+            if not candidates:
+                motivo = data.get("promptFeedback", {}).get("blockReason", "sin candidatos en la respuesta")
+                return Response({"detail": f"Gemini no generó respuesta: {motivo}"}, status=status.HTTP_502_BAD_GATEWAY)
+
+            resumen = candidates[0]["content"]["parts"][0]["text"].strip()
+            resumen = resumen.replace("**", "").replace("__", "").replace("##", "").strip()
+
             return Response({"resumen": resumen})
 
         except Exception as e:
