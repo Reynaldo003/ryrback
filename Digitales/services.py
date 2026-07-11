@@ -1,18 +1,18 @@
-#Digitales/services.py
+# Digitales/services.py
 from datetime import timedelta
 
 from django.utils import timezone
 
 from .models import MensajeWhatsApp
-from .resumen_ia import generar_resumen_con_openai
+from .resumen_ia import generar_resumen_con_gemini
 
 
 def generar_y_guardar_resumen(*, expediente, fuente: str):
     mensajes = MensajeWhatsApp.objects.filter(
         telefono=expediente.cliente.telefono
-    ).order_by("created_at")
+    ).order_by("created_at", "id")
 
-    resumen = generar_resumen_con_openai(
+    resumen = generar_resumen_con_gemini(
         mensajes=mensajes,
         telefono=expediente.cliente.telefono,
     )
@@ -20,12 +20,14 @@ def generar_y_guardar_resumen(*, expediente, fuente: str):
     expediente.resumen = resumen
     expediente.resumen_actualizado_at = timezone.now()
     expediente.resumen_fuente = fuente
-    expediente.save(update_fields=[
-        "resumen",
-        "resumen_actualizado_at",
-        "resumen_fuente",
-        "actualizado",
-    ])
+    expediente.save(
+        update_fields=[
+            "resumen",
+            "resumen_actualizado_at",
+            "resumen_fuente",
+            "actualizado",
+        ]
+    )
 
     return resumen
 
@@ -43,23 +45,28 @@ def debe_generar_resumen_por_1h_sin_respuesta(*, expediente) -> bool:
     telefono = expediente.cliente.telefono
 
     total = MensajeWhatsApp.objects.filter(telefono=telefono).count()
+
     if total <= 6:
         return False
 
     ultimo_msg = (
-        MensajeWhatsApp.objects
-        .filter(telefono=telefono)
-        .order_by("-created_at")
+        MensajeWhatsApp.objects.filter(telefono=telefono)
+        .order_by("-created_at", "-id")
         .first()
     )
+
     if not ultimo_msg or not ultimo_msg.created_at:
         return False
 
     hace_una_hora = timezone.now() - timedelta(hours=1)
+
     if ultimo_msg.created_at > hace_una_hora:
         return False
 
-    if expediente.resumen_actualizado_at and expediente.resumen_actualizado_at >= ultimo_msg.created_at:
+    if (
+        expediente.resumen_actualizado_at
+        and expediente.resumen_actualizado_at >= ultimo_msg.created_at
+    ):
         return False
 
     return True

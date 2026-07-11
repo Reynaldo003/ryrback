@@ -59,7 +59,6 @@ from .contacto import (
     bloquear_usuario_whatsapp,
     desbloquear_usuario_whatsapp,
 )
-from .catalogo_scraper import scrapear_precios
 from notificaciones.services import notificar_mensaje_whatsapp
 from .atribucion_meta import aplicar_pauta_desde_referencia_meta
 from .ia_config import obtener_estado_ia_conversacion
