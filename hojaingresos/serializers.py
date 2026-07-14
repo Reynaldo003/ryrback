@@ -508,31 +508,113 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        taller_data = {}
+        # Extraer primero los campos que pertenecen a TallerActividad.
+        datos_taller = self._extraer_datos_taller(validated_data)
 
-        for campo in CAMPOS_TALLER:
-            if campo in validated_data:
-                taller_data[campo] = validated_data.pop(campo)
+        # Estos campos son alias del frontend y no deben llegar directamente
+        # a ModelSerializer.update(), porque cliente es un ForeignKey.
+        cliente_texto = str(
+            validated_data.pop("cliente", "") or ""
+        ).strip()
 
-        subtrabajos = validated_data.pop("subtrabajos", None)
+        cliente_id = validated_data.pop("cliente_id", None)
 
-        if subtrabajos is not None:
-            nombres = [
-                str(item.get("nombre") or "").strip()
-                for item in subtrabajos
-                if str(item.get("nombre") or "").strip()
-            ]
+        cliente_nombre = str(
+            validated_data.pop("cliente_nombre", "")
+            or cliente_texto
+            or ""
+        ).strip()
 
-            taller_data["tipo_servicio"] = " + ".join(nombres)
+        telefono = normalizar_telefono(
+            validated_data.pop("telefono", "")
+            or validated_data.pop("cliente_telefono", "")
+        )
 
-        instance = super().update(instance, validated_data)
+        correo = str(
+            validated_data.pop("correo", "")
+            or validated_data.pop(
+                "cliente_correo_electronico",
+                "",
+            )
+            or ""
+        ).strip().lower()
 
-        if taller_data:
-            TallerActividad.objects.update_or_create(
-                ingreso=instance,
-                defaults=taller_data,
+        # Cambiar la relación solamente cuando venga un cliente_id explícito.
+        if cliente_id is not None:
+            try:
+                instance.cliente = ClienteComercial.objects.get(
+                    pk=cliente_id,
+                )
+            except ClienteComercial.DoesNotExist:
+                raise serializers.ValidationError({
+                    "cliente_id": "El cliente indicado no existe.",
+                })
+
+        cliente = instance.cliente
+
+        # Actualizar el cliente relacionado sin reemplazar el ForeignKey
+        # con una cadena de texto.
+        if cliente is not None:
+            campos_cliente_actualizados = []
+
+            if cliente_nombre:
+                cliente.nombre = cliente_nombre
+                campos_cliente_actualizados.append("nombre")
+
+            if telefono:
+                cliente.telefono = telefono
+                campos_cliente_actualizados.append("telefono")
+
+            if correo:
+                nombres_campos = {
+                    campo.name
+                    for campo in cliente._meta.fields
+                }
+
+                if "correo" in nombres_campos:
+                    cliente.correo = correo
+                    campos_cliente_actualizados.append("correo")
+
+                elif "correo_electronico" in nombres_campos:
+                    cliente.correo_electronico = correo
+                    campos_cliente_actualizados.append(
+                        "correo_electronico"
+                    )
+
+            if campos_cliente_actualizados:
+                cliente.save(
+                    update_fields=list(
+                        dict.fromkeys(
+                            campos_cliente_actualizados
+                        )
+                    )
+                )
+
+            if cliente_nombre:
+                validated_data["nombre_cliente"] = (
+                    cliente_nombre
+                )
+
+        elif cliente_nombre:
+            # Para actividades manuales sin ClienteComercial relacionado.
+            validated_data["nombre_cliente"] = (
+                cliente_nombre
             )
 
+        # Ahora validated_data solo contiene campos reales de HojaIngresos.
+        instance = super().update(
+            instance,
+            validated_data,
+        )
+
+        # Crear o actualizar los datos operativos del taller.
+        self._guardar_taller(
+            instance,
+            datos_taller,
+        )
+
+        # Recuperar una instancia fresca para evitar que la relación taller
+        # almacenada en caché regrese valores anteriores.
         return (
             HojaIngresos.objects
             .select_related("cliente", "taller")

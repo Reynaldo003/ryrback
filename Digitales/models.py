@@ -337,7 +337,6 @@ class CampanaMeta(models.Model):
         db_table = "campanas_meta"
         managed = False
 
-
 class MapeoFuenteMeta(models.Model):
     id_fuente = models.CharField(
         max_length=120,
