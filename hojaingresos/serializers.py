@@ -508,35 +508,33 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        datos_taller = self._extraer_datos_taller(validated_data)
-        datos_cliente = self._extraer_datos_cliente(validated_data)
-        taller_actual = self._obtener_taller(instance)
-        tipo_bloque = str(
-            datos_taller.get(
-                "tipo_bloque",
-                getattr(taller_actual, "tipo_bloque", "trabajo"),
-            )
-            or "trabajo"
-        ).lower()
+        taller_data = {}
 
-        hay_datos_cliente = any(
-            valor not in (None, "")
-            for valor in datos_cliente.values()
+        for campo in CAMPOS_TALLER:
+            if campo in validated_data:
+                taller_data[campo] = validated_data.pop(campo)
+
+        subtrabajos = validated_data.pop("subtrabajos", None)
+
+        if subtrabajos is not None:
+            nombres = [
+                str(item.get("nombre") or "").strip()
+                for item in subtrabajos
+                if str(item.get("nombre") or "").strip()
+            ]
+
+            taller_data["tipo_servicio"] = " + ".join(nombres)
+
+        instance = super().update(instance, validated_data)
+
+        if taller_data:
+            TallerActividad.objects.update_or_create(
+                ingreso=instance,
+                defaults=taller_data,
+            )
+
+        return (
+            HojaIngresos.objects
+            .select_related("cliente", "taller")
+            .get(pk=instance.pk)
         )
-
-        if hay_datos_cliente:
-            cliente = self._resolver_cliente(
-                datos_cliente,
-                instance=instance,
-                tipo_bloque=tipo_bloque,
-            )
-            instance.cliente = cliente
-            if cliente:
-                validated_data["nombre_cliente"] = getattr(cliente, "nombre", "")
-
-        for campo, valor in validated_data.items():
-            setattr(instance, campo, valor)
-
-        instance.save()
-        self._guardar_taller(instance, datos_taller)
-        return instance
