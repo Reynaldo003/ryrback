@@ -153,7 +153,7 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             limite = int(limite)
         except ValueError:
             limite = 10000
-        limite = max(100, min(limite, 20000))
+        limite = max(100, min(limite, 100000))
 
         campos = (
             "vin",
@@ -214,7 +214,7 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="opciones")
     def opciones(self, request):
-        limite = 20000
+        limite = 100000
         qs = (
             OrdenServicioVentaVW.objects.using(DB_ALIAS)
             .all()
