@@ -386,28 +386,64 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
         return datos_taller
 
-    def _extraer_datos_cliente(self, validated_data):
-        cliente_id = validated_data.pop("cliente_id", None)
-        cliente_valor = str(validated_data.pop("cliente", "") or "").strip()
+    def _extraer_datos_cliente(
+        self,
+        validated_data,
+    ):
+        cliente_id = validated_data.pop(
+            "cliente_id",
+            None,
+        )
 
-        if cliente_valor.isdigit() and not cliente_id:
+        cliente_valor = str(
+            validated_data.pop(
+                "cliente",
+                "",
+            )
+            or ""
+        ).strip()
+
+        # Nunca convertir el nombre a ID.
+        if (
+            cliente_valor.isdigit()
+            and cliente_id is None
+        ):
             cliente_id = int(cliente_valor)
             cliente_valor = ""
 
         nombre = str(
-            validated_data.pop("cliente_nombre", "")
+            validated_data.pop(
+                "cliente_nombre",
+                "",
+            )
             or cliente_valor
-            or validated_data.get("nombre_cliente", "")
+            or validated_data.get(
+                "nombre_cliente",
+                "",
+            )
             or ""
         ).strip()
 
-        telefono = normalizar_telefono(
-            validated_data.pop("telefono", "")
-            or validated_data.pop("cliente_telefono", "")
+        telefono = normaliza_tel_mx(
+            validated_data.pop(
+                "telefono",
+                "",
+            )
+            or validated_data.pop(
+                "cliente_telefono",
+                "",
+            )
         )
+
         correo = str(
-            validated_data.pop("correo", "")
-            or validated_data.pop("cliente_correo_electronico", "")
+            validated_data.pop(
+                "correo",
+                "",
+            )
+            or validated_data.pop(
+                "cliente_correo_electronico",
+                "",
+            )
             or ""
         ).strip().lower()
 
@@ -425,28 +461,109 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
         instance=None,
         tipo_bloque="trabajo",
     ):
-        cliente = None
-        cliente_id = datos_cliente["cliente_id"]
+        cliente_id = datos_cliente.get("cliente_id")
+        nombre = str(
+            datos_cliente.get("nombre") or ""
+        ).strip()
+        telefono = normaliza_tel_mx(
+            datos_cliente.get("telefono") or ""
+        )
+        correo = str(
+            datos_cliente.get("correo") or ""
+        ).strip().lower()
 
-        if cliente_id:
-            cliente = ClienteComercial.objects.get(pk=cliente_id)
-        elif instance is not None and instance.cliente_id:
-            cliente = instance.cliente
-        elif tipo_bloque in TIPOS_BLOQUE_SIN_CLIENTE:
+        if tipo_bloque in TIPOS_BLOQUE_SIN_CLIENTE:
             return None
+
+        cliente = None
+
+        # 1. En edición, conservar primero el cliente asociado.
+        if instance is not None and instance.cliente_id:
+            cliente = instance.cliente
+
+        # 2. Si el frontend envió un ID válido, usar ese cliente.
+        if cliente_id:
+            try:
+                cliente = ClienteComercial.objects.get(
+                    pk=cliente_id,
+                )
+            except (
+                ClienteComercial.DoesNotExist,
+                ValueError,
+                TypeError,
+            ):
+                raise serializers.ValidationError({
+                    "cliente_id": (
+                        "El cliente indicado no existe."
+                    ),
+                })
+
+        # 3. Para un registro nuevo, reutilizar el cliente por teléfono.
+        # ClienteComercial.telefono tiene unique=True.
+        if cliente is None and telefono:
+            cliente = (
+                ClienteComercial.objects
+                .filter(telefono=telefono)
+                .first()
+            )
+
+        # 4. Crear solamente si no existe un cliente con ese teléfono.
+        if cliente is None:
+            if not telefono:
+                raise serializers.ValidationError({
+                    "cliente_telefono": (
+                        "El teléfono del cliente es obligatorio."
+                    ),
+                })
+
+            cliente = ClienteComercial(
+                nombre=nombre,
+                telefono=telefono,
+                correo=correo,
+            )
+
+        campos_actualizados = []
+
+        if nombre and cliente.nombre != nombre:
+            cliente.nombre = nombre
+            campos_actualizados.append("nombre")
+
+        if telefono and cliente.telefono != telefono:
+            # Solo debería cambiarse cuando no pertenece a otro cliente.
+            existe_otro = (
+                ClienteComercial.objects
+                .filter(telefono=telefono)
+                .exclude(pk=cliente.pk)
+                .exists()
+            )
+
+            if existe_otro:
+                raise serializers.ValidationError({
+                    "cliente_telefono": (
+                        "Ese teléfono ya pertenece a otro cliente."
+                    ),
+                })
+
+            cliente.telefono = telefono
+            campos_actualizados.append("telefono")
+
+        if correo and cliente.correo != correo:
+            cliente.correo = correo
+            campos_actualizados.append("correo")
+
+        if cliente.pk:
+            if campos_actualizados:
+                cliente.save(
+                    update_fields=list(
+                        dict.fromkeys(
+                            campos_actualizados +
+                            ["actualizado_en"]
+                        )
+                    )
+                )
         else:
-            # Se crea un cliente nuevo. No se busca por teléfono porque el mismo
-            # número puede pertenecer a varias personas o a un tutor.
-            cliente = ClienteComercial()
+            cliente.save()
 
-        if datos_cliente["nombre"]:
-            cliente.nombre = datos_cliente["nombre"]
-        if datos_cliente["telefono"]:
-            cliente.telefono = datos_cliente["telefono"]
-        if datos_cliente["correo"]:
-            asignar_correo_cliente(cliente, datos_cliente["correo"])
-
-        cliente.save()
         return cliente
 
     def _guardar_taller(self, ingreso, datos_taller):
@@ -480,141 +597,111 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
-        datos_taller = self._extraer_datos_taller(validated_data)
-        datos_cliente = self._extraer_datos_cliente(validated_data)
-        tipo_bloque = str(datos_taller.get("tipo_bloque", "trabajo") or "trabajo").lower()
+        datos_taller = self._extraer_datos_taller(
+            validated_data,
+        )
+
+        datos_cliente = self._extraer_datos_cliente(
+            validated_data,
+        )
+
+        tipo_bloque = str(
+            datos_taller.get(
+                "tipo_bloque",
+                "trabajo",
+            )
+            or "trabajo"
+        ).strip().lower()
 
         cliente = self._resolver_cliente(
             datos_cliente,
             tipo_bloque=tipo_bloque,
         )
 
-        if cliente:
+        if cliente is not None:
             validated_data["nombre_cliente"] = (
-                getattr(cliente, "nombre", "")
-                or validated_data.get("nombre_cliente", "")
+                cliente.nombre or ""
             )
-        elif tipo_bloque in TIPOS_BLOQUE_SIN_CLIENTE:
-            etiqueta = "COMIDA" if tipo_bloque == "comida" else "CAPACITACIÓN"
-            validated_data.setdefault("nombre_cliente", etiqueta)
-            validated_data.setdefault("tipo_cita", etiqueta.title())
 
         ingreso = HojaIngresos.objects.create(
             cliente=cliente,
             **validated_data,
         )
-        self._guardar_taller(ingreso, datos_taller)
-        return ingreso
 
-    @transaction.atomic
-    def update(self, instance, validated_data):
-        # Extraer primero los campos que pertenecen a TallerActividad.
-        datos_taller = self._extraer_datos_taller(validated_data)
-
-        # Estos campos son alias del frontend y no deben llegar directamente
-        # a ModelSerializer.update(), porque cliente es un ForeignKey.
-        cliente_texto = str(
-            validated_data.pop("cliente", "") or ""
-        ).strip()
-
-        cliente_id = validated_data.pop("cliente_id", None)
-
-        cliente_nombre = str(
-            validated_data.pop("cliente_nombre", "")
-            or cliente_texto
-            or ""
-        ).strip()
-
-        telefono = normalizar_telefono(
-            validated_data.pop("telefono", "")
-            or validated_data.pop("cliente_telefono", "")
+        self._guardar_taller(
+            ingreso,
+            datos_taller,
         )
 
-        correo = str(
-            validated_data.pop("correo", "")
-            or validated_data.pop(
-                "cliente_correo_electronico",
-                "",
-            )
-            or ""
-        ).strip().lower()
+        return (
+            HojaIngresos.objects
+            .select_related("cliente", "taller")
+            .get(pk=ingreso.pk)
+        )
 
-        # Cambiar la relación solamente cuando venga un cliente_id explícito.
-        if cliente_id is not None:
-            try:
-                instance.cliente = ClienteComercial.objects.get(
-                    pk=cliente_id,
-                )
-            except ClienteComercial.DoesNotExist:
-                raise serializers.ValidationError({
-                    "cliente_id": "El cliente indicado no existe.",
-                })
-
-        cliente = instance.cliente
-
-        # Actualizar el cliente relacionado sin reemplazar el ForeignKey
-        # con una cadena de texto.
-        if cliente is not None:
-            campos_cliente_actualizados = []
-
-            if cliente_nombre:
-                cliente.nombre = cliente_nombre
-                campos_cliente_actualizados.append("nombre")
-
-            if telefono:
-                cliente.telefono = telefono
-                campos_cliente_actualizados.append("telefono")
-
-            if correo:
-                nombres_campos = {
-                    campo.name
-                    for campo in cliente._meta.fields
-                }
-
-                if "correo" in nombres_campos:
-                    cliente.correo = correo
-                    campos_cliente_actualizados.append("correo")
-
-                elif "correo_electronico" in nombres_campos:
-                    cliente.correo_electronico = correo
-                    campos_cliente_actualizados.append(
-                        "correo_electronico"
-                    )
-
-            if campos_cliente_actualizados:
-                cliente.save(
-                    update_fields=list(
-                        dict.fromkeys(
-                            campos_cliente_actualizados
-                        )
-                    )
-                )
-
-            if cliente_nombre:
-                validated_data["nombre_cliente"] = (
-                    cliente_nombre
-                )
-
-        elif cliente_nombre:
-            # Para actividades manuales sin ClienteComercial relacionado.
-            validated_data["nombre_cliente"] = (
-                cliente_nombre
-            )
-
-        # Ahora validated_data solo contiene campos reales de HojaIngresos.
-        instance = super().update(
-            instance,
+    @transaction.atomic
+    def update(
+        self,
+        instance,
+        validated_data,
+    ):
+        datos_taller = self._extraer_datos_taller(
             validated_data,
         )
 
-        # Crear o actualizar los datos operativos del taller.
+        datos_cliente = self._extraer_datos_cliente(
+            validated_data,
+        )
+
+        taller_actual = self._obtener_taller(
+            instance,
+        )
+
+        tipo_bloque = str(
+            datos_taller.get(
+                "tipo_bloque",
+                getattr(
+                    taller_actual,
+                    "tipo_bloque",
+                    "trabajo",
+                ),
+            )
+            or "trabajo"
+        ).strip().lower()
+
+        hay_datos_cliente = any(
+            valor not in (None, "")
+            for valor in datos_cliente.values()
+        )
+
+        if hay_datos_cliente:
+            cliente = self._resolver_cliente(
+                datos_cliente,
+                instance=instance,
+                tipo_bloque=tipo_bloque,
+            )
+
+            instance.cliente = cliente
+
+            if cliente is not None:
+                validated_data["nombre_cliente"] = (
+                    cliente.nombre or ""
+                )
+
+        for campo, valor in validated_data.items():
+            setattr(
+                instance,
+                campo,
+                valor,
+            )
+
+        instance.save()
+
         self._guardar_taller(
             instance,
             datos_taller,
         )
 
-        # Recuperar una instancia fresca para evitar que la relación taller
-        # almacenada en caché regrese valores anteriores.
         return (
             HojaIngresos.objects
             .select_related("cliente", "taller")

@@ -41,6 +41,24 @@ class HojaIngresos(models.Model):
         decimal_places=2,
         default=0,
     )
+    long_drive = models.BooleanField(
+        null=True,
+        blank=True,
+    )
+
+    hora_promesa = models.DateTimeField(
+        null=True,
+        blank=True,
+    )
+
+    pre_picking_hecho = models.BooleanField(
+        default=False,
+    )
+
+    pre_picking_notas = models.TextField(
+        blank=True,
+        default="",
+    )
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_piso = models.CharField(max_length=200, blank=True, default="")
     creado_en = models.DateTimeField(auto_now_add=True)
