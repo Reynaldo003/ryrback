@@ -64,6 +64,7 @@ from .atribucion_meta import aplicar_pauta_desde_referencia_meta
 from .ia_config import obtener_estado_ia_conversacion
 from .plantillas_meta import (
     REGLAS_UTILITY,
+    analizar_estructura_plantilla,
     analizar_riesgo_marketing,
     crear_plantilla_meta,
     editar_plantilla_meta,
@@ -274,9 +275,49 @@ def _es_usuario_autenticado(request) -> bool:
 
 
 def _usuario_es_admin(user) -> bool:
+    """Reconoce administradores tanto por rol como por permisos del CRM."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+
     try:
-        rol = (getattr(user.rol, "nombre", "") or "").strip().lower()
-        return rol == "administrador"
+        rol_obj = getattr(user, "rol", None)
+        rol = (
+            getattr(rol_obj, "nombre", "")
+            or getattr(rol_obj, "name", "")
+            or (rol_obj if isinstance(rol_obj, str) else "")
+            or ""
+        ).strip().lower()
+
+        if rol in ("administrador", "admin"):
+            return True
+    except Exception:
+        pass
+
+    permisos = getattr(user, "permisos", None)
+
+    try:
+        if hasattr(permisos, "all"):
+            permisos = permisos.all()
+
+        valores = set()
+        for permiso in permisos or []:
+            if isinstance(permiso, str):
+                valores.add(permiso.strip().upper())
+                continue
+
+            valores.add(
+                str(
+                    getattr(permiso, "codigo", "")
+                    or getattr(permiso, "nombre", "")
+                    or getattr(permiso, "name", "")
+                    or permiso
+                ).strip().upper()
+            )
+
+        return bool({"ALL", "USUARIOS_ADMIN"} & valores)
     except Exception:
         return False
 
@@ -2288,12 +2329,22 @@ def plantillas_whatsapp_admin_view(request):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def analizar_plantilla_whatsapp_view(request):
-    """Analiza el texto localmente; no crea ni modifica nada en Meta."""
+    """
+    Analiza estructura, variables, ejemplos, botones y riesgo comercial.
+    No crea ni modifica nada en Meta.
+    """
     category = str(request.data.get("category") or "UTILITY").upper().strip()
-    components = request.data.get("components") or []
+    components = request.data.get("components")
+
+    if components is None:
+        components = []
+
+    analysis = analizar_estructura_plantilla(components, category)
+
     return Response({
         "ok": True,
-        "analysis": analizar_riesgo_marketing(components, category),
+        "numero_asesor": _get_numero_asesor_request(request),
+        "analysis": analysis,
     }, status=status.HTTP_200_OK)
 
 

@@ -1,3 +1,4 @@
+#Digitales/plantillas_meta.py
 from __future__ import annotations
 
 import re
@@ -146,6 +147,313 @@ def analizar_riesgo_marketing(components: list[dict], category: str = "UTILITY")
         ),
     }
 
+
+
+def _unicos(values: list[str]) -> list[str]:
+    salida: list[str] = []
+    vistos: set[str] = set()
+
+    for value in values:
+        value = str(value or "").strip()
+        if not value or value in vistos:
+            continue
+        vistos.add(value)
+        salida.append(value)
+
+    return salida
+
+
+def _analizar_variables_texto(
+    *,
+    texto: str,
+    ejemplos: list[str],
+    etiqueta: str,
+    errores: list[str],
+    advertencias: list[str],
+) -> dict[str, Any]:
+    variables = _variables(texto)
+    esperado = list(range(1, max(variables) + 1)) if variables else []
+
+    if variables and variables != esperado:
+        errores.append(
+            f"Las variables de {etiqueta} deben ser consecutivas desde {{{{1}}}}; "
+            f"se encontraron: {', '.join(f'{{{{{item}}}}}' for item in variables)}."
+        )
+
+    faltantes = [
+        index
+        for index in variables
+        if index > len(ejemplos) or not str(ejemplos[index - 1] or "").strip()
+    ]
+
+    if faltantes:
+        errores.append(
+            f"Faltan ejemplos para {etiqueta}: "
+            + ", ".join(f"{{{{{item}}}}}" for item in faltantes)
+            + "."
+        )
+
+    if re.search(r"\}\}\s*\{\{", texto or ""):
+        advertencias.append(
+            f"En {etiqueta} hay variables consecutivas sin texto entre ellas; agrega contexto fijo."
+        )
+
+    texto_sin_variables = re.sub(r"\{\{\d+\}\}", "", str(texto or "")).strip()
+    if variables and len(texto_sin_variables) < 12:
+        advertencias.append(
+            f"{etiqueta.capitalize()} contiene muy poco texto fijo frente a sus variables."
+        )
+
+    return {
+        "indices": variables,
+        "cantidad": len(variables),
+        "ejemplos": [str(value or "") for value in ejemplos],
+        "faltantes": faltantes,
+    }
+
+
+def analizar_estructura_plantilla(
+    components: list[dict],
+    category: str = "UTILITY",
+) -> dict[str, Any]:
+    """
+    Valida la estructura completa sin crear ni modificar nada en Meta.
+
+    Devuelve todos los errores y advertencias en una sola respuesta para que
+    el usuario no tenga que corregir un problema, enviar y descubrir el siguiente.
+    """
+    category = str(category or "UTILITY").upper().strip()
+    errores: list[str] = []
+    advertencias: list[str] = []
+    recomendaciones: list[str] = []
+
+    if category not in ("UTILITY", "MARKETING", "AUTHENTICATION"):
+        errores.append("La categoría debe ser UTILITY, MARKETING o AUTHENTICATION.")
+
+    if not isinstance(components, list):
+        return {
+            "valida": False,
+            "puede_enviar": False,
+            "nivel_estructura": "invalida",
+            "score_estructura": 0,
+            "errores": ["components debe ser una lista."],
+            "advertencias": [],
+            "recomendaciones": [],
+            "resumen": {},
+            "riesgo_marketing": analizar_riesgo_marketing([], category),
+        }
+
+    validos = [item for item in components if isinstance(item, dict)]
+    if len(validos) != len(components):
+        errores.append("Todos los componentes deben ser objetos válidos.")
+
+    tipos = [str(item.get("type") or "").upper().strip() for item in validos]
+    permitidos = {"HEADER", "BODY", "FOOTER", "BUTTONS"}
+
+    for tipo in tipos:
+        if tipo not in permitidos:
+            errores.append(f"Tipo de componente no soportado: {tipo or 'sin tipo'}.")
+
+    for tipo in permitidos:
+        cantidad = tipos.count(tipo)
+        if cantidad > 1:
+            errores.append(f"Solo puede existir un componente {tipo}; se encontraron {cantidad}.")
+
+    body_items = [item for item in validos if str(item.get("type") or "").upper() == "BODY"]
+    if not body_items:
+        errores.append("La plantilla debe incluir exactamente un componente BODY.")
+
+    resumen: dict[str, Any] = {
+        "total_componentes": len(validos),
+        "tipos": {tipo: tipos.count(tipo) for tipo in sorted(permitidos)},
+        "longitudes": {},
+        "variables": {},
+        "botones": {"cantidad": 0, "tipos": []},
+    }
+
+    for component in validos:
+        tipo = str(component.get("type") or "").upper().strip()
+        texto = str(component.get("text") or "")
+
+        if tipo == "HEADER":
+            formato = str(component.get("format") or "TEXT").upper().strip()
+            resumen["header_format"] = formato
+
+            if formato not in ("TEXT", "IMAGE", "VIDEO", "DOCUMENT"):
+                errores.append(f"Formato de encabezado no soportado: {formato}.")
+
+            if formato == "TEXT":
+                if not texto.strip():
+                    errores.append("El encabezado de texto no puede estar vacío.")
+                if len(texto) > 60:
+                    errores.append("El encabezado no puede superar 60 caracteres.")
+
+                ejemplos = list(((component.get("example") or {}).get("header_text") or []))
+                resumen["variables"]["header"] = _analizar_variables_texto(
+                    texto=texto,
+                    ejemplos=ejemplos,
+                    etiqueta="el encabezado",
+                    errores=errores,
+                    advertencias=advertencias,
+                )
+
+                if len(_variables(texto)) > 1:
+                    advertencias.append(
+                        "El encabezado contiene más de una variable; simplifícalo para reducir el riesgo de rechazo."
+                    )
+            else:
+                handles = list(((component.get("example") or {}).get("header_handle") or []))
+                if not handles:
+                    errores.append(
+                        f"El encabezado {formato} necesita un header_handle generado por la carga de archivos de Meta."
+                    )
+
+            resumen["longitudes"]["header"] = len(texto)
+
+        elif tipo == "BODY":
+            if not texto.strip():
+                errores.append("El cuerpo de la plantilla es obligatorio.")
+            if len(texto) > 1024:
+                errores.append("El cuerpo no puede superar 1024 caracteres.")
+
+            filas = list(((component.get("example") or {}).get("body_text") or []))
+            ejemplos = list(filas[0]) if filas and isinstance(filas[0], list) else []
+            resumen["variables"]["body"] = _analizar_variables_texto(
+                texto=texto,
+                ejemplos=ejemplos,
+                etiqueta="el cuerpo",
+                errores=errores,
+                advertencias=advertencias,
+            )
+            resumen["longitudes"]["body"] = len(texto)
+
+            if re.match(r"^\s*\{\{\d+\}\}", texto):
+                advertencias.append(
+                    "El cuerpo comienza directamente con una variable; agrega una frase fija antes de ella."
+                )
+            if re.search(r"\{\{\d+\}\}\s*$", texto):
+                advertencias.append(
+                    "El cuerpo termina directamente con una variable; agrega contexto fijo después de ella."
+                )
+
+        elif tipo == "FOOTER":
+            if len(texto) > 60:
+                errores.append("El pie no puede superar 60 caracteres.")
+            if _variables(texto):
+                errores.append("El pie de la plantilla no admite variables.")
+            resumen["longitudes"]["footer"] = len(texto)
+
+        elif tipo == "BUTTONS":
+            buttons = component.get("buttons") or []
+            if not isinstance(buttons, list):
+                errores.append("buttons debe ser una lista.")
+                buttons = []
+
+            if len(buttons) > 3:
+                errores.append("Este editor permite como máximo 3 botones por plantilla.")
+
+            textos_botones: list[str] = []
+            tipos_botones: list[str] = []
+
+            for index, button in enumerate(buttons, start=1):
+                if not isinstance(button, dict):
+                    errores.append(f"El botón {index} no tiene una estructura válida.")
+                    continue
+
+                button_type = str(button.get("type") or "QUICK_REPLY").upper().strip()
+                button_text = str(button.get("text") or "").strip()
+                tipos_botones.append(button_type)
+                textos_botones.append(_sin_acentos(button_text).lower())
+
+                if button_type not in ("QUICK_REPLY", "URL", "PHONE_NUMBER"):
+                    errores.append(f"Tipo de botón no soportado en la posición {index}: {button_type}.")
+
+                if not button_text:
+                    errores.append(f"El botón {index} necesita texto visible.")
+                elif len(button_text) > 25:
+                    errores.append(f"El texto del botón {index} no puede superar 25 caracteres.")
+
+                if button_type == "URL":
+                    url = str(button.get("url") or "").strip()
+                    if not url.startswith(("http://", "https://")):
+                        errores.append(f"La URL del botón {index} debe comenzar con http:// o https://.")
+                    if len(_variables(url)) > 1:
+                        errores.append(f"El botón URL {index} solo debe usar una variable dinámica.")
+                    if _variables(url) and not (button.get("example") or []):
+                        errores.append(f"El botón URL {index} necesita un ejemplo para su variable.")
+
+                if button_type == "PHONE_NUMBER":
+                    phone = re.sub(r"[^0-9+]", "", str(button.get("phone_number") or ""))
+                    if not phone:
+                        errores.append(f"El botón de llamada {index} necesita un número telefónico.")
+
+            duplicados = {
+                value
+                for value in textos_botones
+                if value and textos_botones.count(value) > 1
+            }
+            if duplicados:
+                errores.append("Los textos de los botones no deben repetirse.")
+
+            resumen["botones"] = {
+                "cantidad": len(buttons),
+                "tipos": tipos_botones,
+            }
+
+    try:
+        normalizados = normalizar_componentes_plantilla(validos)
+    except ValueError as exc:
+        errores.append(str(exc))
+        normalizados = validos
+
+    riesgo = analizar_riesgo_marketing(normalizados, category)
+
+    if category == "UTILITY" and not riesgo.get("anclas_utility"):
+        advertencias.append(
+            "No se detectó una referencia clara a una cita, solicitud, folio o proceso previo del cliente."
+        )
+        recomendaciones.append(
+            "Explica qué acción previa del cliente origina el mensaje, por ejemplo: “tu solicitud registrada” o “tu cita programada”."
+        )
+
+    if riesgo.get("parece_marketing"):
+        recomendaciones.append(
+            "Elimina promociones, beneficios, urgencia comercial o invitaciones de compra si deseas conservar UTILITY."
+        )
+
+    body_text = ""
+    if body_items:
+        body_text = str(body_items[0].get("text") or "").strip()
+    if body_text and len(body_text) > 700:
+        recomendaciones.append("Reduce el cuerpo para que el mensaje sea más directo y fácil de revisar.")
+
+    errores = _unicos(errores)
+    advertencias = _unicos(advertencias)
+    recomendaciones = _unicos(recomendaciones)
+
+    penalizacion = min(100, len(errores) * 30 + len(advertencias) * 8)
+    score = max(0, 100 - penalizacion)
+    nivel = "invalida" if errores else "revisar" if advertencias else "correcta"
+
+    return {
+        "valida": not errores,
+        "puede_enviar": not errores,
+        "nivel_estructura": nivel,
+        "score_estructura": score,
+        "errores": errores,
+        "advertencias": advertencias,
+        "recomendaciones": recomendaciones,
+        "resumen": resumen,
+        "riesgo_marketing": riesgo,
+        "requiere_confirmacion_marketing": bool(riesgo.get("requiere_confirmacion")),
+        "mensaje": (
+            "La estructura es válida. Revisa las advertencias antes de enviarla."
+            if not errores and advertencias
+            else "La estructura es válida y no se detectaron problemas técnicos."
+            if not errores
+            else "Corrige los errores de estructura antes de enviar la plantilla a Meta."
+        ),
+    }
 
 def _cache_key(numero_asesor: str) -> str:
     return f"{CACHE_PREFIX}:{numero_asesor}"
