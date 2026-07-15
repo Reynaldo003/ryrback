@@ -409,6 +409,113 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             "telefono": telefono,
             "correo": correo,
         }
+    
+    def _resolver_cliente(self,datos_cliente,*,instance=None,tipo_bloque="trabajo",):
+        cliente_id = datos_cliente.get("cliente_id")
+
+        nombre = str(datos_cliente.get("nombre") or "").strip()
+        telefono = normaliza_tel_mx(datos_cliente.get("telefono") or "")
+        correo = str(datos_cliente.get("correo") or "").strip().lower()
+
+        if tipo_bloque in TIPOS_BLOQUE_SIN_CLIENTE:
+            return None
+
+        cliente = None
+
+        # En edición conserva el cliente actualmente relacionado.
+        if instance is not None and instance.cliente_id:
+            cliente = instance.cliente
+
+        # Si se recibió un ID explícito, úsalo.
+        if cliente_id not in (None, ""):
+            try:
+                cliente = ClienteComercial.objects.get(
+                    pk=int(cliente_id),
+                )
+            except (
+                ClienteComercial.DoesNotExist,
+                ValueError,
+                TypeError,
+            ):
+                raise serializers.ValidationError({
+                    "cliente_id": (
+                        "El cliente indicado no existe."
+                    ),
+                })
+
+        # En registros nuevos reutiliza el cliente del mismo teléfono.
+        if cliente is None and telefono:
+            cliente = (ClienteComercial.objects.filter(telefono=telefono).first())
+
+        # Crea el cliente solamente si todavía no existe.
+        if cliente is None:
+            if not telefono:
+                raise serializers.ValidationError({
+                    "cliente_telefono": (
+                        "El teléfono del cliente es obligatorio."
+                    ),
+                })
+
+            cliente = ClienteComercial(nombre=nombre,telefono=telefono,)
+
+            asignar_correo_cliente(
+                cliente,
+                correo,
+            )
+
+            cliente.save()
+            return cliente
+
+        campos_actualizados = []
+
+        if nombre and getattr(cliente, "nombre", "") != nombre:
+            cliente.nombre = nombre
+            campos_actualizados.append("nombre")
+
+        if telefono and getattr(cliente, "telefono", "") != telefono:
+            telefono_ocupado = (
+                ClienteComercial.objects
+                .filter(telefono=telefono)
+                .exclude(pk=cliente.pk)
+                .exists()
+            )
+
+            if telefono_ocupado:
+                raise serializers.ValidationError({
+                    "cliente_telefono": (
+                        "Ese teléfono ya pertenece a otro cliente."
+                    ),
+                })
+
+            cliente.telefono = telefono
+            campos_actualizados.append("telefono")
+
+        if correo and obtener_correo_cliente(cliente) != correo:
+            asignar_correo_cliente(
+                cliente,
+                correo,
+            )
+
+            nombres_campos = {
+                campo.name
+                for campo in cliente._meta.fields
+            }
+
+            if "correo" in nombres_campos:
+                campos_actualizados.append("correo")
+            elif "correo_electronico" in nombres_campos:
+                campos_actualizados.append(
+                    "correo_electronico"
+                )
+
+        if campos_actualizados:
+            cliente.save(
+                update_fields=list(
+                    dict.fromkeys(campos_actualizados)
+                )
+            )
+
+        return cliente
 
     def _guardar_taller(self, ingreso, datos_taller):
         if not datos_taller:
