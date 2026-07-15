@@ -11,6 +11,7 @@ import time
 import requests
 from django.core.files.base import ContentFile
 from django.core.files.storage import default_storage
+from django.core.cache import cache
 
 from citas.models import normaliza_tel_mx
 
@@ -1263,7 +1264,19 @@ def _normalizar_template_meta(template: dict) -> dict:
 
 
 def obtener_templates_whatsapp(numero_asesor: str) -> list[dict]:
+    """
+    Devuelve las plantillas APROBADAS disponibles para enviar desde la línea.
+
+    Meta es la fuente de verdad. Ya no se usa template_names de sett.py, por lo
+    que una plantilla nueva aparece automáticamente cuando Meta la aprueba.
+    """
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
+    numero_normalizado = str(cfg.get("numero_asesor") or numero_asesor or "").strip()
+    cache_key = f"whatsapp_templates:{numero_normalizado}"
+    cached = cache.get(cache_key)
+
+    if isinstance(cached, list):
+        return cached
 
     waba_id = str(cfg.get("waba_id") or "").strip()
 
@@ -1271,43 +1284,42 @@ def obtener_templates_whatsapp(numero_asesor: str) -> list[dict]:
         raise ValueError("Esta línea no tiene waba_id configurado en WHATSAPP_LINES.")
 
     url = f"https://graph.facebook.com/{GRAPH_VERSION}/{waba_id}/message_templates"
-
     headers = _auth_headers(cfg)
-
     params = {
         "fields": "name,status,category,language,components,id",
-        "limit": 200,
+        "limit": 100,
     }
 
-    r = requests.get(
-        url,
-        headers=headers,
-        params=params,
-        timeout=25,
-    )
+    items = []
+    paginas = 0
 
-    if r.status_code >= 400:
-        raise RuntimeError(f"Meta templates error {r.status_code}: {_meta_error(r)}")
+    while paginas < 10:
+        r = requests.get(url, headers=headers, params=params, timeout=(5, 30))
 
-    data = r.json()
-    items = data.get("data") or []
+        if r.status_code >= 400:
+            raise RuntimeError(f"Meta templates error {r.status_code}: {_meta_error(r)}")
 
-    permitidas = set(cfg.get("template_names") or [])
+        data = r.json()
+        items.extend(data.get("data") or [])
+        after = ((data.get("paging") or {}).get("cursors") or {}).get("after")
+
+        if not after:
+            break
+
+        params["after"] = after
+        paginas += 1
 
     salida = []
 
     for item in items:
         normalizada = _normalizar_template_meta(item)
 
-        if normalizada["status"].upper() != "APPROVED":
-            continue
+        if normalizada["status"].upper() == "APPROVED":
+            salida.append(normalizada)
 
-        if permitidas and normalizada["key"] not in permitidas:
-            continue
-
-        salida.append(normalizada)
-
-    return sorted(salida, key=lambda item: item["title"].lower())
+    salida = sorted(salida, key=lambda item: item["title"].lower())
+    cache.set(cache_key, salida, timeout=45)
+    return salida
 
 def _block_users_api(
     *,

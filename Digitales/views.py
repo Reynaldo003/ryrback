@@ -62,6 +62,14 @@ from .contacto import (
 from notificaciones.services import notificar_mensaje_whatsapp
 from .atribucion_meta import aplicar_pauta_desde_referencia_meta
 from .ia_config import obtener_estado_ia_conversacion
+from .plantillas_meta import (
+    REGLAS_UTILITY,
+    analizar_riesgo_marketing,
+    crear_plantilla_meta,
+    editar_plantilla_meta,
+    eliminar_plantilla_meta,
+    listar_plantillas_meta,
+)
 
 from django.http import JsonResponse
 
@@ -2215,6 +2223,127 @@ def plantillas_whatsapp_view(request):
         }, status=200)
     except Exception as e:
         return Response({"ok": False, "error": str(e), "items": []}, status=400)
+
+
+@api_view(["GET", "POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def plantillas_whatsapp_admin_view(request):
+    """
+    Administración de plantillas de la WABA asociada a la línea del usuario.
+
+    GET  -> lista todos los estados: APPROVED, PENDING, REJECTED, PAUSED, etc.
+    POST -> crea una plantilla y la envía a revisión de Meta.
+    """
+    numero_asesor = _get_numero_asesor_request(request)
+    cfg = WHATSAPP_LINES.get(numero_asesor, {})
+
+    if request.method == "GET":
+        try:
+            items = listar_plantillas_meta(numero_asesor)
+            return Response({
+                "ok": True,
+                "numero_asesor": numero_asesor,
+                "linea": {
+                    "key": cfg.get("key", ""),
+                    "asesor_digital": cfg.get("asesor_digital", ""),
+                    "agencia": cfg.get("agencia", ""),
+                    "business": cfg.get("business", ""),
+                    "phone_number_id": cfg.get("phone_number_id", ""),
+                    "waba_id": cfg.get("waba_id", ""),
+                },
+                "reglas_utility": REGLAS_UTILITY,
+                "items": items,
+            }, status=status.HTTP_200_OK)
+        except MetaAPIError as exc:
+            return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "template_list"})
+        except Exception as exc:
+            logger.exception("ERROR LISTANDO PLANTILLAS META | numero=%s error=%s", numero_asesor, exc)
+            return Response({"ok": False, "error": str(exc), "items": []}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        resultado = crear_plantilla_meta(numero_asesor, dict(request.data or {}))
+        return Response({
+            "ok": True,
+            "numero_asesor": numero_asesor,
+            "mensaje": "Plantilla enviada a revisión de Meta.",
+            **resultado,
+        }, status=status.HTTP_201_CREATED)
+    except MetaAPIError as exc:
+        return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "template_create"})
+    except ValueError as exc:
+        analysis = getattr(exc, "analysis", None)
+        return Response({
+            "ok": False,
+            "error": str(exc),
+            "analysis": analysis,
+            "requires_confirmation": bool(analysis and analysis.get("requiere_confirmacion")),
+        }, status=status.HTTP_409_CONFLICT if analysis else status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        logger.exception("ERROR CREANDO PLANTILLA META | numero=%s error=%s", numero_asesor, exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+@api_view(["POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def analizar_plantilla_whatsapp_view(request):
+    """Analiza el texto localmente; no crea ni modifica nada en Meta."""
+    category = str(request.data.get("category") or "UTILITY").upper().strip()
+    components = request.data.get("components") or []
+    return Response({
+        "ok": True,
+        "analysis": analizar_riesgo_marketing(components, category),
+    }, status=status.HTTP_200_OK)
+
+
+@api_view(["PATCH", "DELETE"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def plantilla_whatsapp_admin_detail_view(request, template_id: str):
+    numero_asesor = _get_numero_asesor_request(request)
+    template_id = str(template_id or "").strip()
+
+    if not template_id:
+        return Response({"ok": False, "error": "Falta template_id."}, status=status.HTTP_400_BAD_REQUEST)
+
+    if request.method == "DELETE":
+        name = str(request.query_params.get("name") or request.data.get("name") or "").strip()
+
+        try:
+            meta = eliminar_plantilla_meta(numero_asesor, template_id, name)
+            return Response({
+                "ok": True,
+                "mensaje": "Plantilla eliminada correctamente.",
+                "meta": meta,
+            }, status=status.HTTP_200_OK)
+        except MetaAPIError as exc:
+            return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "template_delete"})
+        except Exception as exc:
+            logger.exception("ERROR ELIMINANDO PLANTILLA META | numero=%s template=%s error=%s", numero_asesor, template_id, exc)
+            return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+    try:
+        resultado = editar_plantilla_meta(numero_asesor, template_id, dict(request.data or {}))
+        return Response({
+            "ok": True,
+            "numero_asesor": numero_asesor,
+            "mensaje": "Cambios enviados a revisión de Meta.",
+            **resultado,
+        }, status=status.HTTP_200_OK)
+    except MetaAPIError as exc:
+        return _response_meta_error(exc, numero_asesor=numero_asesor, extra={"tipo": "template_edit"})
+    except ValueError as exc:
+        analysis = getattr(exc, "analysis", None)
+        return Response({
+            "ok": False,
+            "error": str(exc),
+            "analysis": analysis,
+            "requires_confirmation": bool(analysis and analysis.get("requiere_confirmacion")),
+        }, status=status.HTTP_409_CONFLICT if analysis else status.HTTP_400_BAD_REQUEST)
+    except Exception as exc:
+        logger.exception("ERROR EDITANDO PLANTILLA META | numero=%s template=%s error=%s", numero_asesor, template_id, exc)
+        return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
 
 # ── Catálogo de Precios ───────────────────────────────────────────────────────
