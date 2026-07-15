@@ -5,7 +5,7 @@ from datetime import time
 from django.db import transaction
 from rest_framework import serializers
 
-from citas.models import ClienteComercial
+from citas.models import ClienteComercial, normaliza_tel_mx
 from .models import HojaIngresos, TallerActividad
 
 
@@ -33,12 +33,6 @@ TIPOS_BLOQUE_SIN_CLIENTE = {
 
 HORA_INICIO_AGENDA = time(7, 0)
 HORA_FIN_AGENDA = time(20, 0)
-
-
-def normalizar_telefono(value):
-    """Normalización sencilla sin asumir que el teléfono es único."""
-    return re.sub(r"\D", "", str(value or ""))
-
 
 def dividir_servicios(value):
     """
@@ -158,6 +152,11 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             "medio_concertacion",
             "pauta_origen",
             "venta_mano_obra",
+            "long_drive",
+            "hora_promesa",
+            "pre_picking_hecho",
+            "pre_picking_notas",
+            "asesor_digital",
             "asesor_digital",
             "asesor_piso",
             "creado_en",
@@ -386,66 +385,23 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
 
         return datos_taller
 
-    def _extraer_datos_cliente(
-        self,
-        validated_data,
-    ):
-        cliente_id = validated_data.pop(
-            "cliente_id",
-            None,
-        )
+    def _extraer_datos_cliente(self,validated_data,):
+        cliente_id = validated_data.pop("cliente_id",None,)
+        cliente_valor = str(validated_data.pop("cliente","",) or "").strip()
 
-        cliente_valor = str(
-            validated_data.pop(
-                "cliente",
-                "",
-            )
-            or ""
-        ).strip()
-
-        # Nunca convertir el nombre a ID.
-        if (
-            cliente_valor.isdigit()
-            and cliente_id is None
-        ):
+        if (cliente_valor.isdigit() and cliente_id is None):
             cliente_id = int(cliente_valor)
             cliente_valor = ""
 
-        nombre = str(
-            validated_data.pop(
-                "cliente_nombre",
-                "",
-            )
+        nombre = str(validated_data.pop("cliente_nombre","",)
             or cliente_valor
-            or validated_data.get(
-                "nombre_cliente",
-                "",
-            )
-            or ""
-        ).strip()
+            or validated_data.get("nombre_cliente","",) or "").strip()
 
-        telefono = normaliza_tel_mx(
-            validated_data.pop(
-                "telefono",
-                "",
-            )
-            or validated_data.pop(
-                "cliente_telefono",
-                "",
-            )
-        )
+        telefono = normaliza_tel_mx(validated_data.pop("telefono","",)
+            or validated_data.pop("cliente_telefono","",))
 
-        correo = str(
-            validated_data.pop(
-                "correo",
-                "",
-            )
-            or validated_data.pop(
-                "cliente_correo_electronico",
-                "",
-            )
-            or ""
-        ).strip().lower()
+        correo = str(validated_data.pop("correo","",)
+            or validated_data.pop("cliente_correo_electronico","",) or "").strip().lower()
 
         return {
             "cliente_id": cliente_id,
@@ -453,118 +409,6 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             "telefono": telefono,
             "correo": correo,
         }
-
-    def _resolver_cliente(
-        self,
-        datos_cliente,
-        *,
-        instance=None,
-        tipo_bloque="trabajo",
-    ):
-        cliente_id = datos_cliente.get("cliente_id")
-        nombre = str(
-            datos_cliente.get("nombre") or ""
-        ).strip()
-        telefono = normaliza_tel_mx(
-            datos_cliente.get("telefono") or ""
-        )
-        correo = str(
-            datos_cliente.get("correo") or ""
-        ).strip().lower()
-
-        if tipo_bloque in TIPOS_BLOQUE_SIN_CLIENTE:
-            return None
-
-        cliente = None
-
-        # 1. En edición, conservar primero el cliente asociado.
-        if instance is not None and instance.cliente_id:
-            cliente = instance.cliente
-
-        # 2. Si el frontend envió un ID válido, usar ese cliente.
-        if cliente_id:
-            try:
-                cliente = ClienteComercial.objects.get(
-                    pk=cliente_id,
-                )
-            except (
-                ClienteComercial.DoesNotExist,
-                ValueError,
-                TypeError,
-            ):
-                raise serializers.ValidationError({
-                    "cliente_id": (
-                        "El cliente indicado no existe."
-                    ),
-                })
-
-        # 3. Para un registro nuevo, reutilizar el cliente por teléfono.
-        # ClienteComercial.telefono tiene unique=True.
-        if cliente is None and telefono:
-            cliente = (
-                ClienteComercial.objects
-                .filter(telefono=telefono)
-                .first()
-            )
-
-        # 4. Crear solamente si no existe un cliente con ese teléfono.
-        if cliente is None:
-            if not telefono:
-                raise serializers.ValidationError({
-                    "cliente_telefono": (
-                        "El teléfono del cliente es obligatorio."
-                    ),
-                })
-
-            cliente = ClienteComercial(
-                nombre=nombre,
-                telefono=telefono,
-                correo=correo,
-            )
-
-        campos_actualizados = []
-
-        if nombre and cliente.nombre != nombre:
-            cliente.nombre = nombre
-            campos_actualizados.append("nombre")
-
-        if telefono and cliente.telefono != telefono:
-            # Solo debería cambiarse cuando no pertenece a otro cliente.
-            existe_otro = (
-                ClienteComercial.objects
-                .filter(telefono=telefono)
-                .exclude(pk=cliente.pk)
-                .exists()
-            )
-
-            if existe_otro:
-                raise serializers.ValidationError({
-                    "cliente_telefono": (
-                        "Ese teléfono ya pertenece a otro cliente."
-                    ),
-                })
-
-            cliente.telefono = telefono
-            campos_actualizados.append("telefono")
-
-        if correo and cliente.correo != correo:
-            cliente.correo = correo
-            campos_actualizados.append("correo")
-
-        if cliente.pk:
-            if campos_actualizados:
-                cliente.save(
-                    update_fields=list(
-                        dict.fromkeys(
-                            campos_actualizados +
-                            ["actualizado_en"]
-                        )
-                    )
-                )
-        else:
-            cliente.save()
-
-        return cliente
 
     def _guardar_taller(self, ingreso, datos_taller):
         if not datos_taller:
