@@ -56,6 +56,7 @@ whatsapp_url_bianca = 'https://graph.facebook.com/v22.0/1118159131375259/message
 whatsapp_url_denisse = 'https://graph.facebook.com/v22.0/1134322799754327/messages'
 whatsapp_url_marelly = 'https://graph.facebook.com/v22.0/1113085168553604/messages'
 whatsapp_url_edgar = 'https://graph.facebook.com/v22.0/1208561865665780/messages'
+whatsapp_url_dulce = 'https://graph.facebook.com/v22.0/1285910144598050/messages'
 
 whatsapp_numero_default = "522712638803"
 whatsapp_numero_liz = "522721111244"
@@ -64,6 +65,7 @@ whatsapp_numero_bianca = "522712837999"
 whatsapp_numero_denisse = "522721986539"
 whatsapp_numero_marelly = "522871232641"
 whatsapp_numero_edgar = "527831263814"
+whatsapp_numero_dulce = "527821820706"
 
 WHATSAPP_LINES = {
     whatsapp_numero_default: {
@@ -159,6 +161,19 @@ WHATSAPP_LINES = {
         "business": "Nuevos",
         "responder_ia": False,
         "template_names": ["cita_confirmacion", "seguimiento_saludo"],
+        **meta_ads_linea(META_ADS_TUXPAN_POZA_RICA),
+    },
+    whatsapp_numero_dulce: {
+        "key": "dulce",
+        "phone_number_id": "1285910144598050",
+        "waba_id": "2510059126106412",
+        "access_token": whatsapp_token_tuxpan,
+        "asesor_digital": "Dulce Abigail Garcia Olivares",
+        "messages_url": whatsapp_url_dulce,
+        "agencia": "VW Poza Rica",
+        "business": "Nuevos",
+        "responder_ia": False,
+        "template_names": [],
         **meta_ads_linea(META_ADS_TUXPAN_POZA_RICA),
     },
 }
