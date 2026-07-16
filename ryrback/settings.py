@@ -54,6 +54,8 @@ ALLOWED_HOSTS = [
     "graficos-entrega-txp.vercel.app",
     "graficos-entrega-pzr.vercel.app",
     "graficos-entrega-txt.vercel.app",
+
+    "attentive-endearing-bargraph.ngrok-free.dev",
 ]
 
 
@@ -87,6 +89,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://graficos-entrega-txt.vercel.app",
     
     "https://bitacora-mantenimiento-showroom.vercel.app",
+    "https://attentive-endearing-bargraph.ngrok-free.dev",
 ]
 
 # Application definition
@@ -205,6 +208,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://graficos-entrega-txt.vercel.app",
 
     "https://bitacora-mantenimiento-showroom.vercel.app",
+    "https://attentive-endearing-bargraph.ngrok-free.dev",
 ]
 
 
