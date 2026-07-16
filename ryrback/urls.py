@@ -4,7 +4,7 @@ from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
 
-from rest_framework_simplejwt.views import TokenRefreshView
+
 
 urlpatterns = [
     path("admin/", admin.site.urls),
@@ -27,7 +27,6 @@ urlpatterns = [
     path("inventario/", include("inventario.urls")),
     path("hojaingresos/", include("hojaingresos.urls")),
     path("api/notificaciones/", include("notificaciones.urls")),
-    path("conformidad/api/auth/token/refresh/",TokenRefreshView.as_view(),name="token_refresh",),
     path("api/BitacoraMantenimiento/", include("BitacoraMantenimiento.urls")),
 ]
 
