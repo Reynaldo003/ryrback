@@ -1433,6 +1433,7 @@ def chats_list(request):
             "whatsapp_bloqueado": bool(getattr(exp, "whatsapp_bloqueado", False)),
             "whatsapp_bloqueado_at": exp.whatsapp_bloqueado_at.isoformat() if exp.whatsapp_bloqueado_at else None,
             "whatsapp_bloqueado_motivo": exp.whatsapp_bloqueado_motivo or "",
+            "last_message_at": exp.ultimo_mensaje.created_at.isoformat() if exp.ultimo_mensaje else None,
         })
 
     return Response(data, status=status.HTTP_200_OK)
