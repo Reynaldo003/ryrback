@@ -1,14 +1,15 @@
 # jdpower/ia_resumen.py
 import json
 import logging
-import os
+
 
 from google import genai
 from google.genai import types
 
 logger = logging.getLogger(__name__)
 
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+from django.conf import settings
+GEMINI_API_KEY = getattr(settings, "GEMINI_API_KEY", "")
 
 _client = None
 
