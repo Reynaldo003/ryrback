@@ -273,49 +273,48 @@ class AdminRolesView(APIView):
 
     def get(self, request):
         roles = Rol.objects.all().order_by("id_rol")
+
         data = [
             {
-                "id_rol": r.id_rol,
-                "nombre": r.nombre,
-                "descripcion": r.descripcion,
+                "id_rol": rol.id_rol,
+                "nombre": rol.nombre,
+                "descripcion": rol.descripcion,
             }
-            for r in roles
+            for rol in roles
         ]
+
         return Response(data)
 
-    def post(self, request):          # ← misma sangría que def get
-        nombre = request.data.get("nombre", "").strip()
+    def post(self, request):
+        nombre = str(request.data.get("nombre", "")).strip()
+        descripcion = str(request.data.get("descripcion", "")).strip()
+
         if not nombre:
-            return Response({"detail": "El nombre es requerido."}, status=status.HTTP_400_BAD_REQUEST)
-        
+            return Response(
+                {"detail": "El nombre es requerido."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if Rol.objects.filter(nombre__iexact=nombre).exists():
+            return Response(
+                {"detail": "Ya existe un rol con ese nombre."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
         rol = Rol.objects.create(
             nombre=nombre,
-            descripcion=request.data.get("descripcion", " "),
+            descripcion=descripcion or "Sin descripción",
         )
+
         return Response(
-            {"id_rol": rol.id_rol, "nombre": rol.nombre, "descripcion": rol.descripcion},
+            {
+                "id_rol": rol.id_rol,
+                "nombre": rol.nombre,
+                "descripcion": rol.descripcion,
+            },
             status=status.HTTP_201_CREATED,
         )
     
-class AdminRolesView(APIView):
-    authentication_classes = [CRMJWTAuthentication]
-    permission_classes = [IsAuthenticated, IsAdminRole]
-
-    def get(self, request):
-        roles = Rol.objects.all().order_by("id_rol")
-
-        data = [
-            {
-                "id_rol": r.id_rol,
-                "nombre": r.nombre,
-                "descripcion": r.descripcion,
-            }
-            for r in roles
-        ]
-
-        return Response(data)
-
-
 class AdminPermisosCatalogView(APIView):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated, IsAdminRole]
