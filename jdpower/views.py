@@ -8,6 +8,14 @@ from rest_framework.response import Response
 from .models import EncuestaJDPower, EncuestaJDPowerServicio
 from .serializers import EncuestaJDPowerSerializer, EncuestaJDPowerServicioSerializer
 
+from .metricas import (
+    calcular_metricas,
+    calcular_por_concesionaria,
+    calcular_alertas,
+    extraer_comentarios,
+)
+from .ia_resumen import generar_resumen_ia
+
 
 DB_ALIAS = "sqlserver"
 
@@ -29,6 +37,69 @@ def numero_seguro(valor):
         return int(valor)
     except (TypeError, ValueError):
         return 0
+
+
+MESES_ES = [
+    "", "enero", "febrero", "marzo", "abril", "mayo", "junio",
+    "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre",
+]
+
+
+def _label_periodo(anio, mes):
+    if es_filtro_vacio(anio):
+        return "Todos los periodos"
+    if es_filtro_vacio(mes):
+        return f"Año {anio}"
+    try:
+        return f"{MESES_ES[int(mes)]} {anio}"
+    except (ValueError, IndexError):
+        return str(anio)
+
+
+def _calcular_periodo_anterior(anio, mes):
+    """
+    Si hay mes específico -> regresa el mes previo (diciembre del año
+    anterior si es enero). Si solo hay año -> regresa el año anterior
+    completo. Si no hay filtro de periodo -> no hay comparación posible.
+    """
+    if es_filtro_vacio(anio):
+        return None, None
+
+    try:
+        anio_int = int(anio)
+    except ValueError:
+        return None, None
+
+    if es_filtro_vacio(mes):
+        return str(anio_int - 1), "Todos"
+
+    try:
+        mes_int = int(mes)
+    except ValueError:
+        return None, None
+
+    if mes_int == 1:
+        return str(anio_int - 1), "12"
+
+    return str(anio_int), str(mes_int - 1)
+
+
+def _queryset_periodo(model_cls, db_alias, anio, mes):
+    qs = model_cls.objects.using(db_alias).all()
+
+    if not es_filtro_vacio(anio):
+        try:
+            qs = qs.filter(periodo__year=int(anio))
+        except ValueError:
+            pass
+
+    if not es_filtro_vacio(mes):
+        try:
+            qs = qs.filter(periodo__month=int(mes))
+        except ValueError:
+            pass
+
+    return qs
 
 class EncuestaJDPowerPagination(PageNumberPagination):
     page_size = 100
@@ -417,6 +488,100 @@ class EncuestaJDPowerViewSet(viewsets.ReadOnlyModelViewSet):
                 "ciudades": sorted(ciudades, key=lambda texto: texto.lower()),
             }
         )
+        
+    @action(detail=False, methods=["post"], url_path="resumen-ia")
+    def resumen_ia(self, request):
+        anio = request.query_params.get("anio", "Todos")
+        mes = request.query_params.get("mes", "Todos")
+
+        campos = (
+            "codigo_concesionaria",
+            "concesionaria",
+            "q1_satisfaccion_general",
+            "p3_recomendacion_distribuidor",
+            "q1_1_razones_calificacion",
+            "q3_comentarios_adicionales",
+            "p1_1_comentarios_auto",
+        )
+
+        qs_actual = self.aplicar_filtros(
+            EncuestaJDPower.objects.using(DB_ALIAS).all()
+        )
+        datos_actual = list(qs_actual.values(*campos)[:10000])
+
+        anio_ant, mes_ant = _calcular_periodo_anterior(anio, mes)
+
+        datos_anterior = []
+        if anio_ant is not None:
+            qs_anterior = _queryset_periodo(
+                EncuestaJDPower, DB_ALIAS, anio_ant, mes_ant
+            )
+            datos_anterior = list(qs_anterior.values(*campos)[:10000])
+
+        campo_sat = "q1_satisfaccion_general"
+        campo_rec = "p3_recomendacion_distribuidor"
+
+        metricas_actual = calcular_metricas(datos_actual, campo_sat, campo_rec)
+        metricas_anterior = (
+            calcular_metricas(datos_anterior, campo_sat, campo_rec)
+            if datos_anterior
+            else None
+        )
+
+        comparacion = {
+            "periodo_actual": _label_periodo(anio, mes),
+            "periodo_anterior": _label_periodo(anio_ant, mes_ant) if anio_ant else "N/A",
+            "satisfaccion_actual": metricas_actual["satisfaccion_promedio"],
+            "satisfaccion_anterior": metricas_anterior["satisfaccion_promedio"] if metricas_anterior else None,
+            "nps_actual": metricas_actual["nps"],
+            "nps_anterior": metricas_anterior["nps"] if metricas_anterior else None,
+        }
+
+        if metricas_anterior:
+            comparacion["variacion_satisfaccion"] = round(
+                metricas_actual["satisfaccion_promedio"] - metricas_anterior["satisfaccion_promedio"], 2
+            )
+            comparacion["variacion_nps"] = metricas_actual["nps"] - metricas_anterior["nps"]
+
+        alertas = []
+        if datos_anterior:
+            por_conc_actual = calcular_por_concesionaria(datos_actual, campo_sat, campo_rec)
+            por_conc_anterior = calcular_por_concesionaria(datos_anterior, campo_sat, campo_rec)
+            alertas = calcular_alertas(por_conc_actual, por_conc_anterior)
+
+        comentarios = extraer_comentarios(
+            datos_actual,
+            {
+                "q1_1_razones_calificacion": "Razón de calificación",
+                "q3_comentarios_adicionales": "Comentario adicional",
+                "p1_1_comentarios_auto": "Comentario sobre el auto",
+            },
+            campo_sat,
+        )
+
+        resultado_ia = generar_resumen_ia(
+            tipo_modulo="Ventas",
+            metricas=metricas_actual,
+            comparacion=comparacion,
+            alertas=alertas,
+            comentarios=comentarios,
+        )
+
+        return Response(
+            {
+                "ok": resultado_ia.get("ok", False),
+                "error": resultado_ia.get("error"),
+                "periodo_label": _label_periodo(anio, mes),
+                "metricas": metricas_actual,
+                "comparacion": comparacion,
+                "alertas_concesionarias": alertas,
+                "resumen_ejecutivo": resultado_ia.get("resumen_ejecutivo", ""),
+                "tendencia": resultado_ia.get("tendencia", ""),
+                "top_quejas": resultado_ia.get("top_quejas", []),
+                "fortalezas": resultado_ia.get("fortalezas", []),
+                "recomendaciones": resultado_ia.get("recomendaciones", []),
+            }
+        )
 
 
 #  SERVICIO  
@@ -803,5 +968,99 @@ class EncuestaJDPowerServicioViewSet(viewsets.ReadOnlyModelViewSet):
                 "regiones": sorted(regiones, key=lambda texto: texto.lower()),
                 "zonas": sorted(zonas, key=lambda texto: texto.lower()),
                 "estados": sorted(estados, key=lambda texto: texto.lower()),
+            }
+        )
+
+    @action(detail=False, methods=["post"], url_path="resumen-ia")
+    def resumen_ia(self, request):
+        anio = request.query_params.get("anio", "Todos")
+        mes = request.query_params.get("mes", "Todos")
+
+        campos = (
+            "codigo_concesionaria",
+            "concesionaria",
+            "q1_satisfaccion_general",
+            "q3_recomendacion",
+            "q1_1_razones_calificacion",
+            "q4_comentarios_servicio",
+            "p1_1_comentarios_auto",
+        )
+
+        qs_actual = self.aplicar_filtros(
+            EncuestaJDPowerServicio.objects.using(DB_ALIAS).all()
+        )
+        datos_actual = list(qs_actual.values(*campos)[:10000])
+
+        anio_ant, mes_ant = _calcular_periodo_anterior(anio, mes)
+
+        datos_anterior = []
+        if anio_ant is not None:
+            qs_anterior = _queryset_periodo(
+                EncuestaJDPowerServicio, DB_ALIAS, anio_ant, mes_ant
+            )
+            datos_anterior = list(qs_anterior.values(*campos)[:10000])
+
+        campo_sat = "q1_satisfaccion_general"
+        campo_rec = "q3_recomendacion"
+
+        metricas_actual = calcular_metricas(datos_actual, campo_sat, campo_rec)
+        metricas_anterior = (
+            calcular_metricas(datos_anterior, campo_sat, campo_rec)
+            if datos_anterior
+            else None
+        )
+
+        comparacion = {
+            "periodo_actual": _label_periodo(anio, mes),
+            "periodo_anterior": _label_periodo(anio_ant, mes_ant) if anio_ant else "N/A",
+            "satisfaccion_actual": metricas_actual["satisfaccion_promedio"],
+            "satisfaccion_anterior": metricas_anterior["satisfaccion_promedio"] if metricas_anterior else None,
+            "nps_actual": metricas_actual["nps"],
+            "nps_anterior": metricas_anterior["nps"] if metricas_anterior else None,
+        }
+
+        if metricas_anterior:
+            comparacion["variacion_satisfaccion"] = round(
+                metricas_actual["satisfaccion_promedio"] - metricas_anterior["satisfaccion_promedio"], 2
+            )
+            comparacion["variacion_nps"] = metricas_actual["nps"] - metricas_anterior["nps"]
+
+        alertas = []
+        if datos_anterior:
+            por_conc_actual = calcular_por_concesionaria(datos_actual, campo_sat, campo_rec)
+            por_conc_anterior = calcular_por_concesionaria(datos_anterior, campo_sat, campo_rec)
+            alertas = calcular_alertas(por_conc_actual, por_conc_anterior)
+
+        comentarios = extraer_comentarios(
+            datos_actual,
+            {
+                "q1_1_razones_calificacion": "Razón de calificación",
+                "q4_comentarios_servicio": "Comentario de servicio",
+                "p1_1_comentarios_auto": "Comentario sobre el auto",
+            },
+            campo_sat,
+        )
+
+        resultado_ia = generar_resumen_ia(
+            tipo_modulo="Servicio",
+            metricas=metricas_actual,
+            comparacion=comparacion,
+            alertas=alertas,
+            comentarios=comentarios,
+        )
+
+        return Response(
+            {
+                "ok": resultado_ia.get("ok", False),
+                "error": resultado_ia.get("error"),
+                "periodo_label": _label_periodo(anio, mes),
+                "metricas": metricas_actual,
+                "comparacion": comparacion,
+                "alertas_concesionarias": alertas,
+                "resumen_ejecutivo": resultado_ia.get("resumen_ejecutivo", ""),
+                "tendencia": resultado_ia.get("tendencia", ""),
+                "top_quejas": resultado_ia.get("top_quejas", []),
+                "fortalezas": resultado_ia.get("fortalezas", []),
+                "recomendaciones": resultado_ia.get("recomendaciones", []),
             }
         )
