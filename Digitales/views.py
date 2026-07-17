@@ -1409,13 +1409,12 @@ def chats_list(request):
                 dt = timezone.localtime(dt)
             last_time_str = dt.strftime("%I:%M %p").lower()
         else:
+            dt = None
             last_time_str = ""
-
         estado_ia = obtener_estado_ia_conversacion(
             numero_asesor=numero_asesor,
             expediente=exp,
         )
-
         data.append({
             "id": exp.id,
             "telefono": exp.cliente.telefono,
@@ -1426,6 +1425,7 @@ def chats_list(request):
             "unread": _unread_count(exp, numero_asesor),
             "last_text": exp.last_text or "",
             "last_time": last_time_str,
+            "last_message_at": dt.isoformat() if dt else None,
             "numero_asesor": numero_asesor,
             "ia_estado": estado_ia,
             "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False),
