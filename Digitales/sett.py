@@ -155,7 +155,7 @@ WHATSAPP_LINES = {
         "phone_number_id": "1208561865665780",
         "waba_id": "1271948571437191",
         "access_token": whatsapp_token_tuxpan,
-        "asesor_digital": "Edgar Omar Nogera Solis",
+        "asesor_digital": "Edgar Omar Noguera Solis",
         "messages_url": whatsapp_url_edgar,
         "agencia": "VW Tuxpan",
         "business": "Nuevos",
