@@ -21,6 +21,7 @@ class ExpedienteDigital(models.Model):
     canal_contacto = models.CharField(max_length=120, blank=True, default="")
     pauta = models.TextField(blank=True, default="")
     estado = models.CharField(max_length=120, blank=True, default="")
+    motivo_descalificacion = models.CharField(max_length=255,blank=True,default="",)
     auto_interes = models.CharField(max_length=255, blank=True, default="")
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")

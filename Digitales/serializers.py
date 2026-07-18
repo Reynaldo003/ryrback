@@ -475,6 +475,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "canal_contacto",
             "pauta",
             "estado",
+            "motivo_descalificacion",
             "asesor_digital",
             "asesor_ventas",
             "auto_interes",
@@ -556,6 +557,44 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "creado",
             "actualizado",
         ]
+    
+    def validate(self, attrs):
+        estado_actual = (
+            getattr(self.instance, "estado", "")
+            if self.instance
+            else ""
+        )
+
+        motivo_actual = (
+            getattr(self.instance, "motivo_descalificacion", "")
+            if self.instance
+            else ""
+        )
+
+        estado = str(
+            attrs.get("estado", estado_actual) or ""
+        ).strip()
+
+        motivo = str(
+            attrs.get(
+                "motivo_descalificacion",
+                motivo_actual,
+            ) or ""
+        ).strip()
+
+        if estado.lower() == "descalificado":
+            if not motivo:
+                raise serializers.ValidationError({
+                    "motivo_descalificacion":
+                        "Selecciona el motivo de descalificación."
+                })
+
+            attrs["motivo_descalificacion"] = motivo
+
+        elif "estado" in attrs:
+            attrs["motivo_descalificacion"] = ""
+
+        return attrs
 
     def get_tiempo_respuesta_asesor_min(self, obj):
         return diff_minutes_safe(
