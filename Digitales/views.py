@@ -1437,6 +1437,67 @@ def chats_list(request):
 
     return Response(data, status=status.HTTP_200_OK)
 
+def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
+    """
+    Recupera la referencia del anuncio desde los primeros mensajes entrantes.
+
+    No depende de que el mensaje original esté dentro de la página visible del
+    historial. Usa exclusivamente el raw almacenado por el webhook y, cuando
+    no existe referral, devuelve al menos la pauta guardada en el expediente.
+    """
+    if not expediente:
+        return None
+
+    serializer = WhatsAppMessageSerializer()
+
+    mensajes_iniciales = (
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+            direction=MensajeWhatsApp.Direccion.IN,
+        )
+        .only("id", "wa_message_id", "direction", "raw", "created_at")
+        .order_by("created_at", "id")[:50]
+    )
+
+    for mensaje in mensajes_iniciales:
+        preview = serializer.get_origin_preview(mensaje)
+
+        if not preview:
+            continue
+
+        return {
+            **preview,
+            "message_id": mensaje.wa_message_id or str(mensaje.id),
+            "created_at": mensaje.created_at.isoformat() if mensaje.created_at else None,
+        }
+
+    pauta = str(getattr(expediente, "pauta", "") or "").strip()
+
+    if pauta:
+        return {
+            "pauta": pauta,
+            "nombre_campana": pauta,
+            "nombre_anuncio": "",
+            "sucursal": str(getattr(expediente, "agencia", "") or "").strip(),
+            "headline": pauta,
+            "body": "Prospecto originado desde una campaña de Meta.",
+            "source_url": "",
+            "image_url": "",
+            "media_type": "",
+            "source_type": "",
+            "source_id": "",
+            "origen": "expediente_pauta",
+            "referral": {},
+            "atribucion": {},
+            "message_id": "",
+            "created_at": None,
+        }
+
+    return None
+
+
 @api_view(["GET"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -1492,10 +1553,19 @@ def contacto_por_telefono(request):
         expediente=exp,
     ) if exp else None
 
+    prospecto_data = ProspectoSerializer(exp).data if exp else None
+
+    if prospecto_data is not None:
+        prospecto_data["origen_preview"] = _obtener_origen_preview_para_contacto(
+            expediente=exp,
+            tel=tel,
+            numero_asesor=numero_asesor,
+        )
+
     return Response({
         "ok": True,
         "numero_asesor_activo": numero_asesor,
-        "prospecto": ProspectoSerializer(exp).data if exp else None,
+        "prospecto": prospecto_data,
         "ia_estado": ia_estado,
         "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data,
         "paginacion": {
