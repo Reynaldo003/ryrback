@@ -4,7 +4,7 @@ import unicodedata
 
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
@@ -91,6 +91,12 @@ class HojaIngresosViewSet(ModelViewSet):
     # Taller.jsx espera un arreglo directo, no {count, results}.
     pagination_class = None
 
+    def get_permissions(self):
+       
+        if self.action in ("list", "retrieve", "update", "partial_update"):
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
     def get_queryset(self):
         queryset = (
             HojaIngresos.objects
@@ -100,7 +106,11 @@ class HojaIngresosViewSet(ModelViewSet):
         )
 
         user = self.request.user
-        if not es_administrador_taller(user):
+
+        if not getattr(user, "is_authenticated", False):
+            # Visitante público (sin login): solo ve VW Córdoba.
+            queryset = queryset.filter(agencia__iexact="VW Cordoba")
+        elif not es_administrador_taller(user):
             agencias_usuario = obtener_agencias_usuario(user)
             if not agencias_usuario:
                 return queryset.none()
@@ -189,12 +199,22 @@ class HojaIngresosViewSet(ModelViewSet):
         return queryset
 
     def _validar_agencia(self, agencia):
-        if es_administrador_taller(self.request.user):
+        user = self.request.user
+
+        if not getattr(user, "is_authenticated", False):
+            # Visitante público: solo puede modificar VW Córdoba.
+            if normalizar_texto(agencia) != normalizar_texto("VW Cordoba"):
+                raise PermissionDenied(
+                    "No tienes permiso para trabajar con esa agencia."
+                )
+            return
+
+        if es_administrador_taller(user):
             return
 
         permitidas = {
             normalizar_texto(item)
-            for item in obtener_agencias_usuario(self.request.user)
+            for item in obtener_agencias_usuario(user)
         }
 
         if not permitidas or normalizar_texto(agencia) not in permitidas:
