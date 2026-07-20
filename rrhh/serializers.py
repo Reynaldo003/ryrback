@@ -5,6 +5,7 @@ from .models import (
     CandidatoReclutamiento,
     Puesto,
     EvaluacionPuesto,
+    Colaborador,   # <-- agregar
 )
 
 class CandidatoReclutamientoSerializer(serializers.ModelSerializer):
@@ -213,3 +214,8 @@ class EvaluacionPuestoSerializer(serializers.ModelSerializer):
         model = EvaluacionPuesto
         fields = '__all__'
         read_only_fields = ['fecha', 'creado_at']
+
+class ColaboradorSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Colaborador
+        fields = "__all__"

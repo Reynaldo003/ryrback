@@ -167,3 +167,44 @@ class EvaluacionPuesto(models.Model):
 
     def __str__(self):
         return f"{self.puesto.nombre} - {self.colaborador_nombre} - {self.fecha}"
+    
+class Colaborador(models.Model):
+    id_colaborador = models.AutoField(primary_key=True)
+
+    agencia = models.CharField(max_length=100)
+    nombre = models.CharField(max_length=200)
+    puesto = models.CharField(max_length=200)
+
+    fecha_alta = models.DateField()
+
+    fecha_baja = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    nss = models.CharField(
+        max_length=20,
+        blank=True,
+        default=""
+    )
+
+    curp = models.CharField(
+        max_length=18,
+        blank=True,
+        default=""
+    )
+
+    fecha_nacimiento = models.DateField(
+        null=True,
+        blank=True
+    )
+
+    creado_at = models.DateTimeField(auto_now_add=True)
+    actualizado_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "rrhh_colaboradores"
+        ordering = ["nombre"]
+
+    def __str__(self):
+        return self.nombre

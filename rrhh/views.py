@@ -4,12 +4,20 @@ from django.db.models import Q
 from rest_framework import viewsets, status
 from rest_framework.response import Response   # <-- AGREGA ESTA LÍNEA
 
-from .models import VacanteReclutamiento, Puesto, EvaluacionPuesto
+from .models import (
+    VacanteReclutamiento,
+    Puesto,
+    EvaluacionPuesto,
+    Colaborador,
+)
+
 from .serializers import (
     VacanteReclutamientoSerializer,
     PuestoSerializer,
     EvaluacionPuestoSerializer,
+    ColaboradorSerializer,
 )
+
 
 class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
     serializer_class = VacanteReclutamientoSerializer
@@ -118,24 +126,26 @@ class VacanteReclutamientoViewSet(viewsets.ModelViewSet):
 
 
 class PuestoViewSet(viewsets.ModelViewSet):
+    queryset = Puesto.objects.all()
     serializer_class = PuestoSerializer
     lookup_field = "id_puesto"
-    
+
     def get_queryset(self):
         queryset = Puesto.objects.filter(activo=True).order_by("nombre")
-        
+
         categoria = self.request.query_params.get("categoria")
         if categoria:
             queryset = queryset.filter(categoria=categoria)
-        
+
         buscar = self.request.query_params.get("buscar")
         if buscar:
             queryset = queryset.filter(nombre__icontains=buscar)
-        
+
         return queryset
 
 
 class EvaluacionPuestoViewSet(viewsets.ModelViewSet):
+    queryset = EvaluacionPuesto.objects.all()
     serializer_class = EvaluacionPuestoSerializer
     lookup_field = "id_evaluacion"
     
@@ -146,4 +156,29 @@ class EvaluacionPuestoViewSet(viewsets.ModelViewSet):
         if puesto_id:
             queryset = queryset.filter(puesto_id=puesto_id)
         
+        return queryset
+    
+class ColaboradorViewSet(viewsets.ModelViewSet):
+    queryset = Colaborador.objects.all()
+    serializer_class = ColaboradorSerializer
+    lookup_field = "id_colaborador"
+
+    def get_queryset(self):
+
+        queryset = Colaborador.objects.all().order_by("nombre")
+
+        agencia = self.request.query_params.get("agencia")
+        buscar = self.request.query_params.get("buscar")
+
+        if agencia:
+            queryset = queryset.filter(agencia=agencia)
+
+        if buscar:
+            queryset = queryset.filter(
+                Q(nombre__icontains=buscar)
+                | Q(puesto__icontains=buscar)
+                | Q(curp__icontains=buscar)
+                | Q(nss__icontains=buscar)
+            )
+
         return queryset

@@ -5,6 +5,7 @@ from .views import (
     VacanteReclutamientoViewSet,
     PuestoViewSet,
     EvaluacionPuestoViewSet,
+    ColaboradorViewSet,
 )
 
 router = DefaultRouter()
@@ -25,6 +26,12 @@ router.register(
     r"evaluaciones-puestos",
     EvaluacionPuestoViewSet,
     basename="rrhh-evaluaciones-puestos",
+)
+
+router.register(
+    r"colaboradores",
+    ColaboradorViewSet,
+    basename="rrhh-colaboradores",
 )
 
 urlpatterns = [
