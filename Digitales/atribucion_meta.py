@@ -663,6 +663,19 @@ def resolver_pauta_por_tipos_probables(
         "intentos": intentos,
     }
 
+def detectar_canal_desde_referencia(referencia: dict) -> str:
+    """
+    Si el mensaje trae un referral de anuncio (Meta), Se marca como
+    "Facebook"
+    """
+    if not isinstance(referencia, dict):
+        return ""
+
+    if referencia.get("source_id") or referencia.get("source_type") or referencia.get("source_url"):
+        return "Facebook"
+
+    return ""
+
 def aplicar_pauta_desde_referencia_meta(
     *,
     expediente,
@@ -675,6 +688,13 @@ def aplicar_pauta_desde_referencia_meta(
     referencia = obtener_referencia_meta(mensaje_whatsapp)
     if not referencia:
         return {"ok": False, "motivo": "sin_referencia_meta"}
+
+    canal_detectado = detectar_canal_desde_referencia(referencia)
+    if canal_detectado and expediente.canal_contacto != canal_detectado:
+        expediente.__class__.objects.filter(pk=expediente.pk).update(
+            canal_contacto=canal_detectado
+        )
+        expediente.canal_contacto = canal_detectado
 
     id_fuente = extraer_id_fuente(referencia)
     tipo_fuente = normalizar_tipo_fuente(referencia.get("source_type"))
