@@ -20,6 +20,8 @@ ADMIN_PERMISSIONS = {
     "TALLER_ADMIN",
 }
 
+# Agencias que se pueden consultar/editar SIN sesión (visualizadores públicos).
+AGENCIAS_PUBLICAS = {"VW Cordoba", "VW Orizaba"}
 
 def normalizar_texto(value):
     texto = str(value or "").strip()
@@ -108,8 +110,24 @@ class HojaIngresosViewSet(ModelViewSet):
         user = self.request.user
 
         if not getattr(user, "is_authenticated", False):
-            # Visitante público (sin login): solo ve VW Córdoba.
-            queryset = queryset.filter(agencia__iexact="VW Cordoba")
+            # Visitante público (sin login): debe indicar cuál agencia
+            # pública quiere ver, vía ?agencia=VW Cordoba / VW Orizaba.
+            agencia_solicitada = normalizar_texto(
+                self.request.query_params.get("agencia") or ""
+            )
+            agencias_publicas_norm = {
+                normalizar_texto(item) for item in AGENCIAS_PUBLICAS
+            }
+
+            if agencia_solicitada not in agencias_publicas_norm:
+                return queryset.none()
+
+            filtro_publico = Q()
+            for agencia_publica in AGENCIAS_PUBLICAS:
+                if normalizar_texto(agencia_publica) == agencia_solicitada:
+                    filtro_publico |= Q(agencia__iexact=agencia_publica)
+
+            queryset = queryset.filter(filtro_publico)
         elif not es_administrador_taller(user):
             agencias_usuario = obtener_agencias_usuario(user)
             if not agencias_usuario:
@@ -202,8 +220,11 @@ class HojaIngresosViewSet(ModelViewSet):
         user = self.request.user
 
         if not getattr(user, "is_authenticated", False):
-            # Visitante público: solo puede modificar VW Córdoba.
-            if normalizar_texto(agencia) != normalizar_texto("VW Cordoba"):
+            # Visitante público: solo puede modificar agencias públicas.
+            agencias_publicas_norm = {
+                normalizar_texto(item) for item in AGENCIAS_PUBLICAS
+            }
+            if normalizar_texto(agencia) not in agencias_publicas_norm:
                 raise PermissionDenied(
                     "No tienes permiso para trabajar con esa agencia."
                 )
