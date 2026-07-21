@@ -57,6 +57,7 @@ ALLOWED_HOSTS = [
 
     "attentive-endearing-bargraph.ngrok-free.dev",
     "hoja-ingresos-cba.vercel.app",
+    "hoja-ingresos-oba.vercel.app",
 ]
 
 
@@ -92,6 +93,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://bitacora-mantenimiento-showroom.vercel.app",
     "https://attentive-endearing-bargraph.ngrok-free.dev",
     "https://hoja-ingresos-cba.vercel.app",
+    "https://hoja-ingresos-oba.vercel.app",
 ]
 
 # Application definition
@@ -212,6 +214,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://bitacora-mantenimiento-showroom.vercel.app",
     "https://attentive-endearing-bargraph.ngrok-free.dev",
     "https://hoja-ingresos-cba.vercel.app",
+    "https://hoja-ingresos-oba.vercel.app",
 ]
 
 
