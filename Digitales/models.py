@@ -23,6 +23,7 @@ class ExpedienteDigital(models.Model):
     estado = models.CharField(max_length=120, blank=True, default="")
     motivo_descalificacion = models.CharField(max_length=255,blank=True,default="",)
     auto_interes = models.CharField(max_length=255, blank=True, default="")
+    anio_auto = models.PositiveSmallIntegerField(null=True, blank=True)
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")

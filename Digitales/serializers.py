@@ -479,6 +479,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "asesor_digital",
             "asesor_ventas",
             "auto_interes",
+            "anio_auto",
             "comentarios",
 
             "enganche_monto",
