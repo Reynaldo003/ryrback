@@ -176,28 +176,15 @@ class Colaborador(models.Model):
     puesto = models.CharField(max_length=200)
 
     fecha_alta = models.DateField()
+    fecha_baja = models.DateField(null=True, blank=True)
 
-    fecha_baja = models.DateField(
-        null=True,
-        blank=True
-    )
+    motivo_baja = models.TextField(null=True, blank=True)
 
-    nss = models.CharField(
-        max_length=20,
-        blank=True,
-        default=""
-    )
+    activo = models.BooleanField(default=True)   # <-- NUEVO
 
-    curp = models.CharField(
-        max_length=18,
-        blank=True,
-        default=""
-    )
-
-    fecha_nacimiento = models.DateField(
-        null=True,
-        blank=True
-    )
+    nss = models.CharField(max_length=20, blank=True, default="")
+    curp = models.CharField(max_length=18, blank=True, default="")
+    fecha_nacimiento = models.DateField(null=True, blank=True)
 
     creado_at = models.DateTimeField(auto_now_add=True)
     actualizado_at = models.DateTimeField(auto_now=True)

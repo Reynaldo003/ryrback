@@ -2,7 +2,8 @@ import json
 
 from django.db.models import Q
 from rest_framework import viewsets, status
-from rest_framework.response import Response   # <-- AGREGA ESTA LÍNEA
+from rest_framework.response import Response  
+from rest_framework.decorators import action   
 
 from .models import (
     VacanteReclutamiento,
@@ -164,7 +165,6 @@ class ColaboradorViewSet(viewsets.ModelViewSet):
     lookup_field = "id_colaborador"
 
     def get_queryset(self):
-
         queryset = Colaborador.objects.all().order_by("nombre")
 
         agencia = self.request.query_params.get("agencia")
@@ -182,3 +182,35 @@ class ColaboradorViewSet(viewsets.ModelViewSet):
             )
 
         return queryset
+
+    @action(detail=True, methods=["post"])
+    def dar_baja(self, request, id_colaborador=None):
+        colaborador = self.get_object()
+
+        fecha_baja = request.data.get("fecha_baja")
+        motivo_baja = request.data.get("motivo_baja")
+
+        if not fecha_baja or not motivo_baja:
+            return Response(
+                {"error": "Fecha y motivo de baja son requeridos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        colaborador.activo = False
+        colaborador.fecha_baja = fecha_baja
+        colaborador.motivo_baja = motivo_baja
+        colaborador.save()
+
+        return Response(ColaboradorSerializer(colaborador).data)
+
+    @action(detail=True, methods=["post"])
+    def reactivar(self, request, id_colaborador=None):
+        """Por si tu jefe también quiere poder 'deshacer' una baja."""
+        colaborador = self.get_object()
+
+        colaborador.activo = True
+        colaborador.fecha_baja = None
+        colaborador.motivo_baja = None
+        colaborador.save()
+
+        return Response(ColaboradorSerializer(colaborador).data)
