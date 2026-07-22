@@ -44,6 +44,8 @@ from .ia_config import (
 from .ia_catalogo import (
     catalogo_vehiculos_list,
     catalogo_vehiculo_detail,
+    catalogo_vehiculo_upload_media,
+    catalogo_vehiculo_eliminar_media,
 )
 
 router = DefaultRouter()
@@ -110,5 +112,15 @@ urlpatterns = [
         "catalogo/vehiculos/<int:vehiculo_id>/",
         catalogo_vehiculo_detail,
         name="catalogo-vehiculo-detail",
+    ),
+    path(
+        "catalogo/vehiculos/<int:vehiculo_id>/upload/",
+        catalogo_vehiculo_upload_media,
+        name="catalogo-vehiculo-upload",
+    ),
+    path(
+        "catalogo/vehiculos/<int:vehiculo_id>/media/",
+        catalogo_vehiculo_eliminar_media,
+        name="catalogo-vehiculo-eliminar-media",
     ),
 ]

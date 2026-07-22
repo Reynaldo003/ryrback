@@ -15,6 +15,11 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
+from django.utils.text import slugify as django_slugify
+from django.core.files.storage import default_storage
+from rest_framework.parsers import MultiPartParser, FormParser
+from rest_framework.decorators import parser_classes
+
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
 from .models import CatalogoVehiculos
@@ -501,3 +506,124 @@ def catalogo_vehiculo_detail(request, vehiculo_id: int):
             },
             status=status.HTTP_500_INTERNAL_SERVER_ERROR,
         )
+def _slug_vehiculo(modelo: str, ano) -> str:
+    base = django_slugify(str(modelo or "").strip()).replace("-", "_") or "vehiculo"
+    ano_txt = str(ano or "").strip()
+    return f"{base}_{ano_txt}" if ano_txt else base
+
+
+def _guardar_archivo_catalogo(file_obj, *, slug: str, subcarpeta: str) -> str:
+    original_name = getattr(file_obj, "name", "archivo") or "archivo"
+    nombre_limpio = original_name.replace(" ", "_")
+    path = f"catalogo/{slug}/{subcarpeta}/{nombre_limpio}"
+
+    try:
+        file_obj.seek(0)
+    except Exception:
+        pass
+
+    # default_storage.save agrega un sufijo aleatorio si ya existe ese nombre,
+    # así que nunca pisa un archivo existente.
+    return default_storage.save(path, file_obj)
+
+
+@api_view(["POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def catalogo_vehiculo_upload_media(request, vehiculo_id: int):
+    item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
+
+    if not item:
+        return Response({"ok": False, "error": "Vehículo no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+    tipo = str(request.data.get("tipo") or "").strip().lower()
+
+    if tipo not in ("ficha", "imagenes", "videos"):
+        return Response(
+            {"ok": False, "error": "tipo debe ser 'ficha', 'imagenes' o 'videos'."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if not item.modelo or not item.ano:
+        return Response(
+            {"ok": False, "error": "Guarda modelo y año del vehículo antes de subir archivos."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    files = request.FILES.getlist("files")
+
+    if not files:
+        return Response({"ok": False, "error": "Faltan archivos."}, status=status.HTTP_400_BAD_REQUEST)
+
+    slug = _slug_vehiculo(item.modelo, item.ano)
+
+    try:
+        if tipo == "ficha":
+            saved_path = _guardar_archivo_catalogo(files[0], slug=slug, subcarpeta="ficha")
+            item.url_ficha_tecnica = saved_path
+            item.save(update_fields=["url_ficha_tecnica"])
+
+        elif tipo == "imagenes":
+            actuales = list(item.imagenes or [])
+            for f in files:
+                actuales.append(_guardar_archivo_catalogo(f, slug=slug, subcarpeta="imagenes"))
+            item.imagenes = actuales
+            item.save(update_fields=["imagenes"])
+
+        else:  # videos
+            actuales = list(item.videos or [])
+            for f in files:
+                actuales.append(_guardar_archivo_catalogo(f, slug=slug, subcarpeta="videos"))
+            item.videos = actuales
+            item.save(update_fields=["videos"])
+
+    except Exception as exc:
+        logger.exception(
+            "ERROR SUBIENDO MEDIA CATALOGO | vehiculo_id=%s tipo=%s error=%s",
+            vehiculo_id, tipo, str(exc),
+        )
+        return Response(
+            {"ok": False, "error": "No se pudo guardar el archivo.", "detalle": str(exc)},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+
+    return Response({"ok": True, "item": _serializar_vehiculo(item)}, status=status.HTTP_200_OK)
+
+
+@api_view(["DELETE"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+def catalogo_vehiculo_eliminar_media(request, vehiculo_id: int):
+    item = CatalogoVehiculos.objects.filter(id=vehiculo_id).first()
+
+    if not item:
+        return Response({"ok": False, "error": "Vehículo no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+    tipo = str(request.query_params.get("tipo") or "").strip().lower()
+    ruta = str(request.query_params.get("ruta") or "").strip()
+
+    if tipo not in ("ficha", "imagenes", "videos") or not ruta:
+        return Response(
+            {"ok": False, "error": "Faltan parámetros tipo y ruta."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    if tipo == "ficha":
+        if item.url_ficha_tecnica == ruta:
+            item.url_ficha_tecnica = ""
+            item.save(update_fields=["url_ficha_tecnica"])
+    elif tipo == "imagenes":
+        item.imagenes = [x for x in (item.imagenes or []) if x != ruta]
+        item.save(update_fields=["imagenes"])
+    else:
+        item.videos = [x for x in (item.videos or []) if x != ruta]
+        item.save(update_fields=["videos"])
+
+    try:
+        if default_storage.exists(ruta):
+            default_storage.delete(ruta)
+    except Exception as exc:
+        logger.warning("NO SE PUDO BORRAR ARCHIVO FISICO | ruta=%s error=%s", ruta, str(exc))
+
+    return Response({"ok": True, "item": _serializar_vehiculo(item)}, status=status.HTTP_200_OK)        
