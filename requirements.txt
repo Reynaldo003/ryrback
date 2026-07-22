@@ -7,3 +7,4 @@ whitenoise==6.7.0
 requests==2.27.1
 pyodbc==5.3.0
 mssql-django==1.6
+PyMuPDF==1.28.0

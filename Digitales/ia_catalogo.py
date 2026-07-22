@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 import logging
+import os
+from django.core.files.base import ContentFile
 
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, DatabaseError
@@ -54,6 +56,8 @@ def _serializar_vehiculo(item: CatalogoVehiculos) -> dict[str, Any]:
         "ultima_actualizacion": item.ultima_actualizacion.isoformat() if item.ultima_actualizacion else None,
         "activo": item.activo,
         "creado": item.creado.isoformat() if item.creado else None,
+        "url_ficha_tecnica": item.url_ficha_tecnica,
+        "ficha_tecnica_thumbnail": item.ficha_tecnica_thumbnail,
     }
 
 
@@ -525,7 +529,31 @@ def _guardar_archivo_catalogo(file_obj, *, slug: str, subcarpeta: str) -> str:
     # default_storage.save agrega un sufijo aleatorio si ya existe ese nombre,
     # así que nunca pisa un archivo existente.
     return default_storage.save(path, file_obj)
+ 
+def _generar_thumbnail_pdf(saved_pdf_path: str, *, slug: str) -> str:
+    try:
+        import fitz  # PyMuPDF
+    except ImportError:
+        logger.warning("PyMuPDF no instalado, no se genera miniatura de PDF.")
+        return ""
 
+    try:
+        with default_storage.open(saved_pdf_path, "rb") as f:
+            pdf_bytes = f.read()
+
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        page = doc.load_page(0)
+        pix = page.get_pixmap(matrix=fitz.Matrix(0.6, 0.6))
+        png_bytes = pix.tobytes("png")
+        doc.close()
+
+        base_name = os.path.splitext(os.path.basename(saved_pdf_path))[0]
+        thumb_path = f"catalogo/{slug}/ficha/{base_name}_thumb.png"
+
+        return default_storage.save(thumb_path, ContentFile(png_bytes))
+    except Exception as exc:
+        logger.warning("NO SE PUDO GENERAR MINIATURA PDF | path=%s error=%s", saved_pdf_path, str(exc))
+        return "" 
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
@@ -561,8 +589,19 @@ def catalogo_vehiculo_upload_media(request, vehiculo_id: int):
     try:
         if tipo == "ficha":
             saved_path = _guardar_archivo_catalogo(files[0], slug=slug, subcarpeta="ficha")
+
+            thumb_anterior = item.ficha_tecnica_thumbnail
+            if thumb_anterior:
+                try:
+                    if default_storage.exists(thumb_anterior):
+                        default_storage.delete(thumb_anterior)
+                except Exception:
+                    pass
+
             item.url_ficha_tecnica = saved_path
-            item.save(update_fields=["url_ficha_tecnica"])
+            item.ficha_tecnica_thumbnail = _generar_thumbnail_pdf(saved_path, slug=slug)
+
+            item.save(update_fields=["url_ficha_tecnica", "ficha_tecnica_thumbnail"])
 
         elif tipo == "imagenes":
             actuales = list(item.imagenes or [])
@@ -590,7 +629,6 @@ def catalogo_vehiculo_upload_media(request, vehiculo_id: int):
 
     return Response({"ok": True, "item": _serializar_vehiculo(item)}, status=status.HTTP_200_OK)
 
-
 @api_view(["DELETE"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -611,8 +649,17 @@ def catalogo_vehiculo_eliminar_media(request, vehiculo_id: int):
 
     if tipo == "ficha":
         if item.url_ficha_tecnica == ruta:
+            thumb_a_borrar = item.ficha_tecnica_thumbnail
             item.url_ficha_tecnica = ""
-            item.save(update_fields=["url_ficha_tecnica"])
+            item.ficha_tecnica_thumbnail = ""
+            item.save(update_fields=["url_ficha_tecnica", "ficha_tecnica_thumbnail"])
+
+            if thumb_a_borrar:
+                try:
+                    if default_storage.exists(thumb_a_borrar):
+                        default_storage.delete(thumb_a_borrar)
+                except Exception:
+                    pass
     elif tipo == "imagenes":
         item.imagenes = [x for x in (item.imagenes or []) if x != ruta]
         item.save(update_fields=["imagenes"])

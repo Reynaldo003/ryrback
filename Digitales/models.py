@@ -375,6 +375,7 @@ class CatalogoVehiculos(models.Model):
     ficha_tecnica = models.JSONField(default=dict, blank=True)
 
     url_ficha_tecnica = models.CharField(max_length=800, blank=True, default="")
+    ficha_tecnica_thumbnail = models.CharField(max_length=800, blank=True, default="")
     imagenes = models.JSONField(default=list, blank=True)
     videos = models.JSONField(default=list, blank=True)
     ultima_actualizacion = models.DateField(null=True, blank=True)
