@@ -544,6 +544,8 @@ class CitasViewSet(ModelViewSet):
     serializer_class = CitaSerializer
 
     acciones_publicas = {
+        "list",
+        "retrieve",
         "create",
     }
 
