@@ -234,8 +234,8 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
     agencia_linea = (cfg_linea.get("agencia") or "").strip()
     business_linea = (cfg_linea.get("business") or "").strip()
     asesor_digital_linea = (cfg_linea.get("asesor_digital") or "").strip()
-
-    exp, _ = ExpedienteDigital.objects.get_or_create(cliente=cliente)
+    
+    exp, expediente_creado = (ExpedienteDigital.objects.get_or_create(cliente=cliente))
 
     cambios = []
 
@@ -250,7 +250,9 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
             setattr(exp, campo, valor)
             cambios.append(campo)
 
-    
+    if expediente_creado and not (exp.canal_contacto or "").strip():
+        exp.canal_contacto = "Facebook"
+        cambios.append("canal_contacto")    
 
     if not (exp.estado or "").strip():
         exp.estado = "Contactado"

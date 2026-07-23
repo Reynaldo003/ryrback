@@ -691,10 +691,12 @@ def aplicar_pauta_desde_referencia_meta(
     canal_detectado = detectar_canal_desde_referencia(referencia)
     canal_actual = str(getattr(expediente, "canal_contacto", "") or "").strip()
 
-    if canal_detectado and not canal_actual:
+    if (canal_detectado and canal_actual != canal_detectado):
         expediente.__class__.objects.filter(pk=expediente.pk).update(
-            canal_contacto=canal_detectado
+            canal_contacto=canal_detectado,
+            actualizado=timezone.now(),
         )
+
         expediente.canal_contacto = canal_detectado
 
     id_fuente = extraer_id_fuente(referencia)

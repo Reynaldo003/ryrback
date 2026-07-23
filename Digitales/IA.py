@@ -1221,9 +1221,11 @@ def _get_or_create_cliente_y_expediente(
 
     expediente, _ = ExpedienteDigital.objects.get_or_create(
         cliente=cliente,
-        defaults={"agencia": agencia_linea, "business": business_linea,
-                  "asesor_digital": asesor_digital_linea,
-                  "canal_contacto": "WhatsApp", "estado": "Contactado"},
+        defaults={
+            "agencia": agencia_linea, 
+            "business": business_linea,
+            "asesor_digital": asesor_digital_linea,
+            "estado": "Contactado"},
     )
 
     cambios = []
@@ -1233,8 +1235,6 @@ def _get_or_create_cliente_y_expediente(
     ]:
         if valor and getattr(expediente, campo) != valor:
             setattr(expediente, campo, valor); cambios.append(campo)
-    if expediente.canal_contacto != "WhatsApp":
-        expediente.canal_contacto = "WhatsApp"; cambios.append("canal_contacto")
     if not (expediente.estado or "").strip():
         expediente.estado = "Contactado"; cambios.append("estado")
 
