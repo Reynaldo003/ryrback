@@ -601,23 +601,18 @@ def resolver_pauta_desde_meta_ads(
     }
 
 def debe_reemplazar_pauta(expediente, resultado: dict) -> bool:
-    """
-    Regla operativa:
-    - La pauta solo se asigna una vez, cuando el expediente todavía
-      no tiene ninguna.
-    - Si el expediente ya trae una pauta (asignada a mano o de un
-      contacto anterior por Facebook), nunca se vuelve a tocar.
-    """
-    pauta_actual = str(getattr(expediente, "pauta", "") or "").strip()
-    pauta_nueva = str((resultado or {}).get("pauta") or "").strip()
+    pauta_actual = str(
+        getattr(expediente, "pauta", "") or ""
+    ).strip()
+
+    pauta_nueva = str(
+        (resultado or {}).get("pauta") or ""
+    ).strip()
 
     if not pauta_nueva:
         return False
 
-    if pauta_actual:
-        return False
-
-    return True
+    return pauta_actual != pauta_nueva
 
 def resolver_pauta_por_tipos_probables(
     id_fuente: str,
@@ -730,19 +725,31 @@ def aplicar_pauta_desde_referencia_meta(
         return resultado
 
     if debe_reemplazar_pauta(expediente, resultado):
-        pauta_nueva = resultado.get("pauta") or ""
+        pauta_anterior = str(
+            getattr(expediente, "pauta", "") or ""
+        ).strip()
 
-        expediente.__class__.objects.filter(pk=expediente.pk).update(
-            pauta=pauta_nueva
+        pauta_nueva = str(
+            resultado.get("pauta") or ""
+        ).strip()
+
+        ahora = timezone.now()
+
+        expediente.__class__.objects.filter(
+            pk=expediente.pk
+        ).update(
+            pauta=pauta_nueva,
+            actualizado=ahora,
         )
 
         expediente.pauta = pauta_nueva
+        expediente.actualizado = ahora
+
         resultado["pauta_aplicada"] = True
+        resultado["pauta_anterior"] = pauta_anterior
+        resultado["pauta_actual"] = pauta_nueva
     else:
         resultado["pauta_aplicada"] = False
         resultado["pauta_actual"] = expediente.pauta
-
-    resultado["referencia"] = referencia
-    resultado["numero_asesor"] = numero_asesor
 
     return resultado
