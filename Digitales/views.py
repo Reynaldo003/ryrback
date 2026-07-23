@@ -250,9 +250,7 @@ def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", num
             setattr(exp, campo, valor)
             cambios.append(campo)
 
-    if not (exp.canal_contacto or "").strip():
-        exp.canal_contacto = "WhatsApp"
-        cambios.append("canal_contacto")
+    
 
     if not (exp.estado or "").strip():
         exp.estado = "Contactado"

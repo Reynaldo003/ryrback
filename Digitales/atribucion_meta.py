@@ -603,9 +603,10 @@ def resolver_pauta_desde_meta_ads(
 def debe_reemplazar_pauta(expediente, resultado: dict) -> bool:
     """
     Regla operativa:
-    - Si llega una nueva pauta real desde Meta, representa el interés actual.
-    - Por eso sí debe reemplazar la pauta anterior.
-    - Solo no reemplaza si la pauta nueva viene vacía.
+    - La pauta solo se asigna una vez, cuando el expediente todavía
+      no tiene ninguna.
+    - Si el expediente ya trae una pauta (asignada a mano o de un
+      contacto anterior por Facebook), nunca se vuelve a tocar.
     """
     pauta_actual = str(getattr(expediente, "pauta", "") or "").strip()
     pauta_nueva = str((resultado or {}).get("pauta") or "").strip()
@@ -613,7 +614,10 @@ def debe_reemplazar_pauta(expediente, resultado: dict) -> bool:
     if not pauta_nueva:
         return False
 
-    return pauta_actual != pauta_nueva
+    if pauta_actual:
+        return False
+
+    return True
 
 def resolver_pauta_por_tipos_probables(
     id_fuente: str,
@@ -690,7 +694,9 @@ def aplicar_pauta_desde_referencia_meta(
         return {"ok": False, "motivo": "sin_referencia_meta"}
 
     canal_detectado = detectar_canal_desde_referencia(referencia)
-    if canal_detectado and expediente.canal_contacto != canal_detectado:
+    canal_actual = str(getattr(expediente, "canal_contacto", "") or "").strip()
+
+    if canal_detectado and not canal_actual:
         expediente.__class__.objects.filter(pk=expediente.pk).update(
             canal_contacto=canal_detectado
         )
