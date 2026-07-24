@@ -61,6 +61,7 @@ from .contacto import (
 )
 from notificaciones.services import notificar_mensaje_whatsapp
 from .atribucion_meta import aplicar_pauta_desde_referencia_meta
+from .audio_whatsapp import es_archivo_audio, preparar_media_whatsapp
 from .ia_config import obtener_estado_ia_conversacion
 from .plantillas_meta import (
     REGLAS_UTILITY,
@@ -1860,19 +1861,38 @@ def pausar_ia_por_intervencion_humana(expediente, numero_asesor):
 @parser_classes([MultiPartParser, FormParser])
 def enviar_media_view(request):
     numero_asesor = _get_numero_asesor_request(request)
-    to = normaliza_tel_mx(request.data.get("to", ""))
-    caption = (request.data.get("text") or "").strip()
-    reply_to_message_id = (request.data.get("reply_to_message_id") or "").strip()
+
+    to = normaliza_tel_mx(
+        request.data.get("to", "")
+    )
+
+    caption = (
+        request.data.get("text")
+        or ""
+    ).strip()
+
+    reply_to_message_id = (
+        request.data.get("reply_to_message_id")
+        or ""
+    ).strip()
+
     files = request.FILES.getlist("files") or []
+
     if not to:
         return Response(
-            {"ok": False, "error": "Falta to"},
+            {
+                "ok": False,
+                "error": "Falta to",
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     if not files:
         return Response(
-            {"ok": False, "error": "Faltan files"},
+            {
+                "ok": False,
+                "error": "Faltan files",
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -1881,158 +1901,275 @@ def enviar_media_view(request):
         numero_asesor=numero_asesor,
     )
 
-    if getattr(exp, "whatsapp_bloqueado", False):
+    if getattr(
+        exp,
+        "whatsapp_bloqueado",
+        False,
+    ):
         return Response(
             {
                 "ok": False,
-                "error": "Este contacto está bloqueado en WhatsApp. Desbloquéalo antes de enviar mensajes.",
+                "error": (
+                    "Este contacto está bloqueado en WhatsApp. "
+                    "Desbloquéalo antes de enviar mensajes."
+                ),
                 "tel": to,
                 "numero_asesor": numero_asesor,
             },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    exp.touch_contacto_asesor(save_now=True)
+    exp.touch_contacto_asesor(
+        save_now=True
+    )
 
-    sent, failed = [], []
+    sent = []
+    failed = []
 
     for file_obj in files:
-        name = getattr(file_obj, "name", "archivo")
-        ct = getattr(file_obj, "content_type", "") or (mimetypes.guess_type(name)[0] or "")
+        original_name = (
+            getattr(file_obj, "name", "archivo")
+            or "archivo"
+        )
 
-        if (ct or "").startswith("image/"):
-            wtype = "image"
-        elif (ct or "").startswith("video/"):
-            wtype = "video"
-        elif (ct or "").startswith("audio/"):
-            wtype = "audio"
-        else:
-            wtype = "document"
+        original_ct = (
+            getattr(file_obj, "content_type", "")
+            or mimetypes.guess_type(original_name)[0]
+            or "application/octet-stream"
+        )
 
         local_media_url = ""
 
         try:
-            local_media_url = _guardar_upload_whatsapp_local(
+            # Para audio:
+            #   convierte WebM/M4A/WAV/etc. a OGG/Opus.
+            #
+            # Para otros archivos:
+            #   devuelve el mismo archivo sin cambios.
+            with preparar_media_whatsapp(
                 file_obj,
-                numero_asesor=numero_asesor,
-                telefono=to,
-                content_type=ct,
-            )
+                filename=original_name,
+                content_type=original_ct,
+            ) as prepared:
 
-            up = subir_media_whatsapp(
-                file_obj,
-                numero_asesor=numero_asesor,
-                filename=name,
-                content_type=ct,
-            )
+                send_file = prepared.archivo
+                name = prepared.nombre
 
-            media_id = up.get("id") or ""
-            if not media_id:
-                raise RuntimeError(f"No regresó media_id: {up}")
+                ct = (
+                    prepared.content_type
+                    or "application/octet-stream"
+                )
 
-            wa_res = enviar_media_whatsapp(
-                to=to,
-                media_id=media_id,
-                media_type=wtype,
-                numero_asesor=numero_asesor,
-                caption=caption if caption else "",
-                filename=name if wtype == "document" else "",
-                reply_to_message_id=reply_to_message_id,
-            )
+                # Determinar el tipo de mensaje que se enviará a Meta.
+                if ct.startswith("image/"):
+                    wtype = "image"
 
-            wa_message_id = _extraer_wa_message_id(wa_res)
+                elif ct.startswith("video/"):
+                    wtype = "video"
 
-            body = caption if caption else ""
-            body = f"{body}\n[FILE:{name}]".strip() if body else f"[FILE:{name}]"
+                elif es_archivo_audio(name, ct):
+                    wtype = "audio"
 
-            MensajeWhatsApp.objects.create(
-                telefono=to,
-                numero_asesor=numero_asesor,
-                cliente=cliente,
-                direction="out",
-                body=body,
-                wa_message_id=wa_message_id,
-                status="accepted",
-                raw={
+                else:
+                    wtype = "document"
+
+                # Regresar el puntero al inicio antes de guardar localmente.
+                try:
+                    send_file.seek(0)
+                except Exception:
+                    pass
+
+                local_media_url = _guardar_upload_whatsapp_local(
+                    send_file,
+                    numero_asesor=numero_asesor,
+                    telefono=to,
+                    content_type=ct,
+                )
+
+                # _guardar_upload_whatsapp_local ya consumió el archivo.
+                # Debemos volver al inicio antes de subirlo a Meta.
+                try:
+                    send_file.seek(0)
+                except Exception:
+                    pass
+
+                up = subir_media_whatsapp(
+                    send_file,
+                    numero_asesor=numero_asesor,
+                    filename=name,
+                    content_type=ct,
+                )
+
+                media_id = up.get("id") or ""
+
+                if not media_id:
+                    raise RuntimeError(
+                        f"Meta no regresó media_id: {up}"
+                    )
+
+                wa_res = enviar_media_whatsapp(
+                    to=to,
+                    media_id=media_id,
+                    media_type=wtype,
+                    numero_asesor=numero_asesor,
+
+                    # WhatsApp no permite caption en audios.
+                    # enviar_media_whatsapp ya limita el caption
+                    # a image, video y document.
+                    caption=caption if caption else "",
+
+                    filename=(
+                        name
+                        if wtype == "document"
+                        else ""
+                    ),
+
+                    reply_to_message_id=reply_to_message_id,
+                )
+
+                wa_message_id = _extraer_wa_message_id(
+                    wa_res
+                )
+
+                body = caption if caption else ""
+
+                if body:
+                    body = (
+                        f"{body}\n[FILE:{name}]"
+                    ).strip()
+                else:
+                    body = f"[FILE:{name}]"
+
+                raw = {
                     "provider": "meta",
                     "meta_upload": up,
                     "send": wa_res,
                     "meta_type": wtype,
+
+                    # Nombre que realmente se envió.
                     "filename": name,
+
+                    # Nombre que llegó desde el navegador.
+                    "original_filename": prepared.nombre_original,
+
+                    # MIME que realmente se envió.
                     "content_type": ct,
+
+                    # MIME original del navegador.
+                    "original_content_type": original_ct,
+
+                    # Permite diagnosticar si FFmpeg fue utilizado.
+                    "audio_converted": prepared.convertido,
+
                     "numero_asesor": numero_asesor,
                     "media_id": media_id,
                     "local_media_url": local_media_url,
-                    "media_link": local_media_url if wtype in ("image", "video", "audio") else "",
-                    "document_link": local_media_url if wtype == "document" else "",
+
+                    "media_link": (
+                        local_media_url
+                        if wtype in (
+                            "image",
+                            "video",
+                            "audio",
+                        )
+                        else ""
+                    ),
+
+                    "document_link": (
+                        local_media_url
+                        if wtype == "document"
+                        else ""
+                    ),
+
                     "reply_to": reply_to_message_id,
-                },
-            )
-            
-            #pausar_ia_por_intervencion_humana(exp, numero_asesor)
-
-            sent.append(
-                {
-                    "filename": name,
-                    "type": wtype,
-                    "data": wa_res,
-                    "wa_message_id": wa_message_id,
-                    "local_media_url": local_media_url,
                 }
-            )
 
-        except MetaAPIError as e:
+                MensajeWhatsApp.objects.create(
+                    telefono=to,
+                    numero_asesor=numero_asesor,
+                    cliente=cliente,
+                    direction="out",
+                    body=body,
+                    wa_message_id=wa_message_id,
+                    status="accepted",
+                    raw=raw,
+                )
+
+                sent.append(
+                    {
+                        "filename": name,
+                        "original_filename": (
+                            prepared.nombre_original
+                        ),
+                        "type": wtype,
+                        "content_type": ct,
+                        "converted": prepared.convertido,
+                        "data": wa_res,
+                        "wa_message_id": wa_message_id,
+                        "local_media_url": local_media_url,
+                    }
+                )
+
+        except MetaAPIError as error:
             logger.warning(
-                "FALLO META ENVIAR MEDIA | to=%s numero_asesor=%s file=%s retryable=%s meta=%s",
+                (
+                    "FALLO META ENVIAR MEDIA | "
+                    "to=%s numero_asesor=%s "
+                    "file=%s retryable=%s meta=%s"
+                ),
                 to,
                 numero_asesor,
-                name,
-                e.retryable,
-                e.to_dict(),
+                original_name,
+                error.retryable,
+                error.to_dict(),
             )
 
             _guardar_mensaje_fallido(
                 to=to,
                 numero_asesor=numero_asesor,
                 cliente=cliente,
-                body=f"[FILE:{name}] failed",
-                error=e,
+                body=f"[FILE:{original_name}] failed",
+                error=error,
                 extra_raw={
                     "request_type": "media",
-                    "filename": name,
-                    "content_type": ct,
+                    "filename": original_name,
+                    "content_type": original_ct,
                     "local_media_url": local_media_url,
                 },
             )
 
             failed.append(
                 {
-                    "filename": name,
-                    "error": e.meta_message,
-                    "retryable": e.retryable,
-                    "meta": e.to_dict(),
+                    "filename": original_name,
+                    "error": error.meta_message,
+                    "retryable": error.retryable,
+                    "meta": error.to_dict(),
                 }
             )
 
-        except Exception as e:
+        except Exception as error:
             logger.exception(
-                "ERROR ENVIAR MEDIA | to=%s numero_asesor=%s file=%s error=%s",
+                (
+                    "ERROR ENVIAR MEDIA | "
+                    "to=%s numero_asesor=%s "
+                    "file=%s error=%s"
+                ),
                 to,
                 numero_asesor,
-                name,
-                str(e),
+                original_name,
+                str(error),
             )
 
             _guardar_mensaje_fallido(
                 to=to,
                 numero_asesor=numero_asesor,
                 cliente=cliente,
-                body=f"[FILE:{name}] failed",
-                error=e,
+                body=f"[FILE:{original_name}] failed",
+                error=error,
                 extra_raw={
                     "request_type": "media",
-                    "filename": name,
-                    "content_type": ct,
+                    "filename": original_name,
+                    "content_type": original_ct,
                     "local_media_url": local_media_url,
                     "internal_error": True,
                 },
@@ -2040,13 +2177,17 @@ def enviar_media_view(request):
 
             failed.append(
                 {
-                    "filename": name,
-                    "error": str(e),
+                    "filename": original_name,
+                    "error": str(error),
                     "retryable": False,
                 }
             )
 
-    response_status = status.HTTP_200_OK if sent else status.HTTP_400_BAD_REQUEST
+    response_status = (
+        status.HTTP_200_OK
+        if sent
+        else status.HTTP_400_BAD_REQUEST
+    )
 
     return Response(
         {
@@ -2057,7 +2198,6 @@ def enviar_media_view(request):
         },
         status=response_status,
     )
-
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
