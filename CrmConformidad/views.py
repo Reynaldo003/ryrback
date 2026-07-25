@@ -52,7 +52,7 @@ def permisos_por_rol(nombre_rol: str):
     if r == "asesor conformidad":
         return ["CRM_RECLAMACIONES"]
 
-    if r == "asesor conformidad":
+    if r == "coordinador digital":
         return ["CRM_COORDINADOR_DIGITAL"]
     
     if r == "asesor digital":
