@@ -8,6 +8,7 @@ import threading
 import traceback
 import uuid
 from datetime import date, timedelta
+import re
 
 from django.conf import settings
 from django.db import close_old_connections
@@ -322,6 +323,22 @@ def _usuario_es_admin(user) -> bool:
     except Exception:
         return False
 
+def _numeros_whatsapp_usuario(user) -> list[str]:
+    raw = str(getattr(user, "telefono", "") or "").strip()
+
+    if not raw:
+        return []
+
+    partes = re.split(r"[|,;\n]+", raw)
+    numeros = []
+
+    for parte in partes:
+        numero = _numero_linea_valido(parte)
+
+        if numero and numero not in numeros:
+            numeros.append(numero)
+
+    return numeros
 
 def _get_usuario_request_obj(request):
     user = getattr(request, "user", None)
@@ -358,49 +375,79 @@ def _buscar_numero_por_usuario(username: str) -> str:
     if not username:
         return ""
 
-    usuario = Usuario.objects.filter(usuario__iexact=username).first()
+    usuario = (
+        Usuario.objects
+        .filter(usuario__iexact=username)
+        .first()
+    )
 
     if not usuario:
         return ""
 
-    return _numero_linea_valido(getattr(usuario, "telefono", "") or "")
+    numeros = _numeros_whatsapp_usuario(usuario)
+
+    return numeros[0] if numeros else ""
 
 
 def _get_numero_asesor_request(request) -> str:
+    """
+    Obtiene la línea solicitada y valida que el usuario tenga acceso.
+
+    Administrador:
+        Puede consultar cualquier número registrado en WHATSAPP_LINES.
+
+    Usuario normal/coordinador:
+        Solo puede consultar números incluidos en su campo telefono,
+        separados por |, coma o punto y coma.
+    """
     user = _get_usuario_request_obj(request)
 
-    # Si viene autenticado por JWT, primero usamos el teléfono real del usuario.
-    # Solo administrador puede consultar otra línea mandando numero_asesor.
+    numero_param = _numero_linea_valido(
+        request.query_params.get("numero_asesor", "") or ""
+    )
+
+    if not numero_param:
+        try:
+            numero_param = _numero_linea_valido(
+                request.data.get("numero_asesor", "") or ""
+            )
+        except Exception:
+            numero_param = ""
+
     if user:
-        es_admin = _usuario_es_admin(user)
+        numeros_asignados = _numeros_whatsapp_usuario(user)
 
-        numero_param = _numero_linea_valido(request.query_params.get("numero_asesor", "") or "")
+        if _usuario_es_admin(user):
+            if numero_param:
+                return numero_param
 
-        if not numero_param:
-            try:
-                numero_param = _numero_linea_valido(request.data.get("numero_asesor", "") or "")
-            except Exception:
-                numero_param = ""
+            if numeros_asignados:
+                return numeros_asignados[0]
 
-        if es_admin and numero_param:
-            return numero_param
+            raise PermissionDenied(
+                "El administrador no tiene una línea configurada "
+                "y no se recibió numero_asesor."
+            )
 
-        numero_user = _numero_linea_valido(getattr(user, "telefono", "") or "")
+        if numero_param:
+            if numero_param in numeros_asignados:
+                return numero_param
 
-        if numero_user:
-            return numero_user
+            raise PermissionDenied(
+                f"No tienes permiso para administrar la línea "
+                f"{numero_param}."
+            )
 
-    # Compatibilidad para endpoints públicos/legacy.
-    numero = _numero_linea_valido(request.query_params.get("numero_asesor", "") or "")
-    if numero:
-        return numero
+        if numeros_asignados:
+            return numeros_asignados[0]
 
-    try:
-        numero = _numero_linea_valido(request.data.get("numero_asesor", "") or "")
-        if numero:
-            return numero
-    except Exception:
-        pass
+        raise PermissionDenied(
+            "Tu usuario no tiene líneas de WhatsApp asignadas."
+        )
+
+    # Compatibilidad con peticiones legacy no autenticadas.
+    if numero_param:
+        return numero_param
 
     username = _obtener_usuario_crm_request(request)
     numero = _buscar_numero_por_usuario(username)
