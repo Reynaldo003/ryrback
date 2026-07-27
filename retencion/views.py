@@ -8,7 +8,8 @@ from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
-from .models import OrdenServicioCompletaVW, OrdenServicioVentaVW
+from .models import OrdenServicioCompletaVW, OrdenServicioVentaVW, TareaCliente
+
 from .serializers import (
     OrdenServicioCompletaVWSerializer,
     OrdenServicioVentaVWSerializer,
@@ -295,3 +296,26 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         )
         serializer = OrdenServicioCompletaVWSerializer(qs, many=True)
         return Response(serializer.data)
+
+from .serializers import (
+    OrdenServicioCompletaVWSerializer,
+    OrdenServicioVentaVWSerializer,
+    TareaClienteSerializer,
+)
+
+
+class TareaClienteViewSet(viewsets.ModelViewSet):
+    """
+    CRUD completo de tareas ligadas al teléfono del cliente.
+    A diferencia de OrdenServicioVentaViewSet, esta tabla sí es editable
+    y vive en la base de datos default de Django.
+    """
+    serializer_class = TareaClienteSerializer
+    permission_classes = [permissions.AllowAny]
+
+    def get_queryset(self):
+        qs = TareaCliente.objects.all()
+        telefono = self.request.query_params.get("telefono")
+        if telefono:
+            qs = qs.filter(telefono_cliente=telefono.strip())
+        return qs.order_by("-created_at")        

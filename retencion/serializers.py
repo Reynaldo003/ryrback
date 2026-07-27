@@ -1,7 +1,37 @@
 # retencion/serializers.py
 from rest_framework import serializers
 
-from .models import OrdenServicioCompletaVW, OrdenServicioVentaVW
+from .models import OrdenServicioCompletaVW, OrdenServicioVentaVW, TareaCliente
+
+
+
+class TareaClienteSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TareaCliente
+        fields = (
+            "id",
+            "telefono_cliente",
+            "nombre_cliente",
+            "titulo",
+            "descripcion",
+            "estado",
+            "fecha_limite",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "created_at", "updated_at")
+
+    def validate_telefono_cliente(self, value):
+        limpio = (value or "").strip()
+        if not limpio:
+            raise serializers.ValidationError("El teléfono del cliente es requerido.")
+        return limpio
+
+    def validate_titulo(self, value):
+        limpio = (value or "").strip()
+        if not limpio:
+            raise serializers.ValidationError("El título de la tarea es requerido.")
+        return limpio
 
 
 class OrdenServicioVentaVWSerializer(serializers.ModelSerializer):

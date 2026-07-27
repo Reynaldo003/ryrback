@@ -113,3 +113,36 @@ class OrdenServicioCompletaVW(models.Model):
 
     def __str__(self):
         return f"{self.numero_orden_servicio} - {self.vin}"
+
+class TareaCliente(models.Model):
+    ESTADO_PENDIENTE = "pendiente"
+    ESTADO_EN_PROGRESO = "en_progreso"
+    ESTADO_COMPLETADA = "completada"
+    ESTADO_CANCELADA = "cancelada"
+
+    ESTADO_CHOICES = [
+        (ESTADO_PENDIENTE, "Pendiente"),
+        (ESTADO_EN_PROGRESO, "En progreso"),
+        (ESTADO_COMPLETADA, "Completada"),
+        (ESTADO_CANCELADA, "Cancelada"),
+    ]
+
+    telefono_cliente = models.CharField(max_length=20, db_index=True)
+    nombre_cliente = models.CharField(max_length=255, blank=True)
+    titulo = models.CharField(max_length=255)
+    descripcion = models.TextField(blank=True)
+    estado = models.CharField(
+        max_length=20, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE
+    )
+    fecha_limite = models.DateField(blank=True, null=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "retencion_tarea_cliente"
+        ordering = ["-created_at"]
+        verbose_name = "Tarea de cliente"
+        verbose_name_plural = "Tareas de clientes"
+
+    def __str__(self):
+        return f"{self.titulo} ({self.telefono_cliente})"
