@@ -10,6 +10,9 @@ from .models import (
     Puesto,
     EvaluacionPuesto,
     Colaborador,
+    CategoriaAmbienteLaboral,  
+    DominioAmbienteLaboral,    
+    EvaluacionAmbienteLaboral,
 )
 
 from .serializers import (
@@ -17,6 +20,8 @@ from .serializers import (
     PuestoSerializer,
     EvaluacionPuestoSerializer,
     ColaboradorSerializer,
+    CategoriaAmbienteLaboralSerializer, 
+    EvaluacionAmbienteLaboralSerializer, 
 )
 
 
@@ -214,3 +219,117 @@ class ColaboradorViewSet(viewsets.ModelViewSet):
         colaborador.save()
 
         return Response(ColaboradorSerializer(colaborador).data)
+
+# ========== VISTAS PARA AMBIENTE LABORAL (NOM-035) ==========
+
+class CategoriaAmbienteLaboralViewSet(viewsets.ReadOnlyModelViewSet):
+    """
+    Catálogo fijo de categorías + dominios.
+    Solo lectura: se administra por fixture/migración, no desde el frontend.
+    """
+    queryset = CategoriaAmbienteLaboral.objects.prefetch_related("dominios").all()
+    serializer_class = CategoriaAmbienteLaboralSerializer
+    lookup_field = "id_categoria"
+
+
+class EvaluacionAmbienteLaboralViewSet(viewsets.ModelViewSet):
+    queryset = EvaluacionAmbienteLaboral.objects.select_related(
+        "dominio", "dominio__categoria"
+    ).all()
+    serializer_class = EvaluacionAmbienteLaboralSerializer
+    lookup_field = "id_evaluacion"
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        dealer = self.request.query_params.get("dealer")
+        anio = self.request.query_params.get("anio")
+
+        if dealer:
+            queryset = queryset.filter(dealer=dealer)
+        if anio:
+            queryset = queryset.filter(anio=anio)
+
+        return queryset
+
+    @action(detail=False, methods=["get"])
+    def resumen(self, request):
+        """
+        Devuelve TODAS las categorías/dominios del catálogo, con la
+        evaluación correspondiente a ese dealer/año si ya existe
+        (o null si aún no se ha capturado).
+        GET /ambiente-laboral/evaluaciones/resumen/?dealer=VW%20Cordoba&anio=2026
+        """
+        dealer = request.query_params.get("dealer")
+        anio = request.query_params.get("anio")
+
+        if not dealer or not anio:
+            return Response(
+                {"error": "dealer y anio son requeridos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        evaluaciones = {
+            ev.dominio_id: ev
+            for ev in EvaluacionAmbienteLaboral.objects.filter(
+                dealer=dealer, anio=anio
+            )
+        }
+
+        data = []
+        categorias = CategoriaAmbienteLaboral.objects.prefetch_related("dominios")
+
+        for cat in categorias:
+            dominios_data = []
+            for dom in cat.dominios.all():
+                ev = evaluaciones.get(dom.id_dominio)
+                dominios_data.append({
+                    "id_dominio": dom.id_dominio,
+                    "nombre": dom.nombre,
+                    "id_evaluacion": ev.id_evaluacion if ev else None,
+                    "puntuacion": ev.puntuacion if ev else None,
+                    "plan_accion": ev.plan_accion if ev else "",
+                    "seguimiento": ev.seguimiento if ev else "",
+                    "evidencia": ev.evidencia.url if (ev and ev.evidencia) else None,
+                })
+
+            data.append({
+                "id_categoria": cat.id_categoria,
+                "nombre": cat.nombre,
+                "dominios": dominios_data,
+            })
+
+        return Response(data)
+
+    @action(detail=False, methods=["post"])
+    def upsert(self, request):
+        """
+        Crea o actualiza la evaluación de un dominio para un dealer/año.
+        POST /ambiente-laboral/evaluaciones/upsert/
+        Body: { dominio, dealer, anio, puntuacion, plan_accion, seguimiento }
+        """
+        dominio_id = request.data.get("dominio")
+        dealer = request.data.get("dealer")
+        anio = request.data.get("anio")
+
+        if not dominio_id or not dealer or not anio:
+            return Response(
+                {"error": "dominio, dealer y anio son requeridos."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        instancia, _ = EvaluacionAmbienteLaboral.objects.get_or_create(
+            dominio_id=dominio_id,
+            dealer=dealer,
+            anio=anio,
+        )
+
+        serializer = self.get_serializer(
+            instancia,
+            data=request.data,
+            partial=True,
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        return Response(serializer.data, status=status.HTTP_200_OK)

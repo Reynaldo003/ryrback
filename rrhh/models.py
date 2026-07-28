@@ -195,3 +195,77 @@ class Colaborador(models.Model):
 
     def __str__(self):
         return self.nombre
+
+# ========== MODELOS PARA AMBIENTE LABORAL (NOM-035) ==========
+# Agregado para el módulo de Ambiente laboral
+# No modifica nada existente
+
+class CategoriaAmbienteLaboral(models.Model):
+    id_categoria = models.AutoField(primary_key=True)
+    nombre = models.CharField(max_length=150, unique=True)
+    orden = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "rrhh_al_categorias"
+        ordering = ["orden", "nombre"]
+        verbose_name = "Categoría (Ambiente laboral)"
+        verbose_name_plural = "Categorías (Ambiente laboral)"
+
+    def __str__(self):
+        return self.nombre
+
+
+class DominioAmbienteLaboral(models.Model):
+    id_dominio = models.AutoField(primary_key=True)
+    categoria = models.ForeignKey(
+        CategoriaAmbienteLaboral,
+        related_name="dominios",
+        on_delete=models.CASCADE,
+    )
+    nombre = models.CharField(max_length=200)
+    orden = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "rrhh_al_dominios"
+        ordering = ["orden", "nombre"]
+        verbose_name = "Dominio (Ambiente laboral)"
+        verbose_name_plural = "Dominios (Ambiente laboral)"
+
+    def __str__(self):
+        return f"{self.categoria.nombre} - {self.nombre}"
+
+
+class EvaluacionAmbienteLaboral(models.Model):
+    id_evaluacion = models.AutoField(primary_key=True)
+    dominio = models.ForeignKey(
+        DominioAmbienteLaboral,
+        related_name="evaluaciones",
+        on_delete=models.CASCADE,
+    )
+
+    dealer = models.CharField(max_length=150)
+    anio = models.PositiveIntegerField()
+
+    puntuacion = models.DecimalField(
+        max_digits=3, decimal_places=1, null=True, blank=True
+    )
+    plan_accion = models.TextField(blank=True, default="")
+    seguimiento = models.TextField(blank=True, default="")
+    evidencia = models.FileField(
+        upload_to="ambiente_laboral/evidencias/",
+        null=True,
+        blank=True,
+    )
+
+    creado_at = models.DateTimeField(auto_now_add=True)
+    actualizado_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "rrhh_al_evaluaciones"
+        unique_together = ("dominio", "dealer", "anio")
+        ordering = ["dominio__categoria__orden", "dominio__orden"]
+        verbose_name = "Evaluación (Ambiente laboral)"
+        verbose_name_plural = "Evaluaciones (Ambiente laboral)"
+
+    def __str__(self):
+        return f"{self.dealer} {self.anio} - {self.dominio.nombre}"

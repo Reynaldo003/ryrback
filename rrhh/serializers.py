@@ -5,7 +5,10 @@ from .models import (
     CandidatoReclutamiento,
     Puesto,
     EvaluacionPuesto,
-    Colaborador,   # <-- agregar
+    Colaborador,
+    CategoriaAmbienteLaboral,  
+    DominioAmbienteLaboral,     
+    EvaluacionAmbienteLaboral,
 )
 
 class CandidatoReclutamientoSerializer(serializers.ModelSerializer):
@@ -219,3 +222,43 @@ class ColaboradorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Colaborador
         fields = "__all__"
+
+# ========== SERIALIZERS AMBIENTE LABORAL ==========
+
+class EvaluacionAmbienteLaboralSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = EvaluacionAmbienteLaboral
+        fields = [
+            "id_evaluacion",
+            "dominio",
+            "dealer",
+            "anio",
+            "puntuacion",
+            "plan_accion",
+            "seguimiento",
+            "evidencia",
+            "creado_at",
+            "actualizado_at",
+        ]
+        read_only_fields = ["id_evaluacion", "creado_at", "actualizado_at"]
+
+    def validate_puntuacion(self, valor):
+        if valor is not None and not (1 <= valor <= 5):
+            raise serializers.ValidationError(
+                "La puntuación debe estar entre 1 y 5."
+            )
+        return valor
+
+
+class DominioAmbienteLaboralSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = DominioAmbienteLaboral
+        fields = ["id_dominio", "categoria", "nombre", "orden"]
+
+
+class CategoriaAmbienteLaboralSerializer(serializers.ModelSerializer):
+    dominios = DominioAmbienteLaboralSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CategoriaAmbienteLaboral
+        fields = ["id_categoria", "nombre", "orden", "dominios"]
