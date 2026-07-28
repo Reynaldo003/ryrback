@@ -314,8 +314,8 @@ class TareaClienteViewSet(viewsets.ModelViewSet):
     permission_classes = [permissions.AllowAny]
 
     def get_queryset(self):
-    qs = TareaCliente.objects.all()
-    telefono = self.request.query_params.get("telefono_cliente")  
-    if telefono:
-        qs = qs.filter(telefono_cliente=telefono.strip())
-    return qs.order_by("-created_at")      
+        qs = TareaCliente.objects.all()
+        telefono = self.request.query_params.get("telefono")
+        if telefono:
+            qs = qs.filter(telefono_cliente=telefono.strip())
+        return qs.order_by("-created_at")        
