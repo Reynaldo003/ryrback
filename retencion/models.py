@@ -131,6 +131,9 @@ class TareaCliente(models.Model):
     nombre_cliente = models.CharField(max_length=255, blank=True)
     titulo = models.CharField(max_length=255)
     descripcion = models.TextField(blank=True)
+    forma_contacto = models.CharField(max_length=100, blank=True)
+    motivo_contacto = models.CharField(max_length=100, blank=True)
+    resultado = models.CharField(max_length=100, blank=True)
     estado = models.CharField(
         max_length=20, choices=ESTADO_CHOICES, default=ESTADO_PENDIENTE
     )
