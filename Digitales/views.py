@@ -59,6 +59,7 @@ from .contacto import (
     iniciar_llamada_whatsapp,
     bloquear_usuario_whatsapp,
     desbloquear_usuario_whatsapp,
+    convertir_bytes_a_mp3,
 )
 from notificaciones.services import notificar_mensaje_whatsapp
 from .atribucion_meta import aplicar_pauta_desde_referencia_meta
@@ -1465,6 +1466,55 @@ def media_proxy_view(request, media_id: str):
             content_type="application/json; charset=utf-8",
         )
 
+@api_view(["GET"])
+@permission_classes([AllowAny])
+def media_descargar_mp3_view(request, media_id: str):
+    """
+    Descarga forzada del audio ya convertido a MP3 real (no solo renombrado).
+    Usa Content-Disposition: attachment para que el navegador lo baje directo,
+    sin depender de fetch/CORS en el frontend.
+    """
+    numero_asesor = normaliza_tel_mx(request.query_params.get("numero_asesor", ""))
+
+    try:
+        blob, content_type = download_media_whatsapp(
+            media_id,
+            numero_asesor=numero_asesor,
+        )
+
+        if content_type.startswith("audio/"):
+            mp3_bytes = convertir_bytes_a_mp3(blob, content_type)
+            resp = HttpResponse(mp3_bytes, content_type="audio/mpeg")
+            resp["Content-Disposition"] = 'attachment; filename="nota-voz.mp3"'
+            return resp
+
+        # No es audio: se descarga tal cual, sin conversión.
+        resp = HttpResponse(blob, content_type=content_type)
+        resp["Content-Disposition"] = 'attachment; filename="archivo"'
+        return resp
+
+    except MetaMediaError as e:
+        logger.warning(
+            "MEDIA META NO DISPONIBLE (descarga) | media_id=%s numero_asesor=%s error=%s",
+            media_id, numero_asesor, e.to_dict(),
+        )
+        status_code = 410 if e.es_media_no_disponible() else 502
+        return HttpResponse(
+            json.dumps({"ok": False, "error": "El archivo ya no está disponible en Meta.", "meta": e.to_dict()}, ensure_ascii=False),
+            status=status_code,
+            content_type="application/json; charset=utf-8",
+        )
+
+    except Exception as e:
+        logger.exception(
+            "ERROR DESCARGANDO/CONVIRTIENDO MEDIA | media_id=%s numero_asesor=%s error=%s",
+            media_id, numero_asesor, str(e),
+        )
+        return HttpResponse(
+            json.dumps({"ok": False, "error": str(e)}, ensure_ascii=False),
+            status=400,
+            content_type="application/json; charset=utf-8",
+        )
 
 @api_view(["GET"])
 @authentication_classes([CRMJWTAuthentication])

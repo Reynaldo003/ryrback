@@ -19,6 +19,7 @@ from .views import (
     contacto_updates,
     editar_mensaje_view,
     media_proxy_view,
+    media_descargar_mp3_view,
     generar_resumen_prospecto_view,
     plantillas_whatsapp_view,
     plantillas_whatsapp_admin_view,
@@ -94,6 +95,7 @@ urlpatterns = [
     path("api/prospectos/<int:prospecto_id>/generar-resumen/",generar_resumen_prospecto_view,),
 
     path("media/<str:media_id>/", media_proxy_view, name="digitales-media-proxy"),
+    path("media/<str:media_id>/descargar/", media_descargar_mp3_view, name="digitales-media-descargar"),
     path("catalogo/precios/", catalogo_precios_actuales, name="catalogo-precios"),
 
     path("ia/config/", ia_config_list, name="ia-config-list"),

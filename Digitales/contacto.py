@@ -7,6 +7,8 @@ import mimetypes
 import random
 import re
 import time
+import subprocess
+import tempfile
 
 import requests
 from django.core.files.base import ContentFile
@@ -272,6 +274,41 @@ def _buscar_media_en_cache(media_id: str):
 
     return None
 
+def convertir_bytes_a_mp3(blob: bytes, content_type_original: str = "") -> bytes:
+    """
+    Convierte cualquier audio (ogg/opus, webm, m4a, etc.) a MP3 real usando ffmpeg.
+    Necesario porque muchos reproductores de escritorio (Windows Media Player,
+    Quicktime, etc.) no soportan Opus/Ogg, aunque el navegador sí.
+    """
+    ext_in = _extension_por_content_type(content_type_original) or ".ogg"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        input_path = f"{tmp_dir}/input{ext_in}"
+        output_path = f"{tmp_dir}/output.mp3"
+
+        with open(input_path, "wb") as f:
+            f.write(blob)
+
+        resultado = subprocess.run(
+            [
+                "ffmpeg", "-y",
+                "-i", input_path,
+                "-vn",
+                "-ar", "44100",
+                "-ac", "2",
+                "-b:a", "128k",
+                output_path,
+            ],
+            capture_output=True,
+        )
+
+        if resultado.returncode != 0:
+            raise RuntimeError(
+                f"ffmpeg no pudo convertir el audio: {resultado.stderr.decode(errors='ignore')}"
+            )
+
+        with open(output_path, "rb") as f:
+            return f.read()
 
 def _guardar_media_en_cache(media_id: str, blob: bytes, content_type: str) -> str:
     path = _media_cache_path(media_id, content_type)
