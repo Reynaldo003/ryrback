@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from typing import Any
 
 from django.conf import settings
@@ -20,13 +20,6 @@ from citas.models import normaliza_tel_mx
 
 from .models import BitacoraAsesorDigital, ExpedienteDigital, MensajeWhatsApp
 from .sett import WHATSAPP_LINES
-
-
-# -----------------------------------------------------------------------------
-# Valores convencionales del sistema
-# -----------------------------------------------------------------------------
-# Estos valores NO son choices del modelo y NO restringen lo que puede guardar
-# el frontend. Solo son convenciones para los eventos generados automáticamente.
 
 HORAS_SIN_RESPUESTA = 48
 
@@ -176,8 +169,57 @@ CAMPOS_AUDITABLES = {
 
 
 # -----------------------------------------------------------------------------
-# Helpers de normalización y etiquetas
+# Helpers de fecha, normalización y etiquetas
 # -----------------------------------------------------------------------------
+
+def _ahora():
+    """
+    Devuelve un datetime compatible con la configuración actual de Django.
+
+    - USE_TZ=False: datetime naive, apto para los campos DateTimeField del proyecto.
+    - USE_TZ=True: datetime aware.
+    """
+    return timezone.now()
+
+
+def _fecha_local_actual():
+    """Obtiene la fecha actual sin llamar localdate() cuando USE_TZ=False."""
+    ahora = _ahora()
+
+    if settings.USE_TZ and timezone.is_aware(ahora):
+        return timezone.localtime(ahora, timezone.get_current_timezone()).date()
+
+    return ahora.date()
+
+
+def _datetime_para_configuracion(value):
+    """
+    Normaliza un datetime para evitar mezclas entre valores aware y naive.
+    Es útil al restar fechas y al trabajar con registros históricos.
+    """
+    if value is None:
+        return None
+
+    if settings.USE_TZ:
+        if timezone.is_naive(value):
+            return timezone.make_aware(value, timezone.get_current_timezone())
+        return value
+
+    if timezone.is_aware(value):
+        return timezone.make_naive(value, timezone.get_current_timezone())
+
+    return value
+
+
+def _iso_datetime(value):
+    """Serializa datetimes respetando USE_TZ=False y USE_TZ=True."""
+    value = _datetime_para_configuracion(value)
+    return value.isoformat() if value else None
+
+
+def _dict_seguro(value) -> dict:
+    return dict(value) if isinstance(value, dict) else {}
+
 
 def _texto_normalizado(value: str) -> str:
     return re.sub(r"\s+", " ", str(value or "").strip().lower())
@@ -413,7 +455,7 @@ def registrar_evento_mensaje(
 
     # No borramos una corrección manual ni una respuesta ya asociada durante
     # backfills o llamadas repetidas.
-    metadata_actual = dict(evento.metadata or {})
+    metadata_actual = _dict_seguro(evento.metadata)
     metadata_nueva = {**metadata, **metadata_actual}
     campos = []
 
@@ -492,17 +534,20 @@ def resolver_evento_por_respuesta(
     if not evento:
         return None
 
+    creado_evento = _datetime_para_configuracion(evento.creado)
+    creado_respuesta = _datetime_para_configuracion(mensaje_entrante.created_at)
+
     segundos = max(
         0,
-        int((mensaje_entrante.created_at - evento.creado).total_seconds()),
+        int((creado_respuesta - creado_evento).total_seconds()),
     )
 
     resultado = clasificar_respuesta_cliente(mensaje_entrante.body)
-    metadata = dict(evento.metadata or {})
+    metadata = _dict_seguro(evento.metadata)
     metadata["grupo_resultado"] = _inferir_grupo_resultado(resultado)
     metadata["resultado_label"] = LABELS_RESULTADO_BASE.get(resultado, "")
     metadata["clasificacion_automatica"] = True
-    metadata["clasificado_at"] = timezone.now().isoformat()
+    metadata["clasificado_at"] = _ahora().isoformat()
 
     evento.resultado = resultado
     evento.respuesta_mensaje = mensaje_entrante
@@ -539,7 +584,7 @@ def actualizar_estado_entrega(
         return
 
     evento.estado_entrega = str(estado or "")[:50]
-    metadata = dict(evento.metadata or {})
+    metadata = _dict_seguro(evento.metadata)
 
     if errors:
         metadata["errors"] = errors
@@ -557,7 +602,7 @@ def actualizar_estado_entrega(
 
 
 def marcar_eventos_sin_respuesta(*, horas: int = HORAS_SIN_RESPUESTA) -> int:
-    limite = timezone.now() - timedelta(hours=max(1, int(horas)))
+    limite = _ahora() - timedelta(hours=max(1, int(horas)))
 
     eventos = (
         BitacoraAsesorDigital.objects
@@ -576,12 +621,12 @@ def marcar_eventos_sin_respuesta(*, horas: int = HORAS_SIN_RESPUESTA) -> int:
     if not ids:
         return 0
 
-    now = timezone.now()
+    now = _ahora()
     actualizados = 0
 
     # Se actualiza por evento para conservar el grupo y la etiqueta en metadata.
     for evento in BitacoraAsesorDigital.objects.filter(id__in=ids).iterator(chunk_size=500):
-        metadata = dict(evento.metadata or {})
+        metadata = _dict_seguro(evento.metadata)
         metadata["grupo_resultado"] = GRUPO_SIN_RESPUESTA
         metadata["resultado_label"] = LABELS_RESULTADO_BASE[RESULTADO_SIN_RESPUESTA]
         evento.resultado = RESULTADO_SIN_RESPUESTA
@@ -608,7 +653,7 @@ def registrar_evento_operativo(
     tipo = _clave_abierta(tipo, TIPO_OTRO)
     resultado = _clave_abierta(resultado, RESULTADO_NO_APLICA)
 
-    metadata_final = dict(metadata or {})
+    metadata_final = _dict_seguro(metadata)
     metadata_final.setdefault("grupo_tipo", GRUPO_TIPO_OPERATIVO)
     metadata_final.setdefault("grupo_resultado", _inferir_grupo_resultado(resultado))
     metadata_final.setdefault("tipo_label", LABELS_TIPO_BASE.get(tipo, ""))
@@ -775,9 +820,22 @@ def _lineas_permitidas(request) -> tuple[list[str], Response | None]:
 
 
 def _rango_fechas(request):
-    hoy = timezone.localdate()
-    desde = parse_date(request.query_params.get("fecha_desde", "")) or (hoy - timedelta(days=29))
-    hasta = parse_date(request.query_params.get("fecha_hasta", "")) or hoy
+    """
+    Construye el rango de consulta de forma compatible con USE_TZ=False.
+
+    Con USE_TZ=False se generan límites naive. Con USE_TZ=True se convierten
+    a datetimes aware en TIME_ZONE.
+    """
+    hoy = _fecha_local_actual()
+
+    desde = (
+        parse_date(request.query_params.get("fecha_desde", ""))
+        or (hoy - timedelta(days=29))
+    )
+    hasta = (
+        parse_date(request.query_params.get("fecha_hasta", ""))
+        or hoy
+    )
 
     if desde > hasta:
         desde, hasta = hasta, desde
@@ -785,12 +843,13 @@ def _rango_fechas(request):
     if (hasta - desde).days > 366:
         desde = hasta - timedelta(days=366)
 
-    inicio = timezone.datetime.combine(desde, timezone.datetime.min.time())
-    fin = timezone.datetime.combine(hasta + timedelta(days=1), timezone.datetime.min.time())
+    inicio = datetime.combine(desde, time.min)
+    fin = datetime.combine(hasta + timedelta(days=1), time.min)
 
     if settings.USE_TZ:
-        inicio = timezone.make_aware(inicio, timezone.get_current_timezone())
-        fin = timezone.make_aware(fin, timezone.get_current_timezone())
+        zona = timezone.get_current_timezone()
+        inicio = timezone.make_aware(inicio, zona)
+        fin = timezone.make_aware(fin, zona)
 
     return desde, hasta, inicio, fin
 
@@ -882,12 +941,12 @@ def _serializar_evento(item: BitacoraAsesorDigital) -> dict[str, Any]:
         "resultado_grupo": _grupo_resultado_evento(item),
         "estado_entrega": item.estado_entrega,
         "respuesta_texto": item.respuesta_texto,
-        "respondido_at": item.respondido_at.isoformat() if item.respondido_at else None,
+        "respondido_at": _iso_datetime(item.respondido_at),
         "tiempo_respuesta_segundos": item.tiempo_respuesta_segundos,
         "tiempo_respuesta_label": _segundos_label(item.tiempo_respuesta_segundos),
         "metadata": metadata,
-        "creado": item.creado.isoformat(),
-        "actualizado": item.actualizado.isoformat() if item.actualizado else None,
+        "creado": _iso_datetime(item.creado),
+        "actualizado": _iso_datetime(item.actualizado),
     }
 
 
@@ -1056,9 +1115,7 @@ def analitica_asesores_view(request):
         row["promedio_respuesta_label"] = _segundos_label(row["promedio_respuesta"])
         row["agencia"] = WHATSAPP_LINES.get(row["numero_asesor"], {}).get("agencia", "")
         row["ultima_actividad"] = (
-            row["ultima_actividad"].isoformat()
-            if row["ultima_actividad"]
-            else None
+            _iso_datetime(row["ultima_actividad"])
         )
         asesores.append(row)
 
@@ -1159,9 +1216,7 @@ def analitica_asesores_view(request):
         row["estado"] = row.pop("expediente__estado") or ""
         row["auto_interes"] = row.pop("expediente__auto_interes") or ""
         row["ultima_actividad"] = (
-            row["ultima_actividad"].isoformat()
-            if row["ultima_actividad"]
-            else None
+            _iso_datetime(row["ultima_actividad"])
         )
 
         ultimo = catalogo_resultados.get(row["ultimo_resultado"] or "", {})
@@ -1325,10 +1380,10 @@ def analitica_evento_resultado_view(request, evento_id):
     if not resultado_label:
         resultado_label = _label_abierto(resultado, LABELS_RESULTADO_BASE)
 
-    metadata = dict(evento.metadata or {})
+    metadata = _dict_seguro(evento.metadata)
     metadata["clasificacion_manual"] = True
     metadata["clasificado_por"] = _usuario_crm(request)
-    metadata["clasificado_at"] = timezone.now().isoformat()
+    metadata["clasificado_at"] = _ahora().isoformat()
     metadata["grupo_resultado"] = grupo_resultado
     metadata["resultado_label"] = resultado_label
 
