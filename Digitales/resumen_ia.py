@@ -255,3 +255,278 @@ def generar_resumen_con_openai(*, mensajes, telefono: str = "") -> str:
         mensajes=mensajes,
         telefono=telefono,
     )
+
+# -----------------------------------------------------------------------------
+# Resumen analítico de la atención del asesor
+# -----------------------------------------------------------------------------
+
+PROMPT_RESUMEN_ATENCION = """
+Eres un auditor de calidad comercial para un CRM automotriz Volkswagen.
+
+Analiza la conversación y la bitácora de acciones. Tu objetivo no es repetir mensajes,
+sino explicar qué hizo el asesor, cómo reaccionó el cliente y qué debe hacerse después.
+
+Reglas obligatorias:
+- No inventes datos ni resultados comerciales.
+- Distingue claramente asesor humano, cliente e IA.
+- No premies como interés una respuesta de cortesía aislada.
+- Considera interés únicamente cuando el cliente pide información concreta, cotización,
+  crédito, disponibilidad, cita, llamada, visita o expresa intención de compra.
+- Si el asesor envió contacto y el cliente no respondió, indícalo claramente.
+- Si el cliente escribió y no existe atención humana posterior, marca la atención como crítica.
+- Si la IA estaba activa, menciona si apoyó o si la conversación terminó requiriendo atención humana.
+- Redacta en español, con lenguaje ejecutivo y fácil de medir.
+
+Devuelve exclusivamente el objeto JSON solicitado por el esquema.
+"""
+
+GEMINI_RESUMEN_ATENCION_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "resumen_acciones": {"type": "STRING"},
+        "estado_atencion": {
+            "type": "STRING",
+            "enum": [
+                "sin_atencion",
+                "esperando_cliente",
+                "cliente_interesado",
+                "seguimiento_activo",
+                "atencion_completada",
+                "atencion_mejorable",
+                "atencion_critica",
+                "sin_datos",
+            ],
+        },
+        "evaluacion": {"type": "STRING"},
+        "siguiente_accion": {"type": "STRING"},
+        "calidad": {
+            "type": "STRING",
+            "enum": ["buena", "mejorable", "critica", "sin_datos"],
+        },
+        "interes_detectado": {"type": "BOOLEAN"},
+    },
+    "required": [
+        "resumen_acciones",
+        "estado_atencion",
+        "evaluacion",
+        "siguiente_accion",
+        "calidad",
+        "interes_detectado",
+    ],
+}
+
+
+def _evento_a_linea(evento) -> str:
+    creado = getattr(evento, "creado", None)
+    fecha = creado.strftime("%Y-%m-%d %H:%M:%S") if creado else ""
+    accion = _limpiar_texto(getattr(evento, "accion", ""))
+    detalle = _limpiar_texto(getattr(evento, "detalle", ""))
+    resultado = _limpiar_texto(getattr(evento, "resultado", ""))
+    respuesta = _limpiar_texto(getattr(evento, "respuesta_texto", ""))
+
+    partes = [f"[{fecha}] Acción: {accion or 'Sin descripción'}"]
+
+    if detalle:
+        partes.append(f"Detalle: {detalle}")
+
+    if resultado:
+        partes.append(f"Clasificación interna: {resultado}")
+
+    if respuesta:
+        partes.append(f"Respuesta del cliente: {respuesta}")
+
+    return " | ".join(partes)
+
+
+def construir_contexto_atencion(*, mensajes, eventos, estado_ia: dict | None = None) -> str:
+    conversacion = construir_conversacion_para_resumen(mensajes)
+    bitacora = "\n".join(_evento_a_linea(evento) for evento in eventos)
+    estado_ia = estado_ia if isinstance(estado_ia, dict) else {}
+
+    return (
+        "ESTADO DE IA\n"
+        f"{json.dumps(estado_ia, ensure_ascii=False)}\n\n"
+        "CONVERSACIÓN\n"
+        f"{conversacion or 'Sin mensajes disponibles'}\n\n"
+        "BITÁCORA DEL ASESOR\n"
+        f"{bitacora or 'Sin acciones registradas'}"
+    ).strip()
+
+
+def _normalizar_resumen_atencion(data: dict, *, fuente: str) -> dict:
+    estado_valido = {
+        "sin_atencion",
+        "esperando_cliente",
+        "cliente_interesado",
+        "seguimiento_activo",
+        "atencion_completada",
+        "atencion_mejorable",
+        "atencion_critica",
+        "sin_datos",
+    }
+    calidad_valida = {"buena", "mejorable", "critica", "sin_datos"}
+
+    estado = str(data.get("estado_atencion") or "sin_datos").strip().lower()
+    calidad = str(data.get("calidad") or "sin_datos").strip().lower()
+
+    return {
+        "resumen_acciones": _limitar_palabras(
+            data.get("resumen_acciones"),
+            42,
+            "No hay información suficiente para resumir la atención.",
+        ),
+        "estado_atencion": estado if estado in estado_valido else "sin_datos",
+        "evaluacion": _limitar_palabras(
+            data.get("evaluacion"),
+            24,
+            "No hay evidencia suficiente para evaluar la atención.",
+        ),
+        "siguiente_accion": _limitar_palabras(
+            data.get("siguiente_accion"),
+            20,
+            "Revisar la conversación y definir el siguiente contacto.",
+        ),
+        "calidad": calidad if calidad in calidad_valida else "sin_datos",
+        "interes_detectado": bool(data.get("interes_detectado", False)),
+        "generado_por_ia": fuente == "gemini",
+        "fuente": fuente,
+    }
+
+
+def generar_resumen_atencion_fallback(*, eventos, estado_ia: dict | None = None) -> dict:
+    eventos = list(eventos or [])
+    contacto = [
+        item
+        for item in eventos
+        if str(getattr(item, "tipo", "") or "") in {"mensaje", "plantilla", "media"}
+    ]
+    respondidos = [item for item in contacto if getattr(item, "respondido_at", None)]
+    positivos = [
+        item
+        for item in contacto
+        if str(getattr(item, "resultado", "") or "") == "respuesta_positiva"
+    ]
+    sin_respuesta = [
+        item
+        for item in contacto
+        if str(getattr(item, "resultado", "") or "") == "sin_respuesta"
+    ]
+    pendientes = [
+        item
+        for item in contacto
+        if str(getattr(item, "resultado", "") or "") == "pendiente"
+    ]
+
+    if not eventos:
+        data = {
+            "resumen_acciones": "No existen acciones registradas del asesor para este prospecto.",
+            "estado_atencion": "sin_atencion",
+            "evaluacion": "No es posible medir la atención sin eventos registrados.",
+            "siguiente_accion": "Revisar el chat y realizar el primer contacto humano.",
+            "calidad": "sin_datos",
+            "interes_detectado": False,
+        }
+    elif positivos:
+        data = {
+            "resumen_acciones": "El asesor dio seguimiento y el cliente respondió con señales concretas de interés comercial.",
+            "estado_atencion": "cliente_interesado",
+            "evaluacion": "La atención logró una respuesta comercial positiva; falta convertir el interés en una acción concreta.",
+            "siguiente_accion": "Confirmar vehículo, forma de pago y agendar llamada o visita.",
+            "calidad": "buena",
+            "interes_detectado": True,
+        }
+    elif respondidos:
+        data = {
+            "resumen_acciones": "El asesor contactó al cliente y recibió respuesta, pero todavía no existe una señal comercial concluyente.",
+            "estado_atencion": "seguimiento_activo",
+            "evaluacion": "Existe conversación activa; el asesor debe profundizar el perfilamiento y cerrar el siguiente compromiso.",
+            "siguiente_accion": "Preguntar necesidad, presupuesto, forma de pago y plazo de compra.",
+            "calidad": "mejorable",
+            "interes_detectado": False,
+        }
+    elif sin_respuesta and not pendientes:
+        data = {
+            "resumen_acciones": "El asesor realizó intentos de contacto, pero el cliente no respondió dentro de la ventana de 48 horas.",
+            "estado_atencion": "esperando_cliente",
+            "evaluacion": "Hubo seguimiento sin respuesta; conviene variar horario, mensaje y canal antes de cerrar el prospecto.",
+            "siguiente_accion": "Programar un recontacto breve con propuesta de valor específica.",
+            "calidad": "mejorable",
+            "interes_detectado": False,
+        }
+    else:
+        data = {
+            "resumen_acciones": "El asesor inició contacto y la conversación continúa dentro de la ventana de seguimiento.",
+            "estado_atencion": "seguimiento_activo",
+            "evaluacion": "La atención sigue abierta y aún no puede calificarse como respondida o sin respuesta.",
+            "siguiente_accion": "Dar seguimiento sin duplicar mensajes y respetar la ventana vigente.",
+            "calidad": "mejorable",
+            "interes_detectado": False,
+        }
+
+    estado_ia = estado_ia if isinstance(estado_ia, dict) else {}
+    if estado_ia.get("estado") == "activa":
+        data["evaluacion"] = f"{data['evaluacion']} La IA estaba habilitada para apoyar el chat."
+
+    return _normalizar_resumen_atencion(data, fuente="reglas")
+
+
+def generar_resumen_atencion_con_gemini(
+    *,
+    mensajes,
+    eventos,
+    telefono: str = "",
+    estado_ia: dict | None = None,
+) -> dict:
+    mensajes = list(mensajes or [])
+    eventos = list(eventos or [])
+
+    if not mensajes and not eventos:
+        return generar_resumen_atencion_fallback(eventos=eventos, estado_ia=estado_ia)
+
+    contexto = construir_contexto_atencion(
+        mensajes=mensajes,
+        eventos=eventos,
+        estado_ia=estado_ia,
+    )
+
+    client = _get_gemini_client()
+    modelo = getattr(
+        settings,
+        "GEMINI_ANALYTICS_MODEL",
+        getattr(
+            settings,
+            "GEMINI_SUMMARY_MODEL",
+            getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+        ),
+    )
+
+    contenido = (
+        f"Teléfono del prospecto: {telefono or 'No disponible'}\n\n"
+        "Genera una lectura ejecutiva de la atención con base exclusivamente en el contexto:\n\n"
+        f"{contexto}"
+    )
+
+    try:
+        response = client.models.generate_content(
+            model=modelo,
+            contents=contenido,
+            config=types.GenerateContentConfig(
+                system_instruction=PROMPT_RESUMEN_ATENCION,
+                response_mime_type="application/json",
+                response_schema=GEMINI_RESUMEN_ATENCION_SCHEMA,
+                temperature=0.15,
+            ),
+        )
+        data = _parsear_respuesta_json(getattr(response, "text", "") or "")
+
+        if not data:
+            raise RuntimeError("Gemini no devolvió un resumen analítico válido")
+
+        return _normalizar_resumen_atencion(data, fuente="gemini")
+    except Exception:
+        logger.exception(
+            "Error generando resumen de atención | telefono=%s modelo=%s",
+            telefono,
+            modelo,
+        )
+        return generar_resumen_atencion_fallback(eventos=eventos, estado_ia=estado_ia)

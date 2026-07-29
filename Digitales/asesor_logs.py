@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import re
+from bisect import bisect_left
 from datetime import datetime, time, timedelta
+from statistics import median
 from typing import Any
 
 from django.conf import settings
+from django.core.cache import cache
 from django.core.paginator import Paginator
 from django.db.models import Avg, Count, Max, OuterRef, Q, Subquery
 from django.db.models.functions import TruncDate
@@ -18,7 +21,14 @@ from rest_framework.response import Response
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from citas.models import normaliza_tel_mx
 
-from .models import BitacoraAsesorDigital, ExpedienteDigital, MensajeWhatsApp
+from .models import (
+    BitacoraAsesorDigital,
+    ConfiguracionIAWhatsApp,
+    ConversacionIA,
+    ExpedienteDigital,
+    MensajeWhatsApp,
+)
+from .resumen_ia import generar_resumen_atencion_con_gemini
 from .sett import WHATSAPP_LINES
 
 HORAS_SIN_RESPUESTA = 48
@@ -111,30 +121,33 @@ GRUPO_RESULTADO_BASE = {
 }
 
 POSITIVAS = (
-    "si",
-    "sí",
-    "claro",
     "me interesa",
-    "interesado",
-    "interesada",
-    "quiero",
-    "cotizacion",
-    "cotización",
-    "cita",
-    "agendar",
-    "agenda",
-    "horario",
-    "disponible",
-    "adelante",
-    "llamada",
+    "estoy interesado",
+    "estoy interesada",
+    "quiero cotizacion",
+    "quiero cotización",
+    "mandame cotizacion",
+    "mándame cotización",
+    "quiero comprar",
+    "quiero adquirir",
+    "quiero apartar",
+    "agendar cita",
+    "agendamos",
+    "quiero una cita",
+    "puedo visitar",
+    "quiero visitar",
+    "quiero financiamiento",
+    "quiero credito",
+    "quiero crédito",
+    "quiero mensualidades",
     "marcame",
     "márcame",
-    "gracias",
-    "perfecto",
-    "de acuerdo",
-    "envíame",
-    "enviame",
+    "llamame",
+    "llámame",
+    "hay disponibilidad",
+    "tienen disponible",
 )
+
 
 NEGATIVAS = (
     "no me interesa",
@@ -392,6 +405,130 @@ def _accion_mensaje(mensaje: MensajeWhatsApp, tipo: str) -> tuple[str, str]:
     return "Envió un mensaje", ""
 
 
+
+
+def _es_mensaje_ia_raw(raw) -> bool:
+    raw = raw if isinstance(raw, dict) else {}
+    return bool(
+        raw.get("ia_provider")
+        or raw.get("ia_model")
+        or raw.get("openai_model")
+        or raw.get("gemini_model")
+        or raw.get("decision")
+        or raw.get("origen") == "ia"
+    )
+
+
+def _estado_ia_chat(
+    *,
+    expediente: ExpedienteDigital | None,
+    numero_asesor: str,
+    fuente: str = "estado_actual",
+) -> dict[str, Any]:
+    numero = normaliza_tel_mx(numero_asesor or "")
+    config = (
+        ConfiguracionIAWhatsApp.objects
+        .filter(numero_asesor=numero)
+        .only("activo")
+        .first()
+        if numero
+        else None
+    )
+    conversacion = (
+        ConversacionIA.objects
+        .filter(expediente=expediente, numero_asesor=numero)
+        .only("ia_activa", "ia_pausada", "motivo_pausa", "estado_conversacion")
+        .first()
+        if expediente and numero
+        else None
+    )
+
+    configurada = bool(config)
+    config_activa = bool(config.activo) if config else False
+    conversacion_activa = bool(conversacion.ia_activa) if conversacion else True
+    pausada_expediente = bool(expediente.ia_pausada) if expediente else False
+    pausada_conversacion = bool(conversacion.ia_pausada) if conversacion else False
+    pausada = pausada_expediente or pausada_conversacion
+
+    if not configurada:
+        estado = "no_configurada"
+    elif not config_activa:
+        estado = "inactiva_linea"
+    elif pausada:
+        estado = "pausada"
+    elif not conversacion_activa:
+        estado = "inactiva_chat"
+    else:
+        estado = "activa"
+
+    motivo = ""
+    if pausada_expediente and expediente:
+        motivo = expediente.ia_pausada_motivo or "Pausada en el expediente"
+    elif pausada_conversacion and conversacion:
+        motivo = conversacion.motivo_pausa or "Pausada en la conversación"
+
+    return {
+        "estado": estado,
+        "activa": estado == "activa",
+        "configurada": configurada,
+        "config_activa": config_activa,
+        "conversacion_activa": conversacion_activa,
+        "pausada": pausada,
+        "motivo": motivo,
+        "estado_conversacion": (
+            conversacion.estado_conversacion
+            if conversacion
+            else "sin_iniciar"
+        ),
+        "fuente": fuente,
+    }
+
+
+def _estado_ia_desde_filas(
+    *,
+    numero_asesor: str,
+    expediente_pausado: bool,
+    expediente_motivo: str,
+    config_activa: bool | None,
+    conversacion: dict | None,
+) -> dict[str, Any]:
+    conversacion = conversacion or {}
+    configurada = config_activa is not None
+    chat_activo = bool(conversacion.get("ia_activa", True))
+    pausada_chat = bool(conversacion.get("ia_pausada", False))
+    pausada = bool(expediente_pausado or pausada_chat)
+
+    if not configurada:
+        estado = "no_configurada"
+    elif not config_activa:
+        estado = "inactiva_linea"
+    elif pausada:
+        estado = "pausada"
+    elif not chat_activo:
+        estado = "inactiva_chat"
+    else:
+        estado = "activa"
+
+    return {
+        "estado": estado,
+        "activa": estado == "activa",
+        "configurada": configurada,
+        "config_activa": bool(config_activa),
+        "conversacion_activa": chat_activo,
+        "pausada": pausada,
+        "motivo": (
+            expediente_motivo
+            if expediente_pausado
+            else str(conversacion.get("motivo_pausa") or "")
+        ),
+        "estado_conversacion": str(
+            conversacion.get("estado_conversacion") or "sin_iniciar"
+        ),
+        "fuente": "estado_actual",
+        "numero_asesor": numero_asesor,
+    }
+
+
 # -----------------------------------------------------------------------------
 # Registro y resolución de eventos
 # -----------------------------------------------------------------------------
@@ -409,7 +546,7 @@ def registrar_evento_mensaje(
     raw = mensaje.raw if isinstance(mensaje.raw, dict) else {}
 
     # No atribuimos respuestas automáticas de IA a un asesor humano.
-    if any(raw.get(key) for key in ("ia_provider", "ia_model", "openai_model", "gemini_model")):
+    if _es_mensaje_ia_raw(raw):
         return None
 
     expediente = expediente or _expediente_de_mensaje(mensaje)
@@ -428,6 +565,13 @@ def registrar_evento_mensaje(
         "grupo_resultado": grupo_resultado,
         "resultado_label": LABELS_RESULTADO_BASE.get(resultado, ""),
         "tipo_label": LABELS_TIPO_BASE.get(tipo, ""),
+        # Se captura el estado en el momento del evento. Para registros antiguos
+        # el frontend recibirá el estado actual como respaldo, claramente marcado.
+        "ia_estado": _estado_ia_chat(
+            expediente=expediente,
+            numero_asesor=mensaje.numero_asesor,
+            fuente="capturado_en_evento",
+        ) if expediente else {},
     }
 
     defaults = {
@@ -920,8 +1064,16 @@ def _q_fallido() -> Q:
 # Serialización y catálogos dinámicos
 # -----------------------------------------------------------------------------
 
-def _serializar_evento(item: BitacoraAsesorDigital) -> dict[str, Any]:
+def _serializar_evento(
+    item: BitacoraAsesorDigital,
+    *,
+    ia_fallback: dict | None = None,
+) -> dict[str, Any]:
     metadata = item.metadata if isinstance(item.metadata, dict) else {}
+    ia_estado = metadata.get("ia_estado") if isinstance(metadata.get("ia_estado"), dict) else {}
+
+    if not ia_estado and ia_fallback:
+        ia_estado = {**ia_fallback, "fuente": "estado_actual_para_registro_historico"}
 
     return {
         "id": str(item.evento_id),
@@ -944,6 +1096,7 @@ def _serializar_evento(item: BitacoraAsesorDigital) -> dict[str, Any]:
         "respondido_at": _iso_datetime(item.respondido_at),
         "tiempo_respuesta_segundos": item.tiempo_respuesta_segundos,
         "tiempo_respuesta_label": _segundos_label(item.tiempo_respuesta_segundos),
+        "ia_estado": ia_estado,
         "metadata": metadata,
         "creado": _iso_datetime(item.creado),
         "actualizado": _iso_datetime(item.actualizado),
@@ -1019,6 +1172,237 @@ def _catalogos_dinamicos(lineas: list[str]) -> dict[str, list[dict[str, str]]]:
 
 
 # -----------------------------------------------------------------------------
+# Métricas explicables
+# -----------------------------------------------------------------------------
+
+def _aplicar_metricas_contacto(row: dict[str, Any]) -> dict[str, Any]:
+    intentos = int(row.get("mensajes") or 0)
+    respuestas = int(row.get("respuestas") or 0)
+    positivas = int(row.get("positivas") or row.get("respuestas_positivas") or 0)
+    sin_respuesta = int(row.get("sin_respuesta") or 0)
+    fallidos = int(row.get("fallidos") or 0)
+
+    contactos_validos = max(intentos - fallidos, 0)
+    pendientes = max(contactos_validos - respuestas - sin_respuesta, 0)
+
+    row["mensajes"] = intentos
+    row["intentos_contacto"] = intentos
+    row["contactos_validos"] = contactos_validos
+    row["respuestas"] = respuestas
+    row["positivas"] = positivas
+    row["sin_respuesta"] = sin_respuesta
+    row["fallidos"] = fallidos
+    row["pendientes"] = pendientes
+    row["abiertas"] = pendientes
+
+    # Respuestas obtenidas sobre intentos realmente enviados; los fallidos no
+    # forman parte del denominador.
+    row["tasa_respuesta_cliente"] = _porcentaje(respuestas, contactos_validos)
+    # Señales de interés sobre las respuestas recibidas, no sobre todos los envíos.
+    row["tasa_interes_respuestas"] = _porcentaje(positivas, respuestas)
+    row["tasa_interes_contactos"] = _porcentaje(positivas, contactos_validos)
+    row["tasa_sin_respuesta_48h"] = _porcentaje(sin_respuesta, contactos_validos)
+
+    # Alias temporal para no romper clientes antiguos.
+    row["tasa_respuesta"] = row["tasa_respuesta_cliente"]
+    row["tasa_positiva"] = row["tasa_interes_respuestas"]
+    return row
+
+
+def _resumen_operativo_cliente(row: dict[str, Any]) -> str:
+    intentos = int(row.get("mensajes") or 0)
+    respuestas = int(row.get("respuestas") or 0)
+    positivas = int(row.get("positivas") or 0)
+    sin_respuesta = int(row.get("sin_respuesta") or 0)
+    pendientes = int(row.get("pendientes") or 0)
+    ultima_accion = str(row.get("ultima_accion") or "").strip()
+
+    if intentos == 0:
+        return "No existe contacto humano registrado en el periodo."
+    if positivas:
+        return "El cliente respondió con interés; el asesor debe convertirlo en cita, llamada o cotización."
+    if respuestas:
+        return "El cliente respondió, pero aún no hay una señal comercial concluyente."
+    if sin_respuesta and not pendientes:
+        return "El asesor realizó contacto; el cliente no respondió después de 48 horas."
+    if pendientes:
+        return "El asesor inició seguimiento y la respuesta del cliente continúa pendiente dentro de 48 horas."
+    return ultima_accion or "Existe actividad registrada, pero falta información para interpretar el resultado."
+
+
+def _calcular_primera_atencion(
+    *,
+    lineas: list[str],
+    inicio,
+    fin,
+) -> dict[str, Any]:
+    """
+    Calcula la primera respuesta HUMANA por conversación en el periodo.
+
+    Inicio: primer mensaje entrante del cliente para teléfono + línea.
+    Fin: primer mensaje saliente humano posterior, máximo 48 horas después.
+    Mensajes de IA y envíos fallidos quedan fuera.
+    """
+    entradas = list(
+        MensajeWhatsApp.objects
+        .filter(
+            numero_asesor__in=lineas,
+            direction=MensajeWhatsApp.Direccion.IN,
+            created_at__gte=inicio,
+            created_at__lt=fin,
+        )
+        .values("telefono", "numero_asesor", "created_at")
+        .order_by("created_at", "id")
+    )
+
+    primeras: dict[tuple[str, str], Any] = {}
+    for row in entradas:
+        key = (row["telefono"], row["numero_asesor"])
+        primeras.setdefault(key, _datetime_para_configuracion(row["created_at"]))
+
+    salidas_por_chat: dict[tuple[str, str], list[Any]] = {}
+    if primeras:
+        salidas = (
+            MensajeWhatsApp.objects
+            .filter(
+                numero_asesor__in=lineas,
+                direction=MensajeWhatsApp.Direccion.OUT,
+                created_at__gte=inicio,
+                created_at__lt=fin + timedelta(hours=HORAS_SIN_RESPUESTA),
+            )
+            .exclude(status="failed")
+            .values("telefono", "numero_asesor", "created_at", "raw")
+            .order_by("created_at", "id")
+        )
+
+        for row in salidas:
+            if _es_mensaje_ia_raw(row.get("raw")):
+                continue
+            key = (row["telefono"], row["numero_asesor"])
+            salidas_por_chat.setdefault(key, []).append(
+                _datetime_para_configuracion(row["created_at"])
+            )
+
+    referencia = _datetime_para_configuracion(_ahora())
+    por_chat: dict[tuple[str, str], dict[str, Any]] = {}
+    por_linea_segundos: dict[str, list[int]] = {numero: [] for numero in lineas}
+    por_linea_totales: dict[str, dict[str, int]] = {
+        numero: {"recibidas": 0, "atendidas": 0, "vencidas": 0, "pendientes": 0}
+        for numero in lineas
+    }
+
+    for key, entrada in primeras.items():
+        telefono, numero = key
+        por_linea_totales[numero]["recibidas"] += 1
+        salidas = salidas_por_chat.get(key, [])
+        index = bisect_left(salidas, entrada)
+        salida = salidas[index] if index < len(salidas) else None
+        segundos = None
+
+        if salida:
+            delta = int((salida - entrada).total_seconds())
+            if 0 <= delta <= HORAS_SIN_RESPUESTA * 3600:
+                segundos = delta
+
+        if segundos is not None:
+            estado = "atendida"
+            por_linea_totales[numero]["atendidas"] += 1
+            por_linea_segundos[numero].append(segundos)
+        elif referencia >= entrada + timedelta(hours=HORAS_SIN_RESPUESTA):
+            estado = "vencida_sin_atender"
+            por_linea_totales[numero]["vencidas"] += 1
+        else:
+            estado = "pendiente"
+            por_linea_totales[numero]["pendientes"] += 1
+
+        por_chat[key] = {
+            "estado": estado,
+            "inicio": _iso_datetime(entrada),
+            "respuesta_humana": _iso_datetime(salida) if segundos is not None else None,
+            "segundos": segundos,
+            "label": _segundos_label(segundos),
+        }
+
+    def construir(numero: str | None = None) -> dict[str, Any]:
+        numeros = [numero] if numero else lineas
+        segundos = [
+            value
+            for n in numeros
+            for value in por_linea_segundos.get(n, [])
+        ]
+        recibidas = sum(por_linea_totales[n]["recibidas"] for n in numeros)
+        atendidas = sum(por_linea_totales[n]["atendidas"] for n in numeros)
+        vencidas = sum(por_linea_totales[n]["vencidas"] for n in numeros)
+        pendientes = sum(por_linea_totales[n]["pendientes"] for n in numeros)
+        promedio = round(sum(segundos) / len(segundos)) if segundos else None
+        mediana_valor = round(median(segundos)) if segundos else None
+
+        return {
+            "conversaciones_recibidas": recibidas,
+            "conversaciones_atendidas": atendidas,
+            "sin_atencion_48h": vencidas,
+            "pendientes_menos_48h": pendientes,
+            "cobertura_atencion_pct": _porcentaje(atendidas, recibidas),
+            "promedio_segundos": promedio,
+            "promedio_label": _segundos_label(promedio),
+            "mediana_segundos": mediana_valor,
+            "mediana_label": _segundos_label(mediana_valor),
+            "ventana_horas": HORAS_SIN_RESPUESTA,
+        }
+
+    return {
+        "general": construir(),
+        "por_linea": {numero: construir(numero) for numero in lineas},
+        "por_chat": por_chat,
+    }
+
+
+def _completar_actividad_diaria(*, qs, desde, hasta) -> list[dict[str, Any]]:
+    dias: dict[Any, dict[str, Any]] = {}
+    fecha = desde
+    while fecha <= hasta:
+        dias[fecha] = {
+            "fecha": fecha.isoformat(),
+            "acciones": 0,
+            "mensajes": 0,
+            "respuestas": 0,
+            "positivas": 0,
+            "sin_respuesta": 0,
+            "fallidos": 0,
+        }
+        fecha += timedelta(days=1)
+
+    rows = (
+        qs.annotate(fecha=TruncDate("creado"))
+        .values("fecha")
+        .annotate(
+            acciones=Count("id"),
+            mensajes=Count("id", filter=_q_contacto()),
+            respuestas=Count("id", filter=_q_respuesta()),
+            positivas=Count("id", filter=_q_positivo()),
+            sin_respuesta=Count("id", filter=_q_sin_respuesta()),
+            fallidos=Count("id", filter=_q_fallido()),
+        )
+        .order_by("fecha")
+    )
+
+    for row in rows:
+        if row["fecha"] in dias:
+            dias[row["fecha"]].update(
+                {
+                    "acciones": int(row["acciones"] or 0),
+                    "mensajes": int(row["mensajes"] or 0),
+                    "respuestas": int(row["respuestas"] or 0),
+                    "positivas": int(row["positivas"] or 0),
+                    "sin_respuesta": int(row["sin_respuesta"] or 0),
+                    "fallidos": int(row["fallidos"] or 0),
+                }
+            )
+
+    return list(dias.values())
+
+
+# -----------------------------------------------------------------------------
 # API de analítica
 # -----------------------------------------------------------------------------
 
@@ -1027,14 +1411,11 @@ def _catalogos_dinamicos(lineas: list[str]) -> dict[str, list[dict[str, str]]]:
 @permission_classes([IsAuthenticated])
 def analitica_asesores_view(request):
     marcar_eventos_sin_respuesta()
-
     lineas, error = _lineas_permitidas(request)
-
     if error:
         return error
 
     desde, hasta, inicio, fin = _rango_fechas(request)
-
     qs = BitacoraAsesorDigital.objects.filter(
         numero_asesor__in=lineas,
         creado__gte=inicio,
@@ -1047,10 +1428,8 @@ def analitica_asesores_view(request):
 
     if resultado:
         qs = qs.filter(resultado=resultado)
-
     if tipo:
         qs = qs.filter(tipo=tipo)
-
     if buscar:
         qs = qs.filter(
             Q(expediente__cliente__nombre__icontains=buscar)
@@ -1058,6 +1437,12 @@ def analitica_asesores_view(request):
             | Q(accion__icontains=buscar)
             | Q(plantilla_nombre__icontains=buscar)
         )
+
+    tiempos_atencion = _calcular_primera_atencion(
+        lineas=lineas,
+        inicio=inicio,
+        fin=fin,
+    )
 
     resumen = qs.aggregate(
         acciones=Count("id"),
@@ -1069,100 +1454,110 @@ def analitica_asesores_view(request):
         respuestas_negativas=Count("id", filter=_q_negativo()),
         sin_respuesta=Count("id", filter=_q_sin_respuesta()),
         fallidos=Count("id", filter=_q_fallido()),
-        promedio_respuesta=Avg(
+        promedio_respuesta_cliente=Avg(
             "tiempo_respuesta_segundos",
             filter=_q_respuesta(),
         ),
     )
-
-    cerrados = int(resumen["respuestas"] or 0) + int(resumen["sin_respuesta"] or 0)
-    resumen["tasa_respuesta"] = _porcentaje(int(resumen["respuestas"] or 0), cerrados)
-    resumen["tasa_respuesta_positiva"] = _porcentaje(
-        int(resumen["respuestas_positivas"] or 0),
-        int(resumen["respuestas"] or 0),
+    resumen["positivas"] = int(resumen.get("respuestas_positivas") or 0)
+    resumen["promedio_respuesta_cliente_label"] = _segundos_label(
+        resumen.get("promedio_respuesta_cliente")
     )
-    resumen["promedio_respuesta_label"] = _segundos_label(resumen["promedio_respuesta"])
+    resumen["primera_atencion_humana"] = tiempos_atencion["general"]
+    resumen.update(
+        {
+            "primera_atencion_promedio_label": tiempos_atencion["general"]["promedio_label"],
+            "cobertura_primera_atencion_pct": tiempos_atencion["general"]["cobertura_atencion_pct"],
+            "sin_atencion_48h": tiempos_atencion["general"]["sin_atencion_48h"],
+        }
+    )
+    _aplicar_metricas_contacto(resumen)
 
-    asesores_qs = (
-        qs.values("numero_asesor", "asesor_digital")
-        .annotate(
-            acciones=Count("id"),
-            clientes=Count("expediente_id", distinct=True),
-            mensajes=Count("id", filter=_q_contacto()),
-            plantillas=Count("id", filter=Q(tipo=TIPO_PLANTILLA)),
-            respuestas=Count("id", filter=_q_respuesta()),
-            positivas=Count("id", filter=_q_positivo()),
-            sin_respuesta=Count("id", filter=_q_sin_respuesta()),
-            fallidos=Count("id", filter=_q_fallido()),
-            promedio_respuesta=Avg(
-                "tiempo_respuesta_segundos",
-                filter=_q_respuesta(),
-            ),
-            ultima_actividad=Max("creado"),
+    agregados = {
+        row["numero_asesor"]: row
+        for row in (
+            qs.values("numero_asesor")
+            .annotate(
+                acciones=Count("id"),
+                clientes=Count("expediente_id", distinct=True),
+                mensajes=Count("id", filter=_q_contacto()),
+                plantillas=Count("id", filter=Q(tipo=TIPO_PLANTILLA)),
+                respuestas=Count("id", filter=_q_respuesta()),
+                positivas=Count("id", filter=_q_positivo()),
+                sin_respuesta=Count("id", filter=_q_sin_respuesta()),
+                fallidos=Count("id", filter=_q_fallido()),
+                promedio_respuesta_cliente=Avg(
+                    "tiempo_respuesta_segundos",
+                    filter=_q_respuesta(),
+                ),
+                ultima_actividad=Max("creado"),
+            )
         )
-        .order_by("-respuestas", "-mensajes")
-    )
+    }
 
     asesores = []
-
-    for row in asesores_qs:
-        cerrados_asesor = int(row["respuestas"] or 0) + int(row["sin_respuesta"] or 0)
-        row["tasa_respuesta"] = _porcentaje(int(row["respuestas"] or 0), cerrados_asesor)
-        row["tasa_positiva"] = _porcentaje(
-            int(row["positivas"] or 0),
-            int(row["respuestas"] or 0),
+    for numero in lineas:
+        cfg = WHATSAPP_LINES.get(numero, {})
+        row = {
+            "numero_asesor": numero,
+            "asesor_digital": cfg.get("asesor_digital", "") or numero,
+            "agencia": cfg.get("agencia", ""),
+            "business": cfg.get("business", ""),
+            "acciones": 0,
+            "clientes": 0,
+            "mensajes": 0,
+            "plantillas": 0,
+            "respuestas": 0,
+            "positivas": 0,
+            "sin_respuesta": 0,
+            "fallidos": 0,
+            "promedio_respuesta_cliente": None,
+            "ultima_actividad": None,
+            **agregados.get(numero, {}),
+        }
+        row["asesor_digital"] = cfg.get("asesor_digital", "") or row.get("asesor_digital") or numero
+        row["agencia"] = cfg.get("agencia", "")
+        row["business"] = cfg.get("business", "")
+        row["promedio_respuesta_cliente_label"] = _segundos_label(
+            row.get("promedio_respuesta_cliente")
         )
-        row["promedio_respuesta_label"] = _segundos_label(row["promedio_respuesta"])
-        row["agencia"] = WHATSAPP_LINES.get(row["numero_asesor"], {}).get("agencia", "")
-        row["ultima_actividad"] = (
-            _iso_datetime(row["ultima_actividad"])
-        )
+        row["primera_atencion_humana"] = tiempos_atencion["por_linea"][numero]
+        row["ultima_actividad"] = _iso_datetime(row.get("ultima_actividad"))
+        _aplicar_metricas_contacto(row)
         asesores.append(row)
 
-    plantillas_qs = (
+    asesores.sort(
+        key=lambda item: (
+            item["tasa_respuesta_cliente"],
+            item["contactos_validos"],
+            item["clientes"],
+        ),
+        reverse=True,
+    )
+
+    plantillas = []
+    for row in (
         qs.filter(tipo=TIPO_PLANTILLA)
         .exclude(plantilla_nombre="")
         .values("plantilla_nombre")
         .annotate(
-            envios=Count("id"),
+            mensajes=Count("id"),
             respuestas=Count("id", filter=_q_respuesta()),
             positivas=Count("id", filter=_q_positivo()),
             sin_respuesta=Count("id", filter=_q_sin_respuesta()),
             fallidos=Count("id", filter=_q_fallido()),
         )
-        .order_by("-envios")[:10]
-    )
-
-    plantillas = []
-
-    for row in plantillas_qs:
-        cerrados_plantilla = int(row["respuestas"] or 0) + int(row["sin_respuesta"] or 0)
-        row["tasa_respuesta"] = _porcentaje(
-            int(row["respuestas"] or 0),
-            cerrados_plantilla,
-        )
+        .order_by("-mensajes")[:10]
+    ):
+        row["envios"] = int(row.get("mensajes") or 0)
+        _aplicar_metricas_contacto(row)
         plantillas.append(row)
 
-    actividad_diaria = []
-
-    for row in (
-        qs.annotate(fecha=TruncDate("creado"))
-        .values("fecha")
-        .annotate(
-            acciones=Count("id"),
-            mensajes=Count("id", filter=_q_contacto()),
-            respuestas=Count("id", filter=_q_respuesta()),
-        )
-        .order_by("fecha")
-    ):
-        actividad_diaria.append(
-            {
-                "fecha": row["fecha"].isoformat() if row["fecha"] else None,
-                "acciones": row["acciones"],
-                "mensajes": row["mensajes"],
-                "respuestas": row["respuestas"],
-            }
-        )
+    actividad_diaria = _completar_actividad_diaria(
+        qs=qs,
+        desde=desde,
+        hasta=hasta,
+    )
 
     latest = qs.filter(
         expediente_id=OuterRef("expediente_id"),
@@ -1174,11 +1569,12 @@ def analitica_asesores_view(request):
         .values(
             "expediente_id",
             "numero_asesor",
-            "asesor_digital",
             "expediente__cliente__nombre",
             "expediente__cliente__telefono",
             "expediente__estado",
             "expediente__auto_interes",
+            "expediente__ia_pausada",
+            "expediente__ia_pausada_motivo",
         )
         .annotate(
             acciones=Count("id"),
@@ -1187,6 +1583,11 @@ def analitica_asesores_view(request):
             respuestas=Count("id", filter=_q_respuesta()),
             positivas=Count("id", filter=_q_positivo()),
             sin_respuesta=Count("id", filter=_q_sin_respuesta()),
+            fallidos=Count("id", filter=_q_fallido()),
+            promedio_respuesta_cliente=Avg(
+                "tiempo_respuesta_segundos",
+                filter=_q_respuesta(),
+            ),
             ultima_actividad=Max("creado"),
             ultima_accion=Subquery(latest.values("accion")[:1]),
             ultimo_resultado=Subquery(latest.values("resultado")[:1]),
@@ -1196,36 +1597,78 @@ def analitica_asesores_view(request):
 
     try:
         page_number = max(1, int(request.query_params.get("page", 1)))
-        page_size = min(100, max(10, int(request.query_params.get("page_size", 25))))
+        page_size = min(150, max(10, int(request.query_params.get("page_size", 25))))
     except (TypeError, ValueError):
         page_number, page_size = 1, 25
 
     paginator = Paginator(clientes_qs, page_size)
     page = paginator.get_page(page_number)
-    clientes = []
+    page_rows = list(page.object_list)
+    expediente_ids = [int(row["expediente_id"]) for row in page_rows]
 
-    catalogos = _catalogos_dinamicos(lineas)
-    catalogo_resultados = {
-        item["value"]: item
-        for item in catalogos["resultados"]
+    configs = {
+        item.numero_asesor: bool(item.activo)
+        for item in ConfiguracionIAWhatsApp.objects
+        .filter(numero_asesor__in=lineas)
+        .only("numero_asesor", "activo")
+    }
+    conversaciones = {
+        (row["expediente_id"], row["numero_asesor"]): row
+        for row in ConversacionIA.objects
+        .filter(expediente_id__in=expediente_ids, numero_asesor__in=lineas)
+        .values(
+            "expediente_id",
+            "numero_asesor",
+            "ia_activa",
+            "ia_pausada",
+            "motivo_pausa",
+            "estado_conversacion",
+        )
     }
 
-    for row in page.object_list:
+    catalogos = _catalogos_dinamicos(lineas)
+    catalogo_resultados = {item["value"]: item for item in catalogos["resultados"]}
+    clientes = []
+
+    for row in page_rows:
         row["nombre"] = row.pop("expediente__cliente__nombre") or "Sin nombre"
         row["telefono"] = row.pop("expediente__cliente__telefono") or ""
         row["estado"] = row.pop("expediente__estado") or ""
         row["auto_interes"] = row.pop("expediente__auto_interes") or ""
-        row["ultima_actividad"] = (
-            _iso_datetime(row["ultima_actividad"])
+        exp_pausado = bool(row.pop("expediente__ia_pausada") or False)
+        exp_motivo = row.pop("expediente__ia_pausada_motivo") or ""
+        row["asesor_digital"] = WHATSAPP_LINES.get(row["numero_asesor"], {}).get("asesor_digital", "")
+        row["agencia"] = WHATSAPP_LINES.get(row["numero_asesor"], {}).get("agencia", "")
+        row["ultima_actividad"] = _iso_datetime(row.get("ultima_actividad"))
+        row["promedio_respuesta_cliente_label"] = _segundos_label(
+            row.get("promedio_respuesta_cliente")
         )
+        _aplicar_metricas_contacto(row)
 
-        ultimo = catalogo_resultados.get(row["ultimo_resultado"] or "", {})
+        ultimo = catalogo_resultados.get(row.get("ultimo_resultado") or "", {})
         row["ultimo_resultado_label"] = ultimo.get("label") or _label_abierto(
-            row["ultimo_resultado"],
-            LABELS_RESULTADO_BASE,
+            row.get("ultimo_resultado"), LABELS_RESULTADO_BASE
         )
         row["ultimo_resultado_grupo"] = ultimo.get("grupo") or _inferir_grupo_resultado(
-            row["ultimo_resultado"]
+            row.get("ultimo_resultado")
+        )
+        row["resumen_operativo"] = _resumen_operativo_cliente(row)
+        row["ia_estado"] = _estado_ia_desde_filas(
+            numero_asesor=row["numero_asesor"],
+            expediente_pausado=exp_pausado,
+            expediente_motivo=exp_motivo,
+            config_activa=configs.get(row["numero_asesor"]),
+            conversacion=conversaciones.get((row["expediente_id"], row["numero_asesor"])),
+        )
+        row["primera_atencion_humana"] = tiempos_atencion["por_chat"].get(
+            (row["telefono"], row["numero_asesor"]),
+            {
+                "estado": "sin_mensaje_entrante_en_periodo",
+                "inicio": None,
+                "respuesta_humana": None,
+                "segundos": None,
+                "label": "—",
+            },
         )
         clientes.append(row)
 
@@ -1235,6 +1678,7 @@ def analitica_asesores_view(request):
             "asesor_digital": WHATSAPP_LINES[numero].get("asesor_digital", ""),
             "agencia": WHATSAPP_LINES[numero].get("agencia", ""),
             "business": WHATSAPP_LINES[numero].get("business", ""),
+            "tiene_actividad": numero in agregados,
         }
         for numero in lineas
     ]
@@ -1247,6 +1691,14 @@ def analitica_asesores_view(request):
                 "fecha_hasta": hasta.isoformat(),
             },
             "horas_sin_respuesta": HORAS_SIN_RESPUESTA,
+            "definiciones_metricas": {
+                "tasa_respuesta_cliente": "Respuestas del cliente / intentos de contacto enviados correctamente.",
+                "tasa_interes_respuestas": "Respuestas con intención comercial / respuestas recibidas.",
+                "sin_respuesta_48h": "Intento sin respuesta después de 48 horas.",
+                "pendiente": "Intento todavía dentro de las primeras 48 horas.",
+                "primera_atencion_humana": "Tiempo entre el primer mensaje entrante del periodo y la primera respuesta humana; la IA y los fallidos se excluyen.",
+                "respuesta_cliente": "Tiempo entre una acción humana saliente y la primera respuesta entrante asociada.",
+            },
             "resumen": resumen,
             "asesores": asesores,
             "plantillas": plantillas,
@@ -1271,9 +1723,7 @@ def analitica_asesores_view(request):
 @permission_classes([IsAuthenticated])
 def analitica_cliente_view(request, expediente_id: int):
     marcar_eventos_sin_respuesta()
-
     lineas, error = _lineas_permitidas(request)
-
     if error:
         return error
 
@@ -1283,7 +1733,6 @@ def analitica_cliente_view(request, expediente_id: int):
         .filter(id=expediente_id)
         .first()
     )
-
     if not expediente:
         return Response(
             {"ok": False, "error": "Prospecto no encontrado."},
@@ -1291,22 +1740,63 @@ def analitica_cliente_view(request, expediente_id: int):
         )
 
     numero = normaliza_tel_mx(request.query_params.get("numero_asesor", ""))
-
     if numero and numero not in lineas:
         return Response(
             {"ok": False, "error": "No tienes permiso para esa línea."},
             status=status.HTTP_403_FORBIDDEN,
         )
 
-    qs = (
+    numeros = [numero] if numero else lineas
+    eventos = list(
         BitacoraAsesorDigital.objects
         .select_related("mensaje", "respuesta_mensaje")
-        .filter(
-            expediente=expediente,
-            numero_asesor__in=([numero] if numero else lineas),
-        )
+        .filter(expediente=expediente, numero_asesor__in=numeros)
         .order_by("-creado", "-id")[:200]
     )
+    eventos_cronologicos = list(reversed(eventos))
+
+    mensajes = list(
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=expediente.cliente.telefono,
+            numero_asesor__in=numeros,
+        )
+        .order_by("-created_at", "-id")[:160]
+    )
+    mensajes.reverse()
+
+    numero_estado = numero or (eventos[0].numero_asesor if eventos else numeros[0])
+    ia_estado = _estado_ia_chat(
+        expediente=expediente,
+        numero_asesor=numero_estado,
+        fuente="estado_actual",
+    )
+
+    ultimo_evento = eventos[0] if eventos else None
+    ultimo_mensaje = mensajes[-1] if mensajes else None
+    cache_key = (
+        f"digitales:resumen-atencion:{expediente.id}:{numero_estado}:"
+        f"{getattr(ultimo_evento, 'id', 0)}:{getattr(ultimo_evento, 'actualizado', '')}:"
+        f"{getattr(ultimo_mensaje, 'id', 0)}"
+    )
+    resumen_atencion = cache.get(cache_key)
+    if not resumen_atencion:
+        resumen_atencion = generar_resumen_atencion_con_gemini(
+            mensajes=mensajes,
+            eventos=eventos_cronologicos,
+            telefono=expediente.cliente.telefono,
+            estado_ia=ia_estado,
+        )
+        cache.set(cache_key, resumen_atencion, timeout=60 * 30)
+
+    metricas = {
+        "mensajes": sum(1 for item in eventos if item.tipo in TIPOS_CONTACTO),
+        "respuestas": sum(1 for item in eventos if _grupo_resultado_evento(item) in GRUPOS_RESPUESTA),
+        "positivas": sum(1 for item in eventos if _grupo_resultado_evento(item) == GRUPO_POSITIVO),
+        "sin_respuesta": sum(1 for item in eventos if _grupo_resultado_evento(item) == GRUPO_SIN_RESPUESTA),
+        "fallidos": sum(1 for item in eventos if _grupo_resultado_evento(item) == GRUPO_FALLIDO),
+    }
+    _aplicar_metricas_contacto(metricas)
 
     return Response(
         {
@@ -1319,8 +1809,14 @@ def analitica_cliente_view(request, expediente_id: int):
                 "auto_interes": expediente.auto_interes,
                 "asesor_digital": expediente.asesor_digital,
                 "asesor_ventas": expediente.asesor_ventas,
+                "ia_estado": ia_estado,
             },
-            "eventos": [_serializar_evento(item) for item in qs],
+            "metricas": metricas,
+            "resumen_atencion_ia": resumen_atencion,
+            "eventos": [
+                _serializar_evento(item, ia_fallback=ia_estado)
+                for item in eventos
+            ],
             "catalogos": _catalogos_dinamicos(lineas),
         }
     )
@@ -1330,31 +1826,23 @@ def analitica_cliente_view(request, expediente_id: int):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def analitica_evento_resultado_view(request, evento_id):
+    """Compatibilidad administrativa. La interfaz principal ya no expone un selector manual."""
     lineas, error = _lineas_permitidas(request)
-
     if error:
         return error
 
     evento = (
         BitacoraAsesorDigital.objects
-        .filter(
-            evento_id=evento_id,
-            numero_asesor__in=lineas,
-        )
+        .filter(evento_id=evento_id, numero_asesor__in=lineas)
         .first()
     )
-
     if not evento:
         return Response(
             {"ok": False, "error": "Evento no encontrado."},
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    resultado = _clave_abierta(
-        request.data.get("resultado", ""),
-        "",
-    )
-
+    resultado = _clave_abierta(request.data.get("resultado", ""), "")
     if not resultado:
         return Response(
             {"ok": False, "error": "El resultado es obligatorio."},
@@ -1363,37 +1851,26 @@ def analitica_evento_resultado_view(request, evento_id):
 
     resultado_label = str(request.data.get("resultado_label", "") or "").strip()[:120]
     grupo_resultado = str(request.data.get("grupo_resultado", "") or "").strip().lower()
-
     if grupo_resultado and grupo_resultado not in GRUPOS_RESULTADO_VALIDOS:
         return Response(
-            {
-                "ok": False,
-                "error": "El grupo del resultado no es válido.",
-                "grupos_validos": sorted(GRUPOS_RESULTADO_VALIDOS),
-            },
+            {"ok": False, "error": "El grupo del resultado no es válido."},
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    if not grupo_resultado:
-        grupo_resultado = _inferir_grupo_resultado(resultado)
-
-    if not resultado_label:
-        resultado_label = _label_abierto(resultado, LABELS_RESULTADO_BASE)
-
+    grupo_resultado = grupo_resultado or _inferir_grupo_resultado(resultado)
+    resultado_label = resultado_label or _label_abierto(resultado, LABELS_RESULTADO_BASE)
     metadata = _dict_seguro(evento.metadata)
-    metadata["clasificacion_manual"] = True
-    metadata["clasificado_por"] = _usuario_crm(request)
-    metadata["clasificado_at"] = _ahora().isoformat()
-    metadata["grupo_resultado"] = grupo_resultado
-    metadata["resultado_label"] = resultado_label
-
+    metadata.update(
+        {
+            "clasificacion_manual": True,
+            "clasificado_por": _usuario_crm(request),
+            "clasificado_at": _ahora().isoformat(),
+            "grupo_resultado": grupo_resultado,
+            "resultado_label": resultado_label,
+        }
+    )
     evento.resultado = resultado
     evento.metadata = metadata
     evento.save(update_fields=["resultado", "metadata", "actualizado"])
 
-    return Response(
-        {
-            "ok": True,
-            "evento": _serializar_evento(evento),
-        }
-    )
+    return Response({"ok": True, "evento": _serializar_evento(evento)})
