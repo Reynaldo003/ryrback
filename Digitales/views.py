@@ -73,6 +73,13 @@ from .plantillas_meta import (
     eliminar_plantilla_meta,
     listar_plantillas_meta,
 )
+from .asesor_logs import (
+    actualizar_estado_entrega,
+    registrar_cambios_expediente,
+    registrar_evento_mensaje,
+    registrar_evento_operativo,
+    resolver_evento_por_respuesta,
+)
 
 from django.http import JsonResponse
 
@@ -102,6 +109,35 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             "-creado",
         )
     )
+
+    CAMPOS_AUDITABLES = (
+        "estado",
+        "motivo_descalificacion",
+        "asesor_digital",
+        "asesor_ventas",
+        "auto_interes",
+        "forma_pago",
+        "buro_estado",
+        "plazo_compra",
+        "requiere_asesor",
+        "cotizacion_pendiente",
+        "whatsapp_bloqueado",
+    )
+
+    def perform_update(self, serializer):
+        expediente = serializer.instance
+        antes = {
+            campo: getattr(expediente, campo, None)
+            for campo in self.CAMPOS_AUDITABLES
+        }
+
+        expediente = serializer.save()
+
+        registrar_cambios_expediente(
+            expediente=expediente,
+            antes=antes,
+            request=self.request,
+        )
 
 # ── Vistas simples ────────────────────────────────────────────────────────────
 
@@ -773,7 +809,7 @@ def _guardar_mensaje_fallido(
         raw.update(extra_raw)
 
     try:
-        MensajeWhatsApp.objects.create(
+        mensaje_fallido = MensajeWhatsApp.objects.create(
             telefono=to,
             numero_asesor=numero_asesor,
             cliente=cliente,
@@ -783,6 +819,8 @@ def _guardar_mensaje_fallido(
             status="failed",
             raw=raw,
         )
+        registrar_evento_mensaje(mensaje_fallido)
+        return mensaje_fallido
     except Exception as save_error:
         logger.exception(
             "No se pudo guardar mensaje fallido | to=%s numero_asesor=%s error=%s",
@@ -1267,6 +1305,12 @@ def webhook(request):
 
 
                     if created:
+                        resolver_evento_por_respuesta(
+                            mensaje_entrante,
+                            expediente=exp,
+                        )
+
+                    if created:
                         media_type = str(msg.get("type") or "").lower()
 
                         if media_type in ("image", "document", "video", "audio", "sticker"):
@@ -1350,6 +1394,7 @@ def webhook(request):
                     msg_obj.status = st
                     msg_obj.raw = new_raw
                     msg_obj.save(update_fields=["status", "raw"])
+                    actualizar_estado_entrega(msg_obj, st, errors=errors)
 
                     logger.info("WEBHOOK STATUS ACTUALIZADO | wa_id=%s status=%s", wa_id, st)
 
@@ -1654,6 +1699,17 @@ def llamar_whatsapp(request):
             sdp_offer=request.data.get("sdp_offer", ""),
         )
 
+        cliente = ClienteComercial.objects.filter(telefono=telefono).first()
+        expediente = ExpedienteDigital.objects.filter(cliente=cliente).first() if cliente else None
+        registrar_evento_operativo(
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+            tipo="llamada",
+            accion="Inició una llamada de WhatsApp",
+            request=request,
+            metadata={"respuesta_meta": resultado},
+        )
+
         return Response(
             {
                 "ok": True,
@@ -1787,7 +1843,7 @@ def enviar_mensaje_view(request):
 
         wa_message_id = _extraer_wa_message_id(wa_res)
 
-        MensajeWhatsApp.objects.create(
+        mensaje_enviado = MensajeWhatsApp.objects.create(
             telefono=to,
             numero_asesor=numero_asesor,
             cliente=cliente,
@@ -1802,6 +1858,12 @@ def enviar_mensaje_view(request):
                 "origen": "asesor_humano",
                 "reply_to": reply_to_message_id,
             },
+        )
+        registrar_evento_mensaje(
+            mensaje_enviado,
+            request=request,
+            expediente=exp,
+            tipo="mensaje",
         )
 
         #pausar_ia_por_intervencion_humana(exp, numero_asesor)
@@ -2131,7 +2193,7 @@ def enviar_media_view(request):
                     "reply_to": reply_to_message_id,
                 }
 
-                MensajeWhatsApp.objects.create(
+                mensaje_media = MensajeWhatsApp.objects.create(
                     telefono=to,
                     numero_asesor=numero_asesor,
                     cliente=cliente,
@@ -2140,6 +2202,12 @@ def enviar_media_view(request):
                     wa_message_id=wa_message_id,
                     status="accepted",
                     raw=raw,
+                )
+                registrar_evento_mensaje(
+                    mensaje_media,
+                    request=request,
+                    expediente=exp,
+                    tipo="media",
                 )
 
                 sent.append(
@@ -2333,7 +2401,7 @@ def enviar_plantilla_view(request):
         else:
             body_log += " " + " | ".join([str(x) for x in (params or [])])
 
-        MensajeWhatsApp.objects.create(
+        mensaje_plantilla = MensajeWhatsApp.objects.create(
             telefono=to,
             numero_asesor=numero_asesor,
             cliente=cliente,
@@ -2347,7 +2415,14 @@ def enviar_plantilla_view(request):
                 "numero_asesor": numero_asesor,
                 "template_name": template_name,
                 "idioma": idioma,
+                "origen": "asesor_humano",
             },
+        )
+        registrar_evento_mensaje(
+            mensaje_plantilla,
+            request=request,
+            expediente=exp,
+            tipo="plantilla",
         )
         
         #pausar_ia_por_intervencion_humana(exp, numero_asesor)
@@ -2867,6 +2942,16 @@ def bloquear_contacto_whatsapp_view(request):
             "actualizado",
         ])
 
+    registrar_evento_operativo(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+        tipo="bloqueo",
+        accion="Bloqueó al cliente en WhatsApp",
+        detalle=motivo,
+        request=request,
+        metadata={"respuesta_meta": meta_res},
+    )
+
     return Response(
         {
             "ok": True,
@@ -2965,6 +3050,15 @@ def desbloquear_contacto_whatsapp_view(request):
             "whatsapp_bloqueado_respuesta_meta",
             "actualizado",
         ])
+
+    registrar_evento_operativo(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+        tipo="bloqueo",
+        accion="Desbloqueó al cliente en WhatsApp",
+        request=request,
+        metadata={"respuesta_meta": meta_res},
+    )
 
     return Response(
         {

@@ -434,3 +434,59 @@ class ConfiguracionIAWhatsApp(models.Model):
     def __str__(self):
         estado = "activa" if self.activo else "inactiva"
         return f"IA WhatsApp {self.numero_asesor} | {estado}"
+
+class BitacoraAsesorDigital(models.Model):
+    evento_id = models.UUIDField(default=uuid.uuid4,unique=True,editable=False,)
+    expediente = models.ForeignKey(ExpedienteDigital,on_delete=models.SET_NULL,null=True,blank=True,related_name="bitacora_asesor",)
+    cliente = models.ForeignKey(ClienteComercial,on_delete=models.SET_NULL,null=True,blank=True,related_name="bitacora_digital",)
+    mensaje = models.OneToOneField(MensajeWhatsApp,on_delete=models.SET_NULL,null=True,blank=True,related_name="evento_asesor",)
+    respuesta_mensaje = models.ForeignKey(MensajeWhatsApp,on_delete=models.SET_NULL,null=True,blank=True,related_name="+",)
+    numero_asesor = models.CharField(max_length=15,blank=True,default="",db_index=True,)
+    asesor_digital = models.CharField(max_length=200,blank=True,default="",db_index=True,)
+    usuario_crm = models.CharField(max_length=120,blank=True,default="",)
+    tipo = models.CharField(max_length=80,blank=True,default="otro",db_index=True,)
+    accion = models.CharField(max_length=255,)
+    detalle = models.TextField(max_length=1000,blank=True,default="",)
+    plantilla_nombre = models.CharField(max_length=160,blank=True,default="",db_index=True,)
+    resultado = models.CharField(max_length=80,blank=True,default="pendiente",db_index=True,)
+    estado_entrega = models.CharField(max_length=50,blank=True,default="",)
+    respuesta_texto = models.TextField(max_length=1000,blank=True,default="",)
+    respondido_at = models.DateTimeField(null=True,blank=True,)
+    tiempo_respuesta_segundos = models.PositiveIntegerField(null=True,blank=True,)
+    metadata = models.JSONField(default=dict,blank=True,)
+
+    creado = models.DateTimeField(auto_now_add=True,db_index=True,)
+
+    actualizado = models.DateTimeField(auto_now=True,)
+
+    class Meta:
+        db_table = "digitales_bitacora_asesor"
+        ordering = ["-creado", "-id"]
+
+        indexes = [
+            models.Index(fields=["numero_asesor", "-creado"],),
+            models.Index(fields=["expediente","numero_asesor","-creado",],),
+            models.Index(fields=["tipo","resultado","-creado",],),
+            models.Index(fields=["plantilla_nombre","-creado",],),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(self.numero_asesor or "")
+        self.tipo = str(self.tipo or "otro").strip()[:80]
+        self.resultado = str(self.resultado or "pendiente").strip()[:80]
+        self.estado_entrega = str(self.estado_entrega or "").strip()[:50]
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        asesor = (
+            self.asesor_digital
+            or self.numero_asesor
+            or "Sin asesor"
+        )
+
+        return (
+            f"{asesor} | "
+            f"{self.accion} | "
+            f"{self.resultado}"
+        )
