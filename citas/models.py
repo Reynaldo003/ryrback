@@ -47,8 +47,9 @@ class Cita(models.Model):
     auto_interes = models.CharField(max_length=255, blank=True, default="")
     fecha_hora_cita = models.DateTimeField(null=True, blank=True)
     asistencia = models.BooleanField(default=False)
-    
+
     tipo_cita = models.CharField(max_length=120, blank=True, default="")
+    motivo_cita = models.CharField(max_length=120,blank=True,default="",)
     tipo_venta = models.CharField(max_length=80, blank=True, default="")
     fuente_prospeccion = models.CharField(max_length=120, blank=True, default="")
     asesor_digital = models.CharField(max_length=200, blank=True, default="")

@@ -6,14 +6,6 @@ from .models import Usuario
 
 
 class CRMJWTAuthentication(JWTAuthentication):
-    """
-    Autenticación JWT para el modelo propio del CRM: CrmConformidad.Usuario.
-
-    SimpleJWT por defecto intenta buscar usuarios en django.contrib.auth.User.
-    Como tu CRM usa la tabla propia usuarios, resolvemos request.user usando
-    el claim id_usuario del token.
-    """
-
     def get_user(self, validated_token):
         id_usuario = validated_token.get("id_usuario")
 
