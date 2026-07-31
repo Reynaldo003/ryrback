@@ -4,6 +4,7 @@ token = 'CBAR&RVOLKS'
 whatsapp_token = 'EAAS1RWxgIcIBP8LS2l1ZAmUz4BjZCufH0VUVQCS4KQhAbAPFQtHtsbgZAVZBF8W1HjFbwur6qtN3KokHoZBY2qpZA24MafOc2bnc1SuXVK2EWT2qsGVnE4oltrQyFOYPN9rEwXFd1ZAHYvPktu7HlsoYThbThNHRwHR6PdkN8TfgZBJWEAMb1VnJsdSYSXRKegZDZD'
 whatsapp_token_tuxtepec = 'EAAVlkKROgagBRdZAyzfeyZAQL0ZBwGZBSOunNx57FoXkLzTdDeA54vOBMOZCge18ttvMvprzSybCySol3ZBzCiAkfJLJzbN6bX0ISHlRl4JoTmYc1p09A4HM3MT7ZAiVFLTAXfKxFll9HNuDTVkZAHluYqYZB5sdZBlkuMBQsJd9GD4ZBmymlFwM60kBEF0VhMAjgZDZD'
 whatsapp_token_tuxpan = 'EAATUD4lFmroBRjhEo3n9bvR0PZA0sC68SnabSaRJq7ZCgL2CRufeST4zxF4RWxpOrKKFNQW6voMx4YCoDDANlHtVaPUZCaNimJCy5wb5pqrnNMvAZC9aNPZBx721Ek5HotcKjaqinWhe6QZAROZCYlk74v3nBdOTt0NHree5FY09pizUkvwW0KI9Lf1qWUTYnILRAZDZD'
+whatsapp_token_ryr = 'EAAZAeWrfcs7wBSOHzDc4cZAPcDUklNXZCSLVpIYPup6LpUOCSI3iDY18NDhzrpCBagcYFWdlGyaBSg0WgZB4MLcZAZAwki7HnhRZADadcQuBX2EXBhNW5lf3PQZCSjPoNrP3jUQ2YaOhgSxJqdhq0U9D3wcFESjya5pmACfQ59coTSPTn5wV6yLJvz9ZACZCa5twZDZD'
 
 META_ADS_CORDOBA = {
     "app_id": "3593225937645317",
@@ -33,7 +34,6 @@ META_ADS_TUXTEPEC = {
     "ad_account_id": "act_643975770287544",
 }
 
-
 def meta_ads_linea(cfg: dict) -> dict:
     return {
         "meta_ads_app_id": cfg["app_id"],
@@ -57,6 +57,7 @@ whatsapp_url_denisse = 'https://graph.facebook.com/v22.0/1134322799754327/messag
 whatsapp_url_marelly = 'https://graph.facebook.com/v22.0/1113085168553604/messages'
 whatsapp_url_edgar = 'https://graph.facebook.com/v22.0/1208561865665780/messages'
 whatsapp_url_dulce = 'https://graph.facebook.com/v22.0/1285910144598050/messages'
+whatsapp_url_ryr = 'https://graph.facebook.com/v22.0/674631769071379/messages'
 
 whatsapp_numero_default = "522712638803"
 whatsapp_numero_liz = "522721111244"
@@ -66,6 +67,7 @@ whatsapp_numero_denisse = "522721986539"
 whatsapp_numero_marelly = "522871232641"
 whatsapp_numero_edgar = "527831263814"
 whatsapp_numero_dulce = "527821820706"
+whatsapp_numero_ryr = "528009992443"
 
 WHATSAPP_LINES = {
     whatsapp_numero_default: {
@@ -175,6 +177,18 @@ WHATSAPP_LINES = {
         "responder_ia": False,
         "template_names": [],
         **meta_ads_linea(META_ADS_TUXPAN_POZA_RICA),
+    },
+    whatsapp_numero_ryr: {
+        "key": "ryr",
+        "phone_number_id": "674631769071379",
+        "waba_id": "2117351722076643",
+        "access_token": whatsapp_token_ryr,
+        "asesor_digital": "Israel Rojas Olguin",
+        "messages_url": whatsapp_url_ryr,
+        "agencia": "Automotriz R&R",
+        "business": "Usados",
+        "responder_ia": False,
+        "template_names": [],
     },
 }
 
