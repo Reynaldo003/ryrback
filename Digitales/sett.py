@@ -65,6 +65,7 @@ whatsapp_numero_eren = "522713133332"
 whatsapp_numero_bianca = "522712837999"
 whatsapp_numero_denisse = "522721986539"
 whatsapp_numero_marelly = "522871232641"
+whatsapp_numero_julio = "522871232641"
 whatsapp_numero_edgar = "527831263814"
 whatsapp_numero_dulce = "527821820706"
 whatsapp_numero_ryr = "528009992443"
@@ -145,6 +146,19 @@ WHATSAPP_LINES = {
         "waba_id": "1447380546688132",
         "access_token": whatsapp_token_tuxtepec,
         "asesor_digital": "Marelly Tenorio Salinas",
+        "messages_url": whatsapp_url_marelly,
+        "agencia": "VW Tuxtepec",
+        "business": "Nuevos",
+        "responder_ia": False,
+        "template_names": ["saludo_seguimiento", "informacion_seguimiento"],
+        **meta_ads_linea(META_ADS_TUXTEPEC),
+    },
+    whatsapp_numero_julio: {
+        "key": "julio",
+        "phone_number_id": "1113085168553604",
+        "waba_id": "1447380546688132",
+        "access_token": whatsapp_token_tuxtepec,
+        "asesor_digital": "Julio Ramirez Lopez",
         "messages_url": whatsapp_url_marelly,
         "agencia": "VW Tuxtepec",
         "business": "Nuevos",

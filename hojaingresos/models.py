@@ -18,12 +18,12 @@ class HojaIngresos(models.Model):
     agencia = models.CharField(max_length=120, blank=True, default="")
     no_orden = models.CharField(max_length=255, blank=True, default="")
     fecha_ingreso = models.DateTimeField(null=True, blank=True)
-    asistencia = models.BooleanField(default=False)
+    asistencia = models.BooleanField(null=True,blank=True,default=None,)
     diss = models.CharField(max_length=120, blank=True, default="")
     pauta = models.TextField(blank=True, default="")
     indicador_resultados = models.CharField(max_length=120, blank=True, default="")
     alcance = models.CharField(max_length=120, blank=True, default="")
-    citado = models.BooleanField(default=False)
+    citado = models.BooleanField(required=False default=None)
     torre = models.CharField(max_length=120, blank=True, default="")
     asesor = models.CharField(max_length=120, blank=True, default="")
     agendado_por = models.CharField(max_length=120, blank=True, default="")
@@ -41,10 +41,7 @@ class HojaIngresos(models.Model):
         decimal_places=2,
         default=0,
     )
-    long_drive = models.BooleanField(
-        null=True,
-        blank=True,
-    )
+    long_drive = models.BooleanField(required=False,allow_null=True,blank=True,)
 
     hora_promesa = models.DateTimeField(
         null=True,
