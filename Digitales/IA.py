@@ -1232,7 +1232,7 @@ def _decision_conversacional_ia(
     modelo = getattr(
         settings,
         "GEMINI_MODEL",
-        "gemini-2.5-flash",
+        "gemini-3.6-flash",
     )
 
     try:
@@ -1585,14 +1585,42 @@ def _llamar_gemini_decision(
             system_instruction=instrucciones,
             response_mime_type="application/json",
             response_schema=GEMINI_DECISION_SCHEMA,
+
+            # El perfilamiento comercial no necesita razonamiento
+            # profundo. Evita consumir tokens de pensamiento.
+            thinking_config=types.ThinkingConfig(
+                thinking_budget=0,
+            ),
+
+            # El JSON contiene varios campos, pero reply_text está
+            # limitado a 700 caracteres.
+            max_output_tokens=1200,
             temperature=0.45,
         ),
     )
 
+    usage = getattr(
+        respuesta,
+        "usage_metadata",
+        None,
+    )
+
+    if usage:
+        logger.info(
+            (
+                "GEMINI USAGE | modelo=%s "
+                "entrada=%s salida=%s pensamiento=%s total=%s"
+            ),
+            modelo,
+            getattr(usage, "prompt_token_count", None),
+            getattr(usage, "candidates_token_count", None),
+            getattr(usage, "thoughts_token_count", None),
+            getattr(usage, "total_token_count", None),
+        )
+
     return _json_seguro(
         getattr(respuesta, "text", "") or ""
     )
-
 
 def _sanitizar_decision_ia(
     salida: dict[str, Any],
@@ -2448,7 +2476,7 @@ Devuelve máximo 8 líneas.
             model=getattr(
                 settings,
                 "GEMINI_MEDIA_MODEL",
-                getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+                getattr(settings, "GEMINI_MODEL", "gemini-3.6-flash"),
             ),
             contents=[
                 prompt,
@@ -2680,7 +2708,7 @@ def _analizar_media_con_gemini(
     modelo_multimodal = getattr(
         settings,
         "GEMINI_MULTIMODAL_MODEL",
-        getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+        getattr(settings, "GEMINI_MODEL", "gemini-3.6-flash"),
     )
 
     respuesta = client.models.generate_content(
@@ -2980,30 +3008,41 @@ def responder_mensaje_automatico(
 ) -> dict:
     telefono = normaliza_tel_mx(replace_start(wa_from))
     numero_asesor = normaliza_tel_mx(numero_asesor)
-    wa_message_id_entrante = (wa_message_id_entrante or "").strip()
+    wa_message_id_entrante = str(
+        wa_message_id_entrante or ""
+    ).strip()
 
-    texto_usuario_original = texto_usuario
+    texto_usuario_original = str(
+        texto_usuario or ""
+    ).strip()
 
-    texto_usuario = _enriquecer_texto_usuario_con_media(
-        texto_usuario=texto_usuario,
-        raw_message=raw_message,
-        numero_asesor=numero_asesor,
-    )
-    
     if not telefono:
-        raise ValueError("Numero invalido para responder automaticamente")
-    if not numero_asesor:
-        raise ValueError("Numero de asesor invalido")
+        raise ValueError(
+            "Número inválido para responder automáticamente."
+        )
 
-    if _ya_se_respondio_a_entrada(numero_asesor, wa_message_id_entrante):
+    if not numero_asesor:
+        raise ValueError(
+            "Número de asesor inválido."
+        )
+
+    if _ya_se_respondio_a_entrada(
+        numero_asesor,
+        wa_message_id_entrante,
+    ):
         return {
-            "ok": True, "skipped": True, "reason": "ya_se_respondio_a_esta_entrada",
-            "telefono": telefono, "numero_asesor": numero_asesor,
+            "ok": True,
+            "skipped": True,
+            "reason": "ya_se_respondio_a_esta_entrada",
+            "telefono": telefono,
+            "numero_asesor": numero_asesor,
             "wa_message_id_entrante": wa_message_id_entrante,
         }
 
+    # El análisis multimedia se ejecuta una sola vez y únicamente
+    # después de verificar que el mensaje no haya sido procesado.
     texto_usuario = _enriquecer_texto_usuario_con_media(
-        texto_usuario=texto_usuario,
+        texto_usuario=texto_usuario_original,
         raw_message=raw_message,
         numero_asesor=numero_asesor,
     )
@@ -3173,7 +3212,7 @@ def responder_mensaje_automatico(
                 "ia_model": getattr(
                     settings,
                     "GEMINI_MODEL",
-                    "gemini-2.5-flash",
+                    "gemini-3.6-flash",
                 ),
                 "numero_asesor": numero_asesor,
                 "version_contexto": version_contexto,
