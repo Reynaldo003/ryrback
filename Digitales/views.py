@@ -98,7 +98,6 @@ _cat_logger = logging.getLogger(__name__)
 
 
 # ── ViewSet ───────────────────────────────────────────────────────────────────
-
 class ProspectosViewSet(viewsets.ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -119,48 +118,11 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         "whatsapp_bloqueado",
     )
 
-    def perform_create(self, serializer):
-        expediente = serializer.save()
-        numero_asesor = _get_numero_asesor_request(
-            self.request
-        )
-
-        expediente = _asegurar_asignacion_salida_manual(
-            request=self.request,
-            expediente=expediente,
-            numero_asesor=numero_asesor,
-        )
-
-        serializer.instance = expediente
-
-    def perform_update(self, serializer):
-        expediente = serializer.instance
-        antes = {
-            campo: getattr(expediente, campo, None)
-            for campo in self.CAMPOS_AUDITABLES
-        }
-
-        expediente = serializer.save()
-
-        registrar_cambios_expediente(
-            expediente=expediente,
-            antes=antes,
-            request=self.request,
-        )
-
-    def get_queryset(self):
-        numero_asesor = _get_numero_asesor_request(
-            self.request
-        )
-
-        queryset = (
+    def _base_queryset(self):
+        return (
             ExpedienteDigital.objects
             .select_related("cliente")
             .prefetch_related("evidencias")
-            .filter(
-                cliente__mensajes_whatsapp__numero_asesor=numero_asesor,
-            )
-            .distinct()
             .order_by(
                 "-ultimo_contacto_asesor",
                 "-primer_contacto_asesor",
@@ -170,12 +132,159 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             )
         )
 
+    def _solicita_todos(self):
+        valor = str(
+            self.request.query_params.get("todos", "")
+            or ""
+        ).strip().casefold()
+
+        return valor in {
+            "1",
+            "true",
+            "yes",
+            "si",
+            "sí",
+            "all",
+            "todos",
+        }
+
+    def _queryset_por_linea(self, numero_asesor):
+        queryset = self._base_queryset()
+
+        cfg_linea = WHATSAPP_LINES.get(
+            numero_asesor,
+            {},
+        )
+
+        agencia_linea = str(
+            cfg_linea.get("agencia") or ""
+        ).strip()
+
+        asesor_linea = str(
+            cfg_linea.get("asesor_digital") or ""
+        ).strip()
+
+        filtro_linea = Q(
+            cliente__mensajes_whatsapp__numero_asesor=(
+                numero_asesor
+            )
+        )
+
+        if agencia_linea:
+            filtro_manual = (
+                Q(
+                    cliente__mensajes_whatsapp__isnull=True
+                )
+                & Q(
+                    agencia__iexact=agencia_linea
+                )
+            )
+
+            if (
+                not linea_tiene_reparto(
+                    numero_asesor
+                )
+                and asesor_linea
+            ):
+                filtro_manual &= Q(
+                    asesor_digital__iexact=(
+                        asesor_linea
+                    )
+                )
+
+            filtro_linea |= filtro_manual
+
+        queryset = (
+            queryset
+            .filter(filtro_linea)
+            .distinct()
+        )
+
         return _filtrar_expedientes_por_asignacion(
             request=self.request,
             queryset=queryset,
             numero_asesor=numero_asesor,
         )
 
+    def get_queryset(self):
+        user = getattr(
+            self.request,
+            "user",
+            None,
+        )
+
+        es_admin = _usuario_es_admin(
+            user
+        )
+
+        accion = getattr(
+            self,
+            "action",
+            "",
+        )
+
+        if es_admin:
+            if (
+                accion in {
+                    "retrieve",
+                    "update",
+                    "partial_update",
+                    "destroy",
+                }
+                or self._solicita_todos()
+            ):
+                return self._base_queryset()
+
+        numero_asesor = (
+            _get_numero_asesor_request(
+                self.request
+            )
+        )
+
+        return self._queryset_por_linea(
+            numero_asesor
+        )
+
+    def perform_create(self, serializer):
+        expediente = serializer.save()
+
+        numero_asesor = (
+            _get_numero_asesor_request(
+                self.request
+            )
+        )
+
+        expediente = (
+            _asegurar_asignacion_salida_manual(
+                request=self.request,
+                expediente=expediente,
+                numero_asesor=numero_asesor,
+            )
+        )
+
+        serializer.instance = expediente
+
+    def perform_update(self, serializer):
+        expediente = serializer.instance
+
+        antes = {
+            campo: getattr(
+                expediente,
+                campo,
+                None,
+            )
+            for campo
+            in self.CAMPOS_AUDITABLES
+        }
+
+        expediente = serializer.save()
+
+        registrar_cambios_expediente(
+            expediente=expediente,
+            antes=antes,
+            request=self.request,
+        )
+        
 # ── Vistas simples ────────────────────────────────────────────────────────────
 
 def bienvenido(request):
