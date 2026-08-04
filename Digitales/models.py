@@ -25,6 +25,10 @@ class ExpedienteDigital(models.Model):
     auto_interes = models.CharField(max_length=255, blank=True, default="")
     anio_auto = models.PositiveSmallIntegerField(null=True, blank=True)
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
+
+    usuario_crm_asignado = models.CharField(max_length=120, blank=True, default="", db_index=True,)
+    asignado_automaticamente_at = models.DateTimeField(null=True,blank=True,db_index=True,)
+
     asesor_ventas = models.CharField(max_length=200, blank=True, default="")
     comentarios = models.TextField(max_length=2000, blank=True, default="")
 
@@ -490,3 +494,24 @@ class BitacoraAsesorDigital(models.Model):
             f"{self.accion} | "
             f"{self.resultado}"
         )
+    
+class ControlRepartoWhatsApp(models.Model):
+    numero_asesor = models.CharField(max_length=15,unique=True,db_index=True,)
+    siguiente_indice = models.PositiveIntegerField(default=0,)
+    ultimo_usuario = models.CharField(max_length=120,blank=True,default="",)
+    creado = models.DateTimeField(auto_now_add=True,)
+    actualizado = models.DateTimeField(auto_now=True,)
+
+    class Meta:
+        db_table = "digitales_control_reparto_whatsapp"
+        managed = True
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(self.numero_asesor or "")
+        self.ultimo_usuario = str(self.ultimo_usuario or "").strip()
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (f"{self.numero_asesor} | "f"siguiente={self.siguiente_indice}")
+    

@@ -40,6 +40,7 @@ from .models import (
     ConfiguracionIAWhatsApp,
     ConversacionIA,
     CatalogoVehiculos,
+    ControlRepartoWhatsApp,
 )
 from .serializers import ProspectoSerializer, WhatsAppMessageSerializer
 from .services import generar_y_guardar_resumen, debe_generar_resumen_al_llegar_a_6
@@ -82,6 +83,13 @@ from .asesor_logs import (
     resolver_evento_por_respuesta,
 )
 
+from .asignacion_asesores import (
+    asegurar_asignacion_expediente,
+    linea_tiene_reparto,
+    obtener_asesor_por_usuario,
+    usuario_puede_ver_expediente,
+)
+
 from django.http import JsonResponse
 
 TOKEN = "CBAR&RVOLKS"
@@ -97,20 +105,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
     serializer_class = ProspectoSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
 
-    queryset = (
-        ExpedienteDigital.objects
-        .select_related("cliente")
-        .prefetch_related("evidencias")
-        .all()
-        .order_by(
-            "-ultimo_contacto_asesor",
-            "-primer_contacto_asesor",
-            "-primer_mensaje_cliente",
-            "-actualizado",
-            "-creado",
-        )
-    )
-
     CAMPOS_AUDITABLES = (
         "estado",
         "motivo_descalificacion",
@@ -125,6 +119,20 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         "whatsapp_bloqueado",
     )
 
+    def perform_create(self, serializer):
+        expediente = serializer.save()
+        numero_asesor = _get_numero_asesor_request(
+            self.request
+        )
+
+        expediente = _asegurar_asignacion_salida_manual(
+            request=self.request,
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+        )
+
+        serializer.instance = expediente
+
     def perform_update(self, serializer):
         expediente = serializer.instance
         antes = {
@@ -138,6 +146,34 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             expediente=expediente,
             antes=antes,
             request=self.request,
+        )
+
+    def get_queryset(self):
+        numero_asesor = _get_numero_asesor_request(
+            self.request
+        )
+
+        queryset = (
+            ExpedienteDigital.objects
+            .select_related("cliente")
+            .prefetch_related("evidencias")
+            .filter(
+                cliente__mensajes_whatsapp__numero_asesor=numero_asesor,
+            )
+            .distinct()
+            .order_by(
+                "-ultimo_contacto_asesor",
+                "-primer_contacto_asesor",
+                "-primer_mensaje_cliente",
+                "-actualizado",
+                "-creado",
+            )
+        )
+
+        return _filtrar_expedientes_por_asignacion(
+            request=self.request,
+            queryset=queryset,
+            numero_asesor=numero_asesor,
         )
 
 # ── Vistas simples ────────────────────────────────────────────────────────────
@@ -252,56 +288,111 @@ def _agregar_diagnostico_linea_vs_meta(resultado: dict, numero_asesor: str) -> d
 
     return resultado
 
-def _get_or_create_cliente_y_expediente(*, tel: str, profile_name: str = "", numero_asesor: str = ""):
+def _get_or_create_cliente_y_expediente(
+    *,
+    tel: str,
+    profile_name: str = "",
+    numero_asesor: str = "",
+    aplicar_reparto: bool = True,
+):
     tel = normaliza_tel_mx(tel)
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
 
     if not tel:
         return None, None
 
-    cliente, _ = ClienteComercial.objects.get_or_create(
-        telefono=tel,
-        defaults={"nombre": (profile_name or "").strip()},
+    cliente, _ = (
+        ClienteComercial.objects
+        .get_or_create(
+            telefono=tel,
+            defaults={
+                "nombre": (
+                    profile_name or ""
+                ).strip(),
+            },
+        )
     )
 
-    if profile_name and not (cliente.nombre or "").strip():
+    if (
+        profile_name
+        and not (cliente.nombre or "").strip()
+    ):
         cliente.nombre = profile_name.strip()
-        cliente.save(update_fields=["nombre", "actualizado_en"])
+        cliente.save(
+            update_fields=[
+                "nombre",
+                "actualizado_en",
+            ]
+        )
 
-    cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
+    cfg_linea = WHATSAPP_LINES.get(
+        numero_asesor,
+        {},
+    )
 
-    agencia_linea = (cfg_linea.get("agencia") or "").strip()
-    business_linea = (cfg_linea.get("business") or "").strip()
-    asesor_digital_linea = (cfg_linea.get("asesor_digital") or "").strip()
-    
-    exp, expediente_creado = (ExpedienteDigital.objects.get_or_create(cliente=cliente))
+    agencia_linea = str(
+        cfg_linea.get("agencia") or ""
+    ).strip()
+
+    business_linea = str(
+        cfg_linea.get("business") or ""
+    ).strip()
+
+    expediente, expediente_creado = (
+        ExpedienteDigital.objects
+        .get_or_create(cliente=cliente)
+    )
 
     cambios = []
 
     campos_linea = [
         ("agencia", agencia_linea),
         ("business", business_linea),
-        ("asesor_digital", asesor_digital_linea),
     ]
 
     for campo, valor in campos_linea:
-        if valor and getattr(exp, campo, "") != valor:
-            setattr(exp, campo, valor)
+        if (
+            valor
+            and getattr(expediente, campo, "")
+            != valor
+        ):
+            setattr(expediente, campo, valor)
             cambios.append(campo)
 
-    if expediente_creado and not (exp.canal_contacto or "").strip():
-        exp.canal_contacto = "Facebook"
-        cambios.append("canal_contacto")    
+    if (
+        expediente_creado
+        and not (
+            expediente.canal_contacto or ""
+        ).strip()
+    ):
+        expediente.canal_contacto = "Facebook"
+        cambios.append("canal_contacto")
 
-    if not (exp.estado or "").strip():
-        exp.estado = "Contactado"
+    if not (
+        expediente.estado or ""
+    ).strip():
+        expediente.estado = "Contactado"
         cambios.append("estado")
 
     if cambios:
         cambios.append("actualizado")
-        exp.save(update_fields=list(dict.fromkeys(cambios)))
 
-    return cliente, exp
+        expediente.save(
+            update_fields=list(
+                dict.fromkeys(cambios)
+            )
+        )
+
+    # El reparto automático debe ejecutarse cuando el prospecto llega
+    # por webhook. Para salidas manuales se asigna al usuario que inició
+    # la conversación, evitando que el turno aleatorio lo entregue al otro asesor.
+    if aplicar_reparto:
+        expediente = asegurar_asignacion_expediente(
+            expediente,
+            numero_asesor,
+        )
+
+    return cliente, expediente
 
 def _numero_linea_valido(numero: str) -> str:
     numero = normaliza_tel_mx(numero or "")
@@ -359,6 +450,176 @@ def _usuario_es_admin(user) -> bool:
         return bool({"ALL", "USUARIOS_ADMIN"} & valores)
     except Exception:
         return False
+
+def _usuario_login(user) -> str:
+    return str(
+        getattr(user, "usuario", "")
+        or getattr(user, "username", "")
+        or ""
+    ).strip()
+
+
+def _rol_usuario(user) -> str:
+    rol_obj = getattr(user, "rol", None)
+
+    return str(
+        getattr(rol_obj, "nombre", "")
+        or getattr(rol_obj, "name", "")
+        or (
+            rol_obj
+            if isinstance(rol_obj, str)
+            else ""
+        )
+        or ""
+    ).strip().casefold()
+
+
+def _usuario_puede_ver_toda_linea(user) -> bool:
+    if _usuario_es_admin(user):
+        return True
+
+    rol = _rol_usuario(user)
+
+    return (
+        "coordinador" in rol
+        and "digital" in rol
+    )
+
+
+def _filtrar_expedientes_por_asignacion(
+    *,
+    request,
+    queryset,
+    numero_asesor: str,
+):
+    if not linea_tiene_reparto(
+        numero_asesor
+    ):
+        return queryset
+
+    user = getattr(request, "user", None)
+
+    if _usuario_puede_ver_toda_linea(user):
+        return queryset
+
+    usuario = _usuario_login(user)
+
+    asesor = obtener_asesor_por_usuario(
+        numero_asesor,
+        usuario,
+    )
+
+    if not asesor:
+        return queryset.none()
+
+    return queryset.filter(
+        usuario_crm_asignado__iexact=(
+            asesor["usuario"]
+        )
+    )
+
+
+def _validar_acceso_expediente(
+    *,
+    request,
+    expediente,
+    numero_asesor: str,
+):
+    if not expediente:
+        raise PermissionDenied(
+            "No existe el expediente solicitado."
+        )
+
+    user = getattr(request, "user", None)
+
+    if _usuario_puede_ver_toda_linea(user):
+        return
+
+    if not usuario_puede_ver_expediente(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+        usuario=_usuario_login(user),
+    ):
+        raise PermissionDenied(
+            "Este prospecto está asignado "
+            "a otro asesor digital."
+        )
+    
+def _asegurar_asignacion_salida_manual(
+    *,
+    request,
+    expediente: ExpedienteDigital,
+    numero_asesor: str,
+) -> ExpedienteDigital:
+    if not expediente:
+        raise PermissionDenied(
+            "No existe el expediente solicitado."
+        )
+
+    # Línea normal:
+    # conserva el asesor único configurado en WHATSAPP_LINES.
+    if not linea_tiene_reparto(numero_asesor):
+        return asegurar_asignacion_expediente(
+            expediente,
+            numero_asesor,
+        )
+
+    # Línea compartida:
+    # el prospecto se asigna a quien inició la conversación.
+    if str(
+        getattr(
+            expediente,
+            "usuario_crm_asignado",
+            "",
+        ) or ""
+    ).strip():
+        _validar_acceso_expediente(
+            request=request,
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+        )
+
+        return expediente
+
+    user = getattr(request, "user", None)
+
+    if _usuario_puede_ver_toda_linea(user):
+        raise PermissionDenied(
+            "El prospecto todavía no tiene asesor asignado."
+        )
+
+    asesor = obtener_asesor_por_usuario(
+        numero_asesor,
+        _usuario_login(user),
+    )
+
+    if not asesor:
+        raise PermissionDenied(
+            "Tu usuario no está configurado "
+            "como asesor de esta línea."
+        )
+
+    ahora = timezone.now()
+
+    ExpedienteDigital.objects.filter(
+        pk=expediente.pk,
+        usuario_crm_asignado="",
+    ).update(
+        usuario_crm_asignado=asesor["usuario"],
+        asesor_digital=asesor["nombre"],
+        asignado_automaticamente_at=ahora,
+        actualizado=ahora,
+    )
+
+    expediente.refresh_from_db()
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    )
+
+    return expediente
 
 def _numeros_whatsapp_usuario(user) -> list[str]:
     raw = str(getattr(user, "telefono", "") or "").strip()
@@ -1221,7 +1482,10 @@ def webhook(request):
                         continue
 
                     cliente, exp = _get_or_create_cliente_y_expediente(
-                        tel=tel, profile_name=profile_name, numero_asesor=numero_asesor,
+                        tel=tel,
+                        profile_name=profile_name,
+                        numero_asesor=numero_asesor,
+                        aplicar_reparto=True,
                     )
 
                     if not cliente or not exp:
@@ -1532,16 +1796,42 @@ def chats_list(request):
         .order_by("-created_at")
     )
 
-    expedientes = (
+    expedientes_qs = (
         ExpedienteDigital.objects
         .select_related("cliente")
-        .filter(cliente__mensajes_whatsapp__numero_asesor=numero_asesor)
+        .filter(
+            cliente__mensajes_whatsapp__numero_asesor=(
+                numero_asesor
+            )
+        )
+    )
+
+    expedientes_qs = (
+        _filtrar_expedientes_por_asignacion(
+            request=request,
+            queryset=expedientes_qs,
+            numero_asesor=numero_asesor,
+        )
+    )
+
+    expedientes = (
+        expedientes_qs
         .annotate(
-            last_text=Subquery(last_msg_qs.values("body")[:1]),
-            last_time=Subquery(last_msg_qs.values("created_at")[:1]),
+            last_text=Subquery(
+                last_msg_qs.values("body")[:1]
+            ),
+            last_time=Subquery(
+                last_msg_qs.values(
+                    "created_at"
+                )[:1]
+            ),
         )
         .distinct()
-        .order_by("-last_time", "-actualizado", "-creado")[:limit]
+        .order_by(
+            "-last_time",
+            "-actualizado",
+            "-creado",
+        )[:limit]
     )
 
     data = []
@@ -1570,6 +1860,8 @@ def chats_list(request):
             "last_time": last_time_str,
             "last_message_at": dt.isoformat() if dt else None,
             "numero_asesor": numero_asesor,
+            "asesor_digital": exp.asesor_digital or "",
+            "usuario_crm_asignado": (exp.usuario_crm_asignado or ""),
             "ia_estado": estado_ia,
             "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False),
             "ia_bloqueos": estado_ia.get("bloqueos", []),
@@ -1667,7 +1959,22 @@ def contacto_por_telefono(request):
             .first()
         )
 
-    qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor)
+    if not exp:
+        return Response(
+            {"ok": False, "error": "No existe expediente"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    qs = MensajeWhatsApp.objects.filter(
+        telefono=tel,
+        numero_asesor=numero_asesor,
+    )
 
     if before_id:
         ref = qs.filter(id=before_id).only("id", "created_at").first()
@@ -1726,31 +2033,43 @@ def contacto_por_telefono(request):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def llamar_whatsapp(request):
+    numero_asesor = _get_numero_asesor_request(request)
+    telefono = normaliza_tel_mx(
+        request.data.get("telefono", "")
+    )
 
-    try:
-        numero_asesor = _get_numero_asesor_request(request)
-
-        telefono = normaliza_tel_mx(
-            request.data.get("telefono", "")
+    if not telefono:
+        return Response(
+            {"ok": False, "error": "Falta telefono"},
+            status=status.HTTP_400_BAD_REQUEST,
         )
 
-        if not telefono:
-            return Response(
-                {
-                    "ok": False,
-                    "error": "Falta telefono"
-                },
-                status=status.HTTP_400_BAD_REQUEST
-            )
+    cliente = ClienteComercial.objects.filter(
+        telefono=telefono,
+    ).first()
 
+    expediente = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(cliente=cliente)
+        .first()
+        if cliente
+        else None
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    )
+
+    try:
         resultado = iniciar_llamada_whatsapp(
             to=telefono,
             numero_asesor=numero_asesor,
             sdp_offer=request.data.get("sdp_offer", ""),
         )
 
-        cliente = ClienteComercial.objects.filter(telefono=telefono).first()
-        expediente = ExpedienteDigital.objects.filter(cliente=cliente).first() if cliente else None
         registrar_evento_operativo(
             expediente=expediente,
             numero_asesor=numero_asesor,
@@ -1761,45 +2080,73 @@ def llamar_whatsapp(request):
         )
 
         return Response(
-            {
-                "ok": True,
-                "data": resultado,
-            },
-            status=status.HTTP_200_OK
+            {"ok": True, "data": resultado},
+            status=status.HTTP_200_OK,
         )
+
+    except PermissionDenied:
+        raise
 
     except Exception as e:
         logger.exception(
             "ERROR LLAMADA WHATSAPP: %s",
-            str(e)
+            str(e),
         )
 
         return Response(
-            {
-                "ok": False,
-                "error": str(e)
-            },
-            status=status.HTTP_400_BAD_REQUEST
+            {"ok": False, "error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST,
         )
+
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def generar_resumen_prospecto_view(request, prospecto_id: int):
-    exp = ExpedienteDigital.objects.select_related("cliente").filter(id=prospecto_id).first()
+    numero_asesor = _get_numero_asesor_request(request)
+
+    exp = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(id=prospecto_id)
+        .first()
+    )
+
     if not exp:
-        return Response({"ok": False, "error": "Prospecto no encontrado"}, status=404)
+        return Response(
+            {"ok": False, "error": "Prospecto no encontrado"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
     try:
-        resumen = generar_y_guardar_resumen(expediente=exp, fuente="manual")
+        resumen = generar_y_guardar_resumen(
+            expediente=exp,
+            fuente="manual",
+        )
+
         return Response({
             "ok": True,
             "id": exp.id,
             "resumen": resumen,
-            "resumen_actualizado_at": exp.resumen_actualizado_at.isoformat() if exp.resumen_actualizado_at else None,
+            "resumen_actualizado_at": (
+                exp.resumen_actualizado_at.isoformat()
+                if exp.resumen_actualizado_at
+                else None
+            ),
             "resumen_fuente": exp.resumen_fuente or "",
-        }, status=200)
+        }, status=status.HTTP_200_OK)
+
     except Exception as e:
-        return Response({"ok": False, "error": str(e)}, status=400)
+        return Response(
+            {"ok": False, "error": str(e)},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
 
 @api_view(["POST"])
@@ -1815,7 +2162,17 @@ def mark_read_view(request):
         return Response({"ok": False, "error": "No existe prospecto"}, status=status.HTTP_404_NOT_FOUND)
     exp = ExpedienteDigital.objects.filter(cliente=cliente).first()
     if not exp:
-        return Response({"ok": False, "error": "No existe expediente"}, status=status.HTTP_404_NOT_FOUND)
+        return Response(
+            {"ok": False, "error": "No existe expediente"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
     _mark_read_exp(exp, numero_asesor)
     return Response({"ok": True}, status=status.HTTP_200_OK)
 
@@ -1830,9 +2187,38 @@ def contacto_updates(request):
     limit = _int_param(request=request, name="limit", default=50, min_value=1, max_value=100)
 
     if not tel:
-        return Response({"ok": False, "error": "Falta tel"}, status=400)
+        return Response(
+            {"ok": False, "error": "Falta tel"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-    qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor).order_by("created_at", "id")
+    cliente = ClienteComercial.objects.filter(
+        telefono=tel,
+    ).first()
+
+    exp = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(cliente=cliente)
+        .first()
+        if cliente
+        else None
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    qs = (
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+        )
+        .order_by("created_at", "id")
+    )
     after_dt = _parse_dt_param(after)
     if after_dt:
         qs = qs.filter(created_at__gt=after_dt)
@@ -1868,6 +2254,19 @@ def enviar_mensaje_view(request):
     try:
         cliente, exp = _get_or_create_cliente_y_expediente(
             tel=to,
+            numero_asesor=numero_asesor,
+            aplicar_reparto=False,
+        )
+
+        exp = _asegurar_asignacion_salida_manual(
+            request=request,
+            expediente=exp,
+            numero_asesor=numero_asesor,
+        )
+
+        _validar_acceso_expediente(
+            request=request,
+            expediente=exp,
             numero_asesor=numero_asesor,
         )
 
@@ -1927,6 +2326,9 @@ def enviar_mensaje_view(request):
             },
             status=status.HTTP_200_OK,
         )
+
+    except PermissionDenied:
+        raise
 
     except MetaAPIError as e:
         logger.warning(
@@ -2057,6 +2459,19 @@ def enviar_media_view(request):
 
     cliente, exp = _get_or_create_cliente_y_expediente(
         tel=to,
+        numero_asesor=numero_asesor,
+        aplicar_reparto=False,
+    )
+
+    exp = _asegurar_asignacion_salida_manual(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
         numero_asesor=numero_asesor,
     )
 
@@ -2409,6 +2824,19 @@ def enviar_plantilla_view(request):
         cliente, exp = _get_or_create_cliente_y_expediente(
             tel=to,
             numero_asesor=numero_asesor,
+            aplicar_reparto=False,
+        )
+
+        exp = _asegurar_asignacion_salida_manual(
+            request=request,
+            expediente=exp,
+            numero_asesor=numero_asesor,
+        )
+
+        _validar_acceso_expediente(
+            request=request,
+            expediente=exp,
+            numero_asesor=numero_asesor,
         )
 
         if getattr(exp, "whatsapp_bloqueado", False):
@@ -2486,6 +2914,9 @@ def enviar_plantilla_view(request):
             },
             status=status.HTTP_200_OK,
         )
+
+    except PermissionDenied:
+        raise
 
     except MetaAPIError as e:
         logger.warning(
@@ -2601,7 +3032,26 @@ def editar_mensaje_view(request):
     ).first()
 
     if not msg:
-        return Response({"ok": False, "error": "Mensaje no encontrado"}, status=404)
+        return Response(
+            {"ok": False, "error": "Mensaje no encontrado"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    expediente = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(cliente=msg.cliente)
+        .first()
+        if msg.cliente_id
+        else None
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    )
+
     if msg.direction != "out":
         return Response({"ok": False, "error": "Solo puedes editar mensajes enviados"}, status=400)
     if (msg.body or "").startswith("[TEMPLATE:"):
@@ -2834,7 +3284,16 @@ def mark_unread_view(request):
 
     exp = ExpedienteDigital.objects.filter(cliente=cliente).first()
     if not exp:
-        return Response({"ok": False, "error": "No existe expediente"}, status=404)
+        return Response(
+            {"ok": False, "error": "No existe expediente"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
 
     lectura = LecturaWhatsApp.objects.filter(
         expediente=exp,
@@ -2911,6 +3370,12 @@ def bloquear_contacto_whatsapp_view(request):
         ExpedienteDigital.objects.filter(cliente=cliente).first()
         if cliente
         else None
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=expediente,
+        numero_asesor=numero_asesor,
     )
 
     try:
@@ -3035,6 +3500,12 @@ def desbloquear_contacto_whatsapp_view(request):
         ExpedienteDigital.objects.filter(cliente=cliente).first()
         if cliente
         else None
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=expediente,
+        numero_asesor=numero_asesor,
     )
 
     try:

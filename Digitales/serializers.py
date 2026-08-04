@@ -477,6 +477,10 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "estado",
             "motivo_descalificacion",
             "asesor_digital",
+
+            "usuario_crm_asignado",
+            "asignado_automaticamente_at",
+
             "asesor_ventas",
             "auto_interes",
             "anio_auto",
@@ -551,6 +555,10 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "nombre_out",
             "telefono_out",
             "correo_out",
+            
+            "usuario_crm_asignado",
+            "asignado_automaticamente_at",
+
             "tiempo_respuesta_asesor_min",
             "tiempo_respuesta_asesor_label",
             "primer_contacto_at",
