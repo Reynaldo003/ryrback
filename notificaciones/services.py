@@ -1,4 +1,6 @@
 # notificaciones/services.py
+import re
+
 import requests
 
 from asgiref.sync import async_to_sync
@@ -40,15 +42,38 @@ def normalizar_numero_asesor(numero):
     return normaliza_tel_mx(digits)
 
 
+def _numeros_desde_campo_telefono(raw_telefono):
+    """
+    El campo Usuario.telefono puede traer varios números
+    separados por |, coma, punto y coma o salto de línea.
+
+    Ejemplo real en BD:
+    '522712638803|528009992443'
+    """
+    partes = re.split(r"[|,;\n]+", str(raw_telefono or ""))
+
+    numeros = []
+
+    for parte in partes:
+        numero = normalizar_numero_asesor(parte)
+
+        if numero and numero not in numeros:
+            numeros.append(numero)
+
+    return numeros
+
+
 def buscar_usuario_por_numero_asesor(numero_asesor):
     """
     Busca al usuario asesor por teléfono.
 
-    Como tú confirmaste que en BD se guarda así:
-    522711872907
+    El campo Usuario.telefono puede contener un solo número
+    o varios separados por |, coma o punto y coma
+    (ej. '522712638803|528009992443').
 
-    Primero intentamos búsqueda exacta.
-    Si no aparece, hacemos fallback normalizando todos los teléfonos.
+    Primero intentamos búsqueda exacta de un solo número.
+    Si no aparece, revisamos todos los usuarios separando
+    los números múltiples de cada uno.
     """
     numero_normalizado = normalizar_numero_asesor(numero_asesor)
 
@@ -60,14 +85,13 @@ def buscar_usuario_por_numero_asesor(numero_asesor):
     if usuario:
         return usuario
 
-    # Fallback por si algún usuario tiene el teléfono con espacios,
-    # +52, 521, guiones o diferente formato.
+    
     for usuario in Usuario.objects.all():
-        telefono_usuario = normalizar_numero_asesor(
+        numeros_usuario = _numeros_desde_campo_telefono(
             getattr(usuario, "telefono", "") or ""
         )
 
-        if telefono_usuario == numero_normalizado:
+        if numero_normalizado in numeros_usuario:
             return usuario
 
     return None
