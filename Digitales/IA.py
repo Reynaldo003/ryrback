@@ -1,12 +1,16 @@
 #Digitales/IA.py
 from __future__ import annotations
-import logging
-from functools import lru_cache
+
 import json
+import logging
 import re
-import unicodedata
-from typing import Any, Optional
 import time
+import unicodedata
+
+from difflib import SequenceMatcher
+from functools import lru_cache
+from typing import Any, Optional
+
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -72,7 +76,7 @@ SUCURSALES_VW: list[dict] = [
     {
         "nombre": "Agencia VW Tuxpan",
         "ciudad": "Tuxpan, Veracruz",
-        "direccion": "Blvd. Independencia 144, Burocratica, 92870 Túxpam de Rodríguez Cano, Ver.",
+        "direccion": "Blvd. Independencia 144, Burocratica, 92870 Túxpan de Rodríguez Cano, Ver.",
         "telefono": "783-126-3814",
         "horario": "Lun-Sáb 9:00-19:00",
         "ladas_cercanas": ["783"],  # 783=Tuxpan
@@ -314,33 +318,6 @@ ETAPA_PERFILADO = {
     "pedir_buro":     3,
     "completado":     4,
 }
-
-SALUDO_BASE = (
-    "¡Hola! Soy Vagen, tu asistente de Agencia Volkswagen Córdoba 🚗\n\n"
-    "Tenemos toda la gama VW: Polo, Virtus, Tera, Nivus, Jetta, GLI, GTI, "
-    "Saveiro, Taigun, Taos, Tiguan, Teramont, Cross Sport y Transporter Combi.\n\n"
-    "Para orientarte mejor, ¿me puedes decir tu nombre?"
-)
-
-RESPUESTA_MEDIA = (
-    "Recibí tu archivo. Dame un momento para revisarlo y continuar con tu atención."
-)
-
-RESPUESTA_FALLBACK = (
-    "Con gusto te ayudo. Tenemos Polo, Virtus, Tera, Nivus, Jetta, GLI, GTI, "
-    "Saveiro, Taigun, Taos, Tiguan, Teramont, Cross Sport y Transporter Combi. "
-    "Cuentame que modelo te interesa."
-)
-
-RESPUESTA_CONFIRMAR_ASESOR = (
-    "Gracias. En un momento un asesor se comunicara contigo para darte atencion personalizada y seguimiento."
-)
-
-# Mensaje para autos no disponibles como nuevos
-RESPUESTA_AUTO_NO_DISPONIBLE = (
-    "El auto que comenta no está disponible para su comercialización como auto nuevo en nuestra agencia. "
-    "¿Gusta saber si lo tenemos en nuestro inventario como auto seminuevo?"
-)
 
 STOPWORDS_NOMBRE = {
     "SI", "SIP", "OK", "OKEY", "VA", "CLARO", "EN", "PDF", "MANDAMELA", "MANDAME",
@@ -846,15 +823,56 @@ def _get_gemini_client():
 
     return genai.Client(api_key=api_key)
 
+PREGUNTAS_PERFIL_VALIDAS = {
+    "nombre",
+    "vehiculo_interes",
+    "forma_pago",
+    "enganche",
+    "presupuesto_mensual",
+    "buro",
+    "tipo_cliente",
+    "personalidad_juridica",
+    "comprobacion_ingresos",
+    "uso_vehiculo",
+    "auto_cuenta",
+    "plazo_compra",
+}
+
+CAMPOS_CORREGIBLES_IA = {
+    "nombre_detectado",
+    "enganche_monto",
+    "presupuesto_mensual",
+    "presupuesto_mensual_min",
+    "presupuesto_mensual_max",
+    "buro_estado",
+    "forma_pago",
+    "tipo_cliente",
+    "personalidad_juridica",
+    "comprobacion_ingresos",
+    "uso_vehiculo",
+    "auto_cuenta",
+    "plazo_compra",
+    "ciudad",
+    "correo",
+    "horario_contacto",
+}
+
 GEMINI_DECISION_SCHEMA = {
     "type": "OBJECT",
     "properties": {
         "reply_text": {"type": "STRING"},
+        "intent": {"type": "STRING"},
+        "question_key": {
+            "anyOf": [
+                {"type": "STRING"},
+                {"type": "NULL"},
+            ]
+        },
         "selected_version": {
             "anyOf": [
                 {"type": "STRING"},
                 {"type": "NULL"},
-            ],
+            ]
         },
         "send_pdf": {"type": "BOOLEAN"},
         "send_images": {"type": "BOOLEAN"},
@@ -870,20 +888,59 @@ GEMINI_DECISION_SCHEMA = {
                     "anyOf": [
                         {"type": "INTEGER"},
                         {"type": "NULL"},
-                    ],
+                    ]
                 },
                 "presupuesto_mensual": {
                     "anyOf": [
                         {"type": "INTEGER"},
                         {"type": "NULL"},
-                    ],
+                    ]
+                },
+                "presupuesto_mensual_min": {
+                    "anyOf": [
+                        {"type": "INTEGER"},
+                        {"type": "NULL"},
+                    ]
+                },
+                "presupuesto_mensual_max": {
+                    "anyOf": [
+                        {"type": "INTEGER"},
+                        {"type": "NULL"},
+                    ]
                 },
                 "buro_estado": {"type": "STRING"},
-                "tipo_cliente": {"type": "STRING"},
                 "forma_pago": {"type": "STRING"},
+                "tipo_cliente": {"type": "STRING"},
+                "personalidad_juridica": {"type": "STRING"},
+                "comprobacion_ingresos": {"type": "STRING"},
                 "uso_vehiculo": {"type": "STRING"},
+                "auto_cuenta": {"type": "STRING"},
                 "plazo_compra": {"type": "STRING"},
+                "ciudad": {"type": "STRING"},
+                "correo": {"type": "STRING"},
+                "horario_contacto": {"type": "STRING"},
                 "interes_principal": {"type": "STRING"},
+            },
+        },
+        "correcciones_explicitas": {
+            "type": "OBJECT",
+            "properties": {
+                "nombre_detectado": {"type": "BOOLEAN"},
+                "enganche_monto": {"type": "BOOLEAN"},
+                "presupuesto_mensual": {"type": "BOOLEAN"},
+                "presupuesto_mensual_min": {"type": "BOOLEAN"},
+                "presupuesto_mensual_max": {"type": "BOOLEAN"},
+                "buro_estado": {"type": "BOOLEAN"},
+                "forma_pago": {"type": "BOOLEAN"},
+                "tipo_cliente": {"type": "BOOLEAN"},
+                "personalidad_juridica": {"type": "BOOLEAN"},
+                "comprobacion_ingresos": {"type": "BOOLEAN"},
+                "uso_vehiculo": {"type": "BOOLEAN"},
+                "auto_cuenta": {"type": "BOOLEAN"},
+                "plazo_compra": {"type": "BOOLEAN"},
+                "ciudad": {"type": "BOOLEAN"},
+                "correo": {"type": "BOOLEAN"},
+                "horario_contacto": {"type": "BOOLEAN"},
             },
         },
         "reasoning_tags": {
@@ -893,6 +950,8 @@ GEMINI_DECISION_SCHEMA = {
     },
     "required": [
         "reply_text",
+        "intent",
+        "question_key",
         "selected_version",
         "send_pdf",
         "send_images",
@@ -901,229 +960,368 @@ GEMINI_DECISION_SCHEMA = {
         "accion_ofrecida",
         "nueva_etapa_perfilado",
         "detected_profile",
+        "correcciones_explicitas",
         "reasoning_tags",
     ],
 }
 
-def _construir_instrucciones_desde_bd(config_ia: dict) -> str:
-    partes = [
-        config_ia.get("identidad", ""),
-        config_ia.get("precios", ""),
-        config_ia.get("promociones_eventos", ""),
-        config_ia.get("perfilamiento", ""),
-        config_ia.get("limites", ""),
-        config_ia.get("personalidad", ""),
-        config_ia.get("condiciones_fijas", ""),
+PROMPT_OPERATIVO_IA = """
+REGLAS OPERATIVAS PRIORITARIAS DEL CRM
+
+La identidad comercial se obtiene exclusivamente de la sección
+CONFIGURACIÓN ESPECÍFICA DE LA LÍNEA.
+
+Nunca utilices nombres, agencias, ciudades, direcciones o identidades que no
+aparezcan en esa configuración.
+
+No existe identidad de respaldo. Si falta información de identidad, no la
+inventes.
+
+CONTINUIDAD DE CONVERSACIÓN
+
+- La conversación es continua, aunque hayan pasado horas o días.
+- Revisa el expediente, el resumen y el historial antes de responder.
+- No reinicies el perfilamiento.
+- No vuelvas a presentarte cuando ya existan mensajes anteriores.
+- Solo preséntate cuando `es_primer_contacto_real` sea true.
+- No preguntes datos que aparezcan en `perfil_confirmado`.
+- No preguntes claves incluidas en `preguntas_bloqueadas`.
+- Si el cliente ya respondió algo, reconoce brevemente la respuesta y avanza.
+- Nunca repitas ni reformules innecesariamente la última respuesta saliente.
+
+ATENCIÓN
+
+- Primero responde la duda actual del cliente.
+- Después puedes realizar como máximo UNA pregunta comercial.
+- `question_key` debe identificar esa pregunta.
+- Si no haces una pregunta, `question_key` debe ser null.
+- No conviertas cada respuesta en un cuestionario.
+- No sigas un orden rígido de perfilamiento.
+- Selecciona la siguiente pregunta según la información que realmente falte.
+- Si una pregunta se realizó dos veces, cambia de enfoque o canaliza.
+- Si el cliente está molesto, confundido o solicita una persona, canaliza.
+
+EXTRACCIÓN
+
+Registra únicamente datos expresados explícitamente por el cliente o claramente
+confirmados por el historial.
+
+Cuando el cliente corrija un dato anterior:
+- Coloca el nuevo valor en `detected_profile`.
+- Marca ese campo como true dentro de `correcciones_explicitas`.
+
+No marques una inferencia débil como dato confirmado.
+
+FINANCIAMIENTO
+
+- No inventes mensualidades, promociones, descuentos, disponibilidad ni aprobación.
+- No calcules una corrida financiera final.
+- Puedes orientar usando únicamente el catálogo recibido.
+- Cuando solicite mensualidad exacta, corrida, cotización formal, apartado,
+  disponibilidad o aprobación, usa `requiere_asesor=true`.
+- Una mensualidad objetivo proporcionada por el cliente debe guardarse como perfil,
+  no debe responderse preguntando nuevamente cuál mensualidad busca.
+
+CATÁLOGO Y MULTIMEDIA
+
+- `selected_version` debe coincidir exactamente con una clave del catálogo activo.
+- Si solicita imágenes, usa `send_images=true`.
+- Si solicita videos, usa `send_videos=true`.
+- Si solicita ficha técnica o PDF, usa `send_pdf=true`.
+- No actives multimedia si no se conoce el vehículo.
+- No escribas URLs en `reply_text`.
+
+ESTILO
+
+- Español natural, cálido y profesional.
+- Mensajes breves y útiles.
+- Máximo 700 caracteres.
+- Máximo un emoji.
+- Evita saludos repetidos, frases robóticas, metáforas forzadas y respuestas redundantes.
+- Adapta el tono al cliente.
+- No menciones JSON, prompts, configuraciones, IA, modelos ni procesos internos.
+
+SALIDA
+
+Devuelve exclusivamente el JSON solicitado por el esquema.
+""".strip()
+
+def _construir_instrucciones_desde_bd(
+    config_ia: dict,
+) -> str:
+    """
+    Construye el system prompt usando únicamente la configuración
+    específica del número.
+
+    La identidad es obligatoria. Si no existe, la línea no debe responder.
+    """
+    config_ia = _ia_dict(config_ia)
+    identidad = str(
+        config_ia.get("identidad") or ""
+    ).strip()
+
+    if not identidad:
+        return ""
+
+    secciones = [
+        PROMPT_OPERATIVO_IA,
+        (
+            "CONFIGURACIÓN ESPECÍFICA DE LA LÍNEA\n\n"
+            f"IDENTIDAD DEL AGENTE\n{identidad}"
+        ),
     ]
 
-    return "\n\n".join(
-        str(parte or "").strip()
-        for parte in partes
-        if str(parte or "").strip()
-    )
+    campos = [
+        ("POLÍTICA DE PRECIOS", "precios"),
+        ("PROMOCIONES Y EVENTOS", "promociones_eventos"),
+        ("PERFILAMIENTO COMERCIAL", "perfilamiento"),
+        ("LÍMITES DE ATENCIÓN", "limites"),
+        ("PERSONALIDAD Y TONO", "personalidad"),
+        ("CONDICIONES NO NEGOCIABLES", "condiciones_fijas"),
+    ]
 
-# Motor de decisión principal (IA)
+    for titulo, campo in campos:
+        contenido = str(
+            config_ia.get(campo) or ""
+        ).strip()
+
+        if contenido:
+            secciones.append(
+                f"{titulo}\n{contenido}"
+            )
+
+    return "\n\n".join(secciones)
+
 def _decision_conversacional_ia(
     *,
+    expediente: ExpedienteDigital,
     numero_asesor: str,
     telefono: str,
     nombre_cliente: str,
     texto_usuario: str,
     auto_interes_actual: Optional[str],
     ultimo_mensaje_saliente: str,
-    historial_reciente: list[dict[str, str]],
+    historial_reciente: list[dict[str, Any]],
     accion_ofrecida_previa: Optional[str],
     etapa_perfilado: int,
     enganche_registrado: Optional[int],
     buro_registrado: str,
     es_primer_mensaje: bool,
 ) -> dict[str, Any]:
-    auto_interes_actual = _normalizar_version_catalogo(auto_interes_actual)
-    #client = _get_openai_client()
-    
-    client = _get_gemini_client()
-    
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    auto_interes_actual = _normalizar_version_catalogo(
+        auto_interes_actual
+    )
+
     config_ia = _obtener_config_ia(numero_asesor)
-    
-    catalogo_dict = _obtener_catalogo_dict()
-    versiones_validas = sorted(catalogo_dict.keys())
-    versiones_str = "\n".join(f"- {v}" for v in versiones_validas)
-
-    # ANTI-CICLO: cuenta preguntas repetidas de la IA en el historial reciente.
-    def _contar_intentos_sin_avance(historial: list[dict], pregunta_clave: str) -> int:
-        clave = _normalizar_texto(pregunta_clave)
-        count = 0
-
-        for msg in reversed(historial or []):
-            if msg.get("role") != "assistant":
-                continue
-
-            contenido = _normalizar_texto(msg.get("content") or "")
-
-            if clave and clave in contenido:
-                count += 1
-
-        return count
-
-    intentos_enganche = _contar_intentos_sin_avance(historial_reciente, "enganche")
-    intentos_buro     = _contar_intentos_sin_avance(historial_reciente, "buró")
-
-    enganches_info = {v: _enganche_referencial(v) for v in versiones_validas}
-    from datetime import date as _date
-    _hoy = _date.today()
-    _meses_es = {1:"enero",2:"febrero",3:"marzo",4:"abril",5:"mayo",6:"junio",
-                 7:"julio",8:"agosto",9:"septiembre",10:"octubre",11:"noviembre",12:"diciembre"}
-    _ultimo_dia = [31,28,31,30,31,30,31,31,30,31,30,31][_hoy.month - 1]
-    _vigencia = f"al {_ultimo_dia} de {_meses_es[_hoy.month]} de {_hoy.year}"
-
-    contexto = {
-        "telefono": telefono,
-        "nombre_cliente": nombre_cliente,
-        "mensaje_usuario": texto_usuario,
-        "ultimo_mensaje_saliente": ultimo_mensaje_saliente,
-        "auto_interes_actual": auto_interes_actual,
-        "historial_reciente": historial_reciente,
-        "accion_ofrecida_previa": accion_ofrecida_previa,
-        "es_primer_mensaje": es_primer_mensaje,
-        "contexto_configuracion_ia": config_ia,
-        "perfilado": {
-            "etapa_actual": etapa_perfilado,
-            "etapa_nombres": ETAPA_PERFILADO,
-            "enganche_registrado": enganche_registrado,
-            "buro_registrado": buro_registrado,
-            "enganche_minimo_calificado": ENGANCHE_MINIMO_CALIFICADO,
-        },
-        "anti_loop": {
-            "intentos_pregunta_enganche_sin_respuesta": intentos_enganche,
-            "intentos_pregunta_buro_sin_respuesta": intentos_buro,
-            "regla": "Si intentos >= 2 para una pregunta, NO repetirla en este turno.",
-        },
-        "senales_minimas": _detectar_intencion_minima(texto_usuario),
-        "catalogo": _catalogo_para_prompt(),
-        "enganches_referenciales_20pct": enganches_info,
-        "desempeno_modelos": COMPARACION_DESEMPENO,
-        "ubicacion_sucursal": _sucursal_mas_cercana(telefono),
-        "regla_contexto": {
-            "ignorar_catalogo_anterior": True,
-            "catalogo_anterior": sorted(PALABRAS_CATALOGO_ANTERIOR),
-            "catalogo_actual": versiones_validas,
-        },
-        "reglas_multimedia": {
-            "si_mensaje_contiene_contexto_multimedia_analizado": (
-                "Usa el análisis multimedia como contexto real del cliente. "
-                "No respondas que estás limitado a texto. "
-                "Si el cliente pregunta 'qué opinas', da una opinión comercial breve basada en el análisis. "
-                "No marques send_images, send_videos ni send_pdf salvo que el cliente lo pida explícitamente."
-            ),
-            "no_enviar_catalogo_por_defecto": (
-                "Si el cliente envió una imagen/video/audio/sticker, no envíes más fotos/videos/fichas "
-                "solo por haber recibido multimedia. Primero responde a la intención."
-            ),
-        },
-    }
-
-
-    instrucciones = _construir_instrucciones_desde_bd(config_ia)
-
-    instrucciones_extra = """
-Reglas adicionales obligatorias para este CRM:
-- Si el mensaje contiene [CONTEXTO MULTIMEDIA ANALIZADO], úsalo como contexto real.
-- Nunca digas que solo puedes procesar texto cuando ya existe contexto multimedia analizado.
-- Si el cliente manda una imagen y pregunta "qué opinas", responde con una opinión útil del vehículo o contenido.
-- No envíes imágenes, videos ni fichas técnicas solo porque el cliente mandó una imagen/video/audio.
-- Solo marca send_images=true, send_videos=true o send_pdf=true si el cliente lo pidió explícitamente.
-- Si no estás seguro del modelo exacto, usa lenguaje de probabilidad y pide confirmación.
-""".strip()
-
-    instrucciones = "\n\n".join(
-        parte for parte in [instrucciones, instrucciones_extra]
-        if str(parte or "").strip()
+    instrucciones = _construir_instrucciones_desde_bd(
+        config_ia
     )
 
     if not instrucciones:
+        logger.error(
+            "IA SIN CONFIGURACION UTILIZABLE | linea=%s expediente=%s",
+            numero_asesor,
+            expediente.pk,
+        )
         return {}
-    
-#    try:
-#        respuesta = client.responses.create(
-#            model="gpt-4.1",
-#            instructions=instrucciones,
-#            input=json.dumps(contexto, ensure_ascii=False),
-#        )
-#        salida = _json_seguro(getattr(respuesta, "output_text", "") or "")
-#    except Exception as e:
-#        import logging
-#        logging.getLogger(__name__).error(f"Error OpenAI: {e}", exc_info=True)
-#        return {}
-    
-    try:
-        modelo = getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash")
 
-        respuesta = client.models.generate_content(
-            model=modelo,
-            contents=json.dumps(contexto, ensure_ascii=False),
-            config=types.GenerateContentConfig(
-                system_instruction=instrucciones,
-                response_mime_type="application/json",
-                response_schema=GEMINI_DECISION_SCHEMA,
-                temperature=0.3,
+    conversacion = _get_or_create_conversacion_ia(
+        expediente,
+        numero_asesor,
+    )
+
+    perfil_confirmado = _perfil_confirmado_para_ia(
+        expediente=expediente,
+        conversacion=conversacion,
+        nombre_cliente=nombre_cliente,
+    )
+
+    preguntas_bloqueadas = _preguntas_bloqueadas_para_ia(
+        perfil=perfil_confirmado,
+        conversacion=conversacion,
+    )
+
+    datos_extra = _ia_dict(
+        conversacion.datos_extra
+    )
+
+    preguntas_realizadas = _ia_dict(
+        datos_extra.get("preguntas_realizadas")
+    )
+
+    respuestas_ia_recientes = datos_extra.get(
+        "ultimas_respuestas_ia"
+    )
+
+    if not isinstance(respuestas_ia_recientes, list):
+        respuestas_ia_recientes = []
+
+    hay_respuesta_previa = any(
+        item.get("role") == "assistant"
+        for item in historial_reciente
+    )
+
+    es_primer_contacto_real = bool(
+        es_primer_mensaje
+        and not hay_respuesta_previa
+        and not conversacion.ultima_intencion
+        and not conversacion.resumen_conversacion
+        and not expediente.resumen
+    )
+
+    contexto = {
+        "numero_linea": numero_asesor,
+        "mensaje_actual": texto_usuario,
+        "prospecto": {
+            "nombre": nombre_cliente or None,
+            "telefono": telefono,
+        },
+        "es_primer_contacto_real": es_primer_contacto_real,
+        "perfil_confirmado": perfil_confirmado,
+        "estado_conversacion": {
+            "estado": conversacion.estado_conversacion,
+            "ultima_intencion": conversacion.ultima_intencion,
+            "ultimo_modelo_mencionado": (
+                conversacion.ultimo_modelo_mencionado
+                or auto_interes_actual
             ),
+            "pregunta_pendiente": (
+                conversacion.pregunta_pendiente or None
+            ),
+            "pregunta_pendiente_intentos": (
+                conversacion.pregunta_pendiente_intentos
+            ),
+            "preguntas_realizadas": preguntas_realizadas,
+            "preguntas_bloqueadas": preguntas_bloqueadas,
+            "accion_ofrecida_previa": accion_ofrecida_previa,
+            "ultima_respuesta_saliente": (
+                ultimo_mensaje_saliente or None
+            ),
+            "ultimas_respuestas_ia": respuestas_ia_recientes[-3:],
+        },
+        "resumen_historico": (
+            conversacion.resumen_conversacion
+            or expediente.resumen
+            or ""
+        ),
+        "historial_reciente": historial_reciente,
+        "perfilado_legacy": {
+            "etapa_actual": etapa_perfilado,
+            "enganche_registrado": (
+                expediente.enganche_monto
+                or enganche_registrado
+            ),
+            "buro_registrado": (
+                expediente.buro_estado
+                or buro_registrado
+                or None
+            ),
+        },
+        "catalogo": _catalogo_para_prompt(),
+        "pauta_origen_interna": expediente.pauta or None,
+        "reglas_de_contexto": {
+            "la_pauta_es_interna": True,
+            "no_repetir_preguntas_bloqueadas": True,
+            "maximo_una_pregunta_por_turno": True,
+            "no_reiniciar_conversacion": True,
+        },
+    }
+
+    client = _get_gemini_client()
+    modelo = getattr(
+        settings,
+        "GEMINI_MODEL",
+        "gemini-2.5-flash",
+    )
+
+    try:
+        salida = _llamar_gemini_decision(
+            client=client,
+            modelo=modelo,
+            instrucciones=instrucciones,
+            contexto=contexto,
         )
 
-        salida = _json_seguro(getattr(respuesta, "text", "") or "")
+        decision = _sanitizar_decision_ia(
+            salida,
+            etapa_perfilado=etapa_perfilado,
+        )
 
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Error Gemini: {e}", exc_info=True)
-        return {}
+        respuesta = decision.get("reply_text") or ""
 
-    salida.setdefault("reply_text", "")
-    salida.setdefault("selected_version", None)
-    salida.setdefault("send_pdf", False)
-    salida.setdefault("send_images", False)
-    salida.setdefault("send_videos", False)
-    salida.setdefault("requiere_asesor", False)
-    salida.setdefault("accion_ofrecida", "ninguna")
-    salida.setdefault("nueva_etapa_perfilado", etapa_perfilado)
-    salida.setdefault("detected_profile", {})
-    salida.setdefault("reasoning_tags", [])
+        if respuesta and _respuesta_ia_es_repetida(
+            nueva_respuesta=respuesta,
+            historial=historial_reciente,
+        ):
+            contexto_reintento = {
+                **contexto,
+                "control_calidad": {
+                    "motivo": "respuesta_demasiado_parecida",
+                    "respuesta_rechazada": respuesta,
+                    "instruccion": (
+                        "Genera una respuesta distinta. Responde directamente "
+                        "el mensaje actual, utiliza los datos confirmados y no "
+                        "repitas la misma pregunta."
+                    ),
+                },
+            }
 
-    version = _normalizar_version_catalogo(salida.get("selected_version"))
-    salida["selected_version"] = version
+            segunda_salida = _llamar_gemini_decision(
+                client=client,
+                modelo=modelo,
+                instrucciones=instrucciones,
+                contexto=contexto_reintento,
+            )
 
-    accion = (salida.get("accion_ofrecida") or "ninguna").strip()
-    salida["accion_ofrecida"] = accion if accion in ACCIONES_OFRECIDAS_VALIDAS else "ninguna"
+            segunda_decision = _sanitizar_decision_ia(
+                segunda_salida,
+                etapa_perfilado=etapa_perfilado,
+            )
 
-    salida["send_pdf"] = bool(salida.get("send_pdf")) and bool(version)
-    salida["send_images"] = bool(salida.get("send_images")) and bool(version)
-    salida["send_videos"] = bool(salida.get("send_videos")) and bool(version)
-    salida["requiere_asesor"] = bool(salida.get("requiere_asesor"))
-    if salida["accion_ofrecida"] in ("lead_calificado", "confirmar_canalizacion"):
-        salida["requiere_asesor"] = True
-    salida["reply_text"] = _limitar_texto(salida.get("reply_text") or "")
+            segunda_respuesta = (
+                segunda_decision.get("reply_text") or ""
+            )
 
-    try:
-        nueva_etapa = max(etapa_perfilado, min(4, int(salida.get("nueva_etapa_perfilado", etapa_perfilado))))
-    except (TypeError, ValueError):
-        nueva_etapa = etapa_perfilado
-    salida["nueva_etapa_perfilado"] = nueva_etapa
+            if segunda_respuesta and not _respuesta_ia_es_repetida(
+                nueva_respuesta=segunda_respuesta,
+                historial=historial_reciente,
+            ):
+                decision = segunda_decision
+            else:
+                logger.warning(
+                    "IA OMITIDA POR REDUNDANCIA | linea=%s expediente=%s",
+                    numero_asesor,
+                    expediente.pk,
+                )
 
-    dp = salida.get("detected_profile") or {}
-    if dp.get("enganche_monto") is not None:
-        try:
-            dp["enganche_monto"] = int(dp["enganche_monto"])
-        except (TypeError, ValueError):
-            dp["enganche_monto"] = None
-    salida["detected_profile"] = dp
+                return {
+                    "skip_send": True,
+                    "skip_reason": "respuesta_repetida",
+                }
 
-    if salida["requiere_asesor"]:
-        salida["send_pdf"] = False
-        salida["send_images"] = False
-        salida["send_videos"] = False
-        if salida["accion_ofrecida"] not in ("lead_calificado", "confirmar_canalizacion"):
-            salida["accion_ofrecida"] = "confirmar_canalizacion"
+        if not str(
+            decision.get("reply_text") or ""
+        ).strip():
+            return {
+                "skip_send": True,
+                "skip_reason": "respuesta_vacia",
+            }
 
-    return salida
+        return decision
 
+    except Exception:
+        logger.exception(
+            "ERROR GENERANDO DECISION IA | linea=%s expediente=%s modelo=%s",
+            numero_asesor,
+            expediente.pk,
+            modelo,
+        )
+
+        return {
+            "skip_send": True,
+            "skip_reason": "error_proveedor_ia",
+        }
 
 # Historial y persistencia
 def _obtener_ultimo_mensaje_saliente(cliente: ClienteComercial, numero_asesor: str) -> str:
@@ -1165,22 +1363,368 @@ def _contar_mensajes_entrantes(cliente: ClienteComercial, numero_asesor: str) ->
     ).count()
 
 
-def _serializar_historial(cliente: ClienteComercial, numero_asesor: str, limite: int = 12) -> list[dict[str, str]]:
-    mensajes = (
+def _serializar_historial(
+    cliente: ClienteComercial,
+    numero_asesor: str,
+    limite: int = 20,
+) -> list[dict[str, Any]]:
+    """
+    Recupera mensajes recientes de la conversación exacta:
+    cliente + línea de WhatsApp.
+
+    Distingue entre:
+    - cliente
+    - respuesta de IA
+    - respuesta de asesor humano
+    """
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+
+    mensajes = list(
         MensajeWhatsApp.objects
-        .filter(cliente=cliente, numero_asesor=numero_asesor)
-        .order_by("-id").only("direction", "body", "raw")
-    )[: max(limite * 4, 24)]
-    historial = []
-    for m in reversed(list(mensajes)):
-        body = (m.body or "").strip()
+        .filter(
+            cliente=cliente,
+            numero_asesor=numero_asesor,
+        )
+        .order_by("-created_at", "-id")
+        .only(
+            "direction",
+            "body",
+            "raw",
+            "created_at",
+        )[: max(limite * 3, 30)]
+    )
+
+    mensajes.reverse()
+    historial: list[dict[str, Any]] = []
+
+    for mensaje in mensajes:
+        body = str(mensaje.body or "").strip()
+        raw = mensaje.raw if isinstance(mensaje.raw, dict) else {}
+
         if not body:
             continue
-        if not _mensaje_de_historial_vigente(body=body, raw=m.raw):
+
+        if raw.get("is_reaction_event"):
             continue
-        historial.append({"role": "assistant" if m.direction == "out" else "user", "content": body})
+
+        if not _mensaje_de_historial_vigente(
+            body=body,
+            raw=raw,
+        ):
+            continue
+
+        if mensaje.direction == MensajeWhatsApp.Direccion.IN:
+            origen = "cliente"
+            role = "user"
+        else:
+            origen = "ia" if raw.get("ia_provider") else "asesor"
+            role = "assistant"
+
+        historial.append({
+            "role": role,
+            "content": body,
+            "origen": origen,
+            "fecha": (
+                mensaje.created_at.isoformat()
+                if mensaje.created_at
+                else ""
+            ),
+        })
+
     return historial[-limite:]
 
+def _ia_dict(valor: Any) -> dict:
+    return valor if isinstance(valor, dict) else {}
+
+
+def _perfil_confirmado_para_ia(
+    *,
+    expediente: ExpedienteDigital,
+    conversacion: ConversacionIA,
+    nombre_cliente: str = "",
+) -> dict[str, Any]:
+    datos_extra = _ia_dict(conversacion.datos_extra)
+    perfil_extra = _ia_dict(datos_extra.get("perfil_extra"))
+
+    return {
+        "nombre_completo": str(nombre_cliente or "").strip() or None,
+        "vehiculo_interes": expediente.auto_interes or None,
+        "enganche_monto": expediente.enganche_monto,
+        "presupuesto_mensual": expediente.presupuesto_mensual,
+        "presupuesto_mensual_min": perfil_extra.get(
+            "presupuesto_mensual_min"
+        ),
+        "presupuesto_mensual_max": perfil_extra.get(
+            "presupuesto_mensual_max"
+        ),
+        "buro_estado": expediente.buro_estado or None,
+        "forma_pago": expediente.forma_pago or None,
+        "tipo_cliente": expediente.tipo_cliente or None,
+        "personalidad_juridica": perfil_extra.get(
+            "personalidad_juridica"
+        ),
+        "comprobacion_ingresos": (
+            expediente.comprobacion_ingresos or None
+        ),
+        "uso_vehiculo": expediente.uso_vehiculo or None,
+        "auto_cuenta": perfil_extra.get("auto_cuenta"),
+        "plazo_compra": expediente.plazo_compra or None,
+        "ciudad": perfil_extra.get("ciudad"),
+        "correo": perfil_extra.get("correo"),
+        "horario_contacto": perfil_extra.get("horario_contacto"),
+    }
+
+
+def _preguntas_bloqueadas_para_ia(
+    *,
+    perfil: dict[str, Any],
+    conversacion: ConversacionIA,
+) -> list[str]:
+    datos_extra = _ia_dict(conversacion.datos_extra)
+    preguntas_realizadas = _ia_dict(
+        datos_extra.get("preguntas_realizadas")
+    )
+
+    bloqueadas = {
+        clave
+        for clave, intentos in preguntas_realizadas.items()
+        if int(intentos or 0) >= 2
+    }
+
+    campos_conocidos = {
+        "nombre": perfil.get("nombre_completo"),
+        "vehiculo_interes": perfil.get("vehiculo_interes"),
+        "forma_pago": perfil.get("forma_pago"),
+        "enganche": perfil.get("enganche_monto"),
+        "presupuesto_mensual": (
+            perfil.get("presupuesto_mensual")
+            or perfil.get("presupuesto_mensual_min")
+            or perfil.get("presupuesto_mensual_max")
+        ),
+        "buro": perfil.get("buro_estado"),
+        "tipo_cliente": perfil.get("tipo_cliente"),
+        "personalidad_juridica": perfil.get(
+            "personalidad_juridica"
+        ),
+        "comprobacion_ingresos": perfil.get(
+            "comprobacion_ingresos"
+        ),
+        "uso_vehiculo": perfil.get("uso_vehiculo"),
+        "auto_cuenta": perfil.get("auto_cuenta"),
+        "plazo_compra": perfil.get("plazo_compra"),
+    }
+
+    for clave, valor in campos_conocidos.items():
+        if valor not in (None, "", [], {}):
+            bloqueadas.add(clave)
+
+    return sorted(bloqueadas)
+
+
+def _normalizar_para_similitud(texto: str) -> str:
+    texto = _strip_accents(str(texto or "")).lower()
+    texto = re.sub(r"[^a-z0-9 ]+", " ", texto)
+    return re.sub(r"\s+", " ", texto).strip()
+
+
+def _respuesta_ia_es_repetida(
+    *,
+    nueva_respuesta: str,
+    historial: list[dict[str, Any]],
+    umbral: float = 0.86,
+) -> bool:
+    nueva = _normalizar_para_similitud(nueva_respuesta)
+
+    if not nueva:
+        return False
+
+    respuestas_anteriores = [
+        _normalizar_para_similitud(item.get("content", ""))
+        for item in historial
+        if item.get("role") == "assistant"
+    ][-4:]
+
+    for anterior in respuestas_anteriores:
+        if not anterior:
+            continue
+
+        if nueva == anterior:
+            return True
+
+        # Evita falsos positivos con respuestas cortas como "Perfecto".
+        if min(len(nueva), len(anterior)) < 60:
+            continue
+
+        similitud = SequenceMatcher(
+            None,
+            nueva,
+            anterior,
+        ).ratio()
+
+        if similitud >= umbral:
+            return True
+
+    return False
+
+
+def _llamar_gemini_decision(
+    *,
+    client,
+    modelo: str,
+    instrucciones: str,
+    contexto: dict[str, Any],
+) -> dict[str, Any]:
+    respuesta = client.models.generate_content(
+        model=modelo,
+        contents=json.dumps(
+            contexto,
+            ensure_ascii=False,
+            default=str,
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction=instrucciones,
+            response_mime_type="application/json",
+            response_schema=GEMINI_DECISION_SCHEMA,
+            temperature=0.45,
+        ),
+    )
+
+    return _json_seguro(
+        getattr(respuesta, "text", "") or ""
+    )
+
+
+def _sanitizar_decision_ia(
+    salida: dict[str, Any],
+    *,
+    etapa_perfilado: int,
+) -> dict[str, Any]:
+    salida = salida if isinstance(salida, dict) else {}
+
+    salida.setdefault("reply_text", "")
+    salida.setdefault("intent", "")
+    salida.setdefault("question_key", None)
+    salida.setdefault("selected_version", None)
+    salida.setdefault("send_pdf", False)
+    salida.setdefault("send_images", False)
+    salida.setdefault("send_videos", False)
+    salida.setdefault("requiere_asesor", False)
+    salida.setdefault("accion_ofrecida", "ninguna")
+    salida.setdefault("nueva_etapa_perfilado", etapa_perfilado)
+    salida.setdefault("detected_profile", {})
+    salida.setdefault("correcciones_explicitas", {})
+    salida.setdefault("reasoning_tags", [])
+
+    salida["reply_text"] = _limitar_texto(
+        str(salida.get("reply_text") or ""),
+        max_len=700,
+    )
+
+    salida["intent"] = str(
+        salida.get("intent") or ""
+    ).strip()[:80]
+
+    question_key = salida.get("question_key")
+
+    if question_key is not None:
+        question_key = str(question_key).strip()
+
+    salida["question_key"] = (
+        question_key
+        if question_key in PREGUNTAS_PERFIL_VALIDAS
+        else None
+    )
+
+    version = _normalizar_version_catalogo(
+        salida.get("selected_version")
+    )
+
+    salida["selected_version"] = version
+    salida["send_pdf"] = bool(
+        salida.get("send_pdf")
+    ) and bool(version)
+    salida["send_images"] = bool(
+        salida.get("send_images")
+    ) and bool(version)
+    salida["send_videos"] = bool(
+        salida.get("send_videos")
+    ) and bool(version)
+    salida["requiere_asesor"] = bool(
+        salida.get("requiere_asesor")
+    )
+
+    accion = str(
+        salida.get("accion_ofrecida") or "ninguna"
+    ).strip()
+
+    salida["accion_ofrecida"] = (
+        accion
+        if accion in ACCIONES_OFRECIDAS_VALIDAS
+        else "ninguna"
+    )
+
+    if salida["accion_ofrecida"] in {
+        "lead_calificado",
+        "confirmar_canalizacion",
+    }:
+        salida["requiere_asesor"] = True
+
+    try:
+        nueva_etapa = int(
+            salida.get(
+                "nueva_etapa_perfilado",
+                etapa_perfilado,
+            )
+        )
+    except (TypeError, ValueError):
+        nueva_etapa = etapa_perfilado
+
+    salida["nueva_etapa_perfilado"] = max(
+        etapa_perfilado,
+        min(4, nueva_etapa),
+    )
+
+    detected_profile = _ia_dict(
+        salida.get("detected_profile")
+    )
+
+    campos_numericos = (
+        "enganche_monto",
+        "presupuesto_mensual",
+        "presupuesto_mensual_min",
+        "presupuesto_mensual_max",
+    )
+
+    for campo in campos_numericos:
+        detected_profile[campo] = _int_detectado(
+            detected_profile.get(campo)
+        )
+
+    salida["detected_profile"] = detected_profile
+
+    correcciones = _ia_dict(
+        salida.get("correcciones_explicitas")
+    )
+
+    salida["correcciones_explicitas"] = {
+        campo: bool(valor)
+        for campo, valor in correcciones.items()
+        if campo in CAMPOS_CORREGIBLES_IA
+    }
+
+    reasoning_tags = salida.get("reasoning_tags")
+
+    salida["reasoning_tags"] = (
+        [
+            str(item).strip()[:80]
+            for item in reasoning_tags
+            if str(item or "").strip()
+        ][:10]
+        if isinstance(reasoning_tags, list)
+        else []
+    )
+
+    return salida
 
 def _guardar_salida(
     *, telefono: str, numero_asesor: str, cliente: ClienteComercial,
@@ -1273,112 +1817,447 @@ def _estado_conversacion_desde_etapa(etapa: int) -> tuple[str, str]:
     return "informando", ""
 
 
+@transaction.atomic
 def _guardar_datos_detectados_en_cliente_y_expediente(
-    *, cliente: ClienteComercial, expediente: ExpedienteDigital,
-    profile_name: str, detected_profile: dict[str, Any],
-    version_detectada: Optional[str], nueva_etapa_perfilado: int,
+    *,
+    cliente: ClienteComercial,
+    expediente: ExpedienteDigital,
+    profile_name: str,
+    detected_profile: dict[str, Any],
+    version_detectada: Optional[str],
+    nueva_etapa_perfilado: int,
     numero_asesor: str = "",
+    correcciones_explicitas: Optional[dict[str, Any]] = None,
+    question_key: Optional[str] = None,
+    intent: str = "",
+    reply_text: str = "",
+    requiere_asesor: bool = False,
+    accion_ofrecida: str = "",
 ) -> None:
+    detected_profile = _ia_dict(detected_profile)
+    correcciones = {
+        campo: bool(valor)
+        for campo, valor in _ia_dict(
+            correcciones_explicitas
+        ).items()
+        if campo in CAMPOS_CORREGIBLES_IA
+    }
+
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
     cambios_cliente: list[str] = []
     cambios_expediente: list[str] = []
-    detected_profile = detected_profile or {}
 
-    nombre_detectado = (
-        detected_profile.get("nombre_detectado")
-        or _extraer_nombre_basico(profile_name, "")
-        or ""
-    ).strip()
+    conversacion = _get_or_create_conversacion_ia(
+        expediente,
+        numero_asesor,
+    )
 
-    if nombre_detectado and not (cliente.nombre or "").strip():
+    datos_extra = _ia_dict(conversacion.datos_extra).copy()
+    perfil_extra = _ia_dict(
+        datos_extra.get("perfil_extra")
+    ).copy()
+
+    def esta_vacio(valor: Any) -> bool:
+        return valor in (None, "", [], {})
+
+    def permite_actualizar(
+        campo_ia: str,
+        valor_actual: Any,
+    ) -> bool:
+        return (
+            esta_vacio(valor_actual)
+            or correcciones.get(campo_ia, False)
+        )
+
+    # ---------------------------------------------------------
+    # Nombre
+    # ---------------------------------------------------------
+    nombre_detectado = _texto_detectado(
+        detected_profile.get("nombre_detectado"),
+        160,
+    )
+
+    if not nombre_detectado and not (cliente.nombre or "").strip():
+        nombre_detectado = _extraer_nombre_basico(
+            profile_name,
+            "",
+        )
+
+    if (
+        nombre_detectado
+        and permite_actualizar(
+            "nombre_detectado",
+            cliente.nombre,
+        )
+        and cliente.nombre != nombre_detectado
+    ):
         cliente.nombre = nombre_detectado
-        cambios_cliente.extend(["nombre", "actualizado_en"])
+        cambios_cliente.extend([
+            "nombre",
+            "actualizado_en",
+        ])
 
-    version_detectada = _normalizar_version_catalogo(version_detectada)
+    # ---------------------------------------------------------
+    # Vehículo
+    # ---------------------------------------------------------
+    version_detectada = _normalizar_version_catalogo(
+        version_detectada
+    )
 
-    if version_detectada and expediente.auto_interes != version_detectada:
+    # El interés sí puede cambiar cuando el cliente menciona otro modelo.
+    if (
+        version_detectada
+        and expediente.auto_interes != version_detectada
+    ):
         expediente.auto_interes = version_detectada
         cambios_expediente.append("auto_interes")
 
-    enganche = _int_detectado(detected_profile.get("enganche_monto"))
-    if enganche is not None and expediente.enganche_monto != enganche:
+    # ---------------------------------------------------------
+    # Enganche
+    # ---------------------------------------------------------
+    enganche = _int_detectado(
+        detected_profile.get("enganche_monto")
+    )
+
+    if (
+        enganche is not None
+        and permite_actualizar(
+            "enganche_monto",
+            expediente.enganche_monto,
+        )
+        and expediente.enganche_monto != enganche
+    ):
         expediente.enganche_monto = enganche
         cambios_expediente.append("enganche_monto")
 
-    presupuesto_mensual = _int_detectado(detected_profile.get("presupuesto_mensual"))
-    if presupuesto_mensual is not None and expediente.presupuesto_mensual != presupuesto_mensual:
-        expediente.presupuesto_mensual = presupuesto_mensual
+    # ---------------------------------------------------------
+    # Presupuesto mensual y rango
+    # ---------------------------------------------------------
+    presupuesto = _int_detectado(
+        detected_profile.get("presupuesto_mensual")
+    )
+
+    presupuesto_min = _int_detectado(
+        detected_profile.get("presupuesto_mensual_min")
+    )
+
+    presupuesto_max = _int_detectado(
+        detected_profile.get("presupuesto_mensual_max")
+    )
+
+    if presupuesto_min is not None:
+        perfil_extra["presupuesto_mensual_min"] = presupuesto_min
+
+    if presupuesto_max is not None:
+        perfil_extra["presupuesto_mensual_max"] = presupuesto_max
+
+    # La tabla actual solo tiene un presupuesto mensual.
+    # Cuando existe rango se guarda el límite superior en el campo principal
+    # y ambos extremos dentro de datos_extra.
+    presupuesto_principal = (
+        presupuesto
+        or presupuesto_max
+        or presupuesto_min
+    )
+
+    correccion_presupuesto = any(
+        correcciones.get(campo, False)
+        for campo in (
+            "presupuesto_mensual",
+            "presupuesto_mensual_min",
+            "presupuesto_mensual_max",
+        )
+    )
+
+    if (
+        presupuesto_principal is not None
+        and (
+            esta_vacio(expediente.presupuesto_mensual)
+            or correccion_presupuesto
+        )
+        and expediente.presupuesto_mensual
+        != presupuesto_principal
+    ):
+        expediente.presupuesto_mensual = presupuesto_principal
         cambios_expediente.append("presupuesto_mensual")
 
-    buro = _texto_detectado(detected_profile.get("buro_estado"), 30).lower()
-    if buro and expediente.buro_estado != buro:
+    # ---------------------------------------------------------
+    # Buró
+    # ---------------------------------------------------------
+    buro = _texto_detectado(
+        detected_profile.get("buro_estado"),
+        30,
+    ).lower()
+
+    if (
+        buro
+        and buro != "desconocido"
+        and permite_actualizar(
+            "buro_estado",
+            expediente.buro_estado,
+        )
+        and expediente.buro_estado != buro
+    ):
         expediente.buro_estado = buro
         cambios_expediente.append("buro_estado")
 
-    forma_pago = _texto_detectado(detected_profile.get("forma_pago"), 30).lower()
-    if forma_pago and expediente.forma_pago != forma_pago:
+    # ---------------------------------------------------------
+    # Forma de pago
+    # ---------------------------------------------------------
+    forma_pago = _texto_detectado(
+        detected_profile.get("forma_pago"),
+        30,
+    ).lower()
+
+    if (
+        forma_pago
+        and forma_pago != "desconocido"
+        and permite_actualizar(
+            "forma_pago",
+            expediente.forma_pago,
+        )
+        and expediente.forma_pago != forma_pago
+    ):
         expediente.forma_pago = forma_pago
         cambios_expediente.append("forma_pago")
 
-    tipo_cliente = _texto_detectado(detected_profile.get("tipo_cliente"), 30).lower()
-    if tipo_cliente and expediente.tipo_cliente != tipo_cliente:
+    # ---------------------------------------------------------
+    # Tipo de cliente
+    # ---------------------------------------------------------
+    tipo_cliente = _texto_detectado(
+        detected_profile.get("tipo_cliente"),
+        30,
+    ).lower()
+
+    if (
+        tipo_cliente
+        and tipo_cliente != "desconocido"
+        and permite_actualizar(
+            "tipo_cliente",
+            expediente.tipo_cliente,
+        )
+        and expediente.tipo_cliente != tipo_cliente
+    ):
         expediente.tipo_cliente = tipo_cliente
         cambios_expediente.append("tipo_cliente")
 
+    # ---------------------------------------------------------
+    # Comprobación de ingresos
+    # ---------------------------------------------------------
+    comprobacion_ingresos = _texto_detectado(
+        detected_profile.get("comprobacion_ingresos"),
+        200,
+    )
+
+    if (
+        comprobacion_ingresos
+        and permite_actualizar(
+            "comprobacion_ingresos",
+            expediente.comprobacion_ingresos,
+        )
+        and expediente.comprobacion_ingresos
+        != comprobacion_ingresos
+    ):
+        expediente.comprobacion_ingresos = comprobacion_ingresos
+        cambios_expediente.append("comprobacion_ingresos")
+
+    # ---------------------------------------------------------
+    # Uso del vehículo
+    # ---------------------------------------------------------
     uso_vehiculo = _texto_detectado(
-        detected_profile.get("uso_vehiculo")
-        or detected_profile.get("uso_detectado"),
+        detected_profile.get("uso_vehiculo"),
         255,
     )
-    if uso_vehiculo and expediente.uso_vehiculo != uso_vehiculo:
+
+    if (
+        uso_vehiculo
+        and permite_actualizar(
+            "uso_vehiculo",
+            expediente.uso_vehiculo,
+        )
+        and expediente.uso_vehiculo != uso_vehiculo
+    ):
         expediente.uso_vehiculo = uso_vehiculo
         cambios_expediente.append("uso_vehiculo")
 
-    plazo_compra = _texto_detectado(detected_profile.get("plazo_compra"), 120)
-    if plazo_compra and expediente.plazo_compra != plazo_compra:
+    # ---------------------------------------------------------
+    # Plazo de compra
+    # ---------------------------------------------------------
+    plazo_compra = _texto_detectado(
+        detected_profile.get("plazo_compra"),
+        120,
+    )
+
+    if (
+        plazo_compra
+        and permite_actualizar(
+            "plazo_compra",
+            expediente.plazo_compra,
+        )
+        and expediente.plazo_compra != plazo_compra
+    ):
         expediente.plazo_compra = plazo_compra
         cambios_expediente.append("plazo_compra")
 
-    enganche_para_calificar = expediente.enganche_monto or enganche
-    buro_para_calificar = expediente.buro_estado or buro or "desconocido"
+    # ---------------------------------------------------------
+    # Datos adicionales sin columna propia
+    # ---------------------------------------------------------
+    campos_extra = {
+        "personalidad_juridica": 120,
+        "auto_cuenta": 200,
+        "ciudad": 120,
+        "correo": 160,
+        "horario_contacto": 120,
+    }
 
-    if _lead_es_calificado(enganche_para_calificar, buro_para_calificar):
-        if expediente.estado not in ("Lead Calificado", "Pendiente de Cotización"):
+    for campo, longitud in campos_extra.items():
+        valor = _texto_detectado(
+            detected_profile.get(campo),
+            longitud,
+        )
+
+        if not valor:
+            continue
+
+        valor_actual = perfil_extra.get(campo)
+
+        if (
+            esta_vacio(valor_actual)
+            or correcciones.get(campo, False)
+        ):
+            perfil_extra[campo] = valor
+
+    datos_extra["perfil_extra"] = perfil_extra
+
+    # ---------------------------------------------------------
+    # Calificación comercial
+    # ---------------------------------------------------------
+    if _lead_es_calificado(
+        expediente.enganche_monto,
+        expediente.buro_estado or "desconocido",
+    ):
+        if expediente.estado not in {
+            "Lead Calificado",
+            "Pendiente de Cotización",
+        }:
             expediente.estado = "Lead Calificado"
             cambios_expediente.append("estado")
 
-    estado_conversacion, pregunta_pendiente = _estado_conversacion_desde_etapa(nueva_etapa_perfilado)
-    etapa_str = {v: k for k, v in ETAPA_PERFILADO.items()}.get(
-        nueva_etapa_perfilado,
-        "sin_iniciar",
+    if requiere_asesor:
+        if not expediente.requiere_asesor:
+            expediente.requiere_asesor = True
+            cambios_expediente.append("requiere_asesor")
+
+        motivo = (
+            str(intent or accion_ofrecida or "seguimiento_comercial")
+            .strip()[:120]
+        )
+
+        if (
+            motivo
+            and expediente.motivo_requiere_asesor != motivo
+        ):
+            expediente.motivo_requiere_asesor = motivo
+            cambios_expediente.append(
+                "motivo_requiere_asesor"
+            )
+
+    # ---------------------------------------------------------
+    # Memoria de preguntas y respuestas
+    # ---------------------------------------------------------
+    preguntas_realizadas = _ia_dict(
+        datos_extra.get("preguntas_realizadas")
+    ).copy()
+
+    question_key = (
+        str(question_key or "").strip()
+        if question_key
+        else ""
     )
 
-    datos_conversacion = {
-        "etapa_perfilado": etapa_str,
-        "etapa_perfilado_num": nueva_etapa_perfilado,
-        "auto_interes": version_detectada,
-        "enganche_monto": expediente.enganche_monto or enganche,
-        "presupuesto_mensual": expediente.presupuesto_mensual or presupuesto_mensual,
-        "buro_estado": expediente.buro_estado or buro,
-        "forma_pago": expediente.forma_pago or forma_pago,
-        "tipo_cliente": expediente.tipo_cliente or tipo_cliente,
-        "uso_vehiculo": expediente.uso_vehiculo or uso_vehiculo,
-        "plazo_compra": expediente.plazo_compra or plazo_compra,
-    }
+    if question_key in PREGUNTAS_PERFIL_VALIDAS:
+        preguntas_realizadas[question_key] = (
+            int(preguntas_realizadas.get(question_key) or 0)
+            + 1
+        )
 
-    _actualizar_datos_conversacion(
-        expediente=expediente,
-        numero_asesor=numero_asesor,
-        datos=datos_conversacion,
-        estado_conversacion=estado_conversacion,
-        pregunta_pendiente=pregunta_pendiente,
+        if conversacion.pregunta_pendiente == question_key:
+            conversacion.pregunta_pendiente_intentos += 1
+        else:
+            conversacion.pregunta_pendiente = question_key
+            conversacion.pregunta_pendiente_intentos = 1
+    else:
+        conversacion.pregunta_pendiente = ""
+        conversacion.pregunta_pendiente_intentos = 0
+
+    datos_extra["preguntas_realizadas"] = preguntas_realizadas
+
+    ultimas_respuestas = datos_extra.get(
+        "ultimas_respuestas_ia"
     )
 
+    if not isinstance(ultimas_respuestas, list):
+        ultimas_respuestas = []
+
+    reply_text = str(reply_text or "").strip()
+
+    if reply_text:
+        ultimas_respuestas.append(reply_text)
+        datos_extra["ultimas_respuestas_ia"] = (
+            ultimas_respuestas[-5:]
+        )
+
+    conversacion.datos_extra = datos_extra
+    conversacion.ultima_intencion = str(
+        intent or ""
+    ).strip()[:80]
+
+    if version_detectada:
+        conversacion.ultimo_modelo_mencionado = (
+            version_detectada[:120]
+        )
+
+    if requiere_asesor:
+        conversacion.estado_conversacion = (
+            "pendiente_cotizacion"
+        )
+    else:
+        estado_conversacion, _ = (
+            _estado_conversacion_desde_etapa(
+                nueva_etapa_perfilado
+            )
+        )
+        conversacion.estado_conversacion = estado_conversacion
+
+    # ---------------------------------------------------------
+    # Persistencia
+    # ---------------------------------------------------------
     if cambios_cliente:
-        cliente.save(update_fields=list(dict.fromkeys(cambios_cliente)))
+        cliente.save(
+            update_fields=list(
+                dict.fromkeys(cambios_cliente)
+            )
+        )
 
     if cambios_expediente:
         cambios_expediente.append("actualizado")
-        expediente.save(update_fields=list(dict.fromkeys(cambios_expediente)))
+
+        expediente.save(
+            update_fields=list(
+                dict.fromkeys(cambios_expediente)
+            )
+        )
+
+    conversacion.save(
+        update_fields=[
+            "estado_conversacion",
+            "pregunta_pendiente",
+            "pregunta_pendiente_intentos",
+            "ultima_intencion",
+            "ultimo_modelo_mencionado",
+            "datos_extra",
+        ]
+    )
 
 def _ya_se_respondio_a_entrada(numero_asesor: str, wa_message_id_entrante: str) -> bool:
     numero_asesor = normaliza_tel_mx(numero_asesor)
@@ -1390,146 +2269,16 @@ def _ya_se_respondio_a_entrada(numero_asesor: str, wa_message_id_entrante: str) 
         raw__reply_to=wa_message_id_entrante,
     ).exists()
 
-
-# Fallback si OpenAI falla
-def _fallback_respuesta(
-    *, texto_usuario: str, profile_name: str, version_contexto: Optional[str],
-    es_primer_mensaje: bool, etapa_perfilado: int, nombre_cliente: str,
-    telefono: str = "",
-) -> dict[str, Any]:
-    version_contexto = _normalizar_version_catalogo(version_contexto)
-    senales = _detectar_intencion_minima(texto_usuario)
-    version_directa = _normalizar_version_catalogo(_buscar_version_en_texto(texto_usuario))
-    version_final = version_directa or version_contexto
-    nombre = nombre_cliente or _extraer_nombre_basico(profile_name, texto_usuario)
-
-    if es_primer_mensaje or not (texto_usuario or "").strip():
-        return {
-            "reply_text": SALUDO_BASE, "selected_version": None,
-            "send_pdf": False, "send_images": False, "requiere_asesor": False,
-            "detected_profile": {"nombre_detectado": nombre},
-            "reasoning_tags": ["fallback_saludo_inicial"],
-            "accion_ofrecida": "pedir_nombre",
-            "nueva_etapa_perfilado": ETAPA_PERFILADO["pedir_nombre"],
-        }
-
-    #ubicación en fallback
-    if senales.get("pregunta_ubicacion"):
-        return {
-            "reply_text": _texto_ubicacion(telefono),
-            "selected_version": version_final,
-            "send_pdf": False, "send_images": False, "requiere_asesor": False,
-            "detected_profile": {}, "reasoning_tags": ["fallback_ubicacion"],
-            "accion_ofrecida": "ninguna", "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    if etapa_perfilado == ETAPA_PERFILADO["pedir_enganche"]:
-        pfx = f"Hola {nombre}! " if nombre else ""
-        return {
-            "reply_text": (
-                f"{pfx}Para orientarte mejor, ¿cuánto tienes para el enganche o qué mensualidad buscas? "
-                "También contamos con planes de arrendamiento. ¿Me lo puedes decir?"
-            ),
-            "selected_version": version_final, "send_pdf": False, "send_images": False,
-            "requiere_asesor": False, "detected_profile": {},
-            "reasoning_tags": ["fallback_insistir_enganche"],
-            "accion_ofrecida": "pedir_enganche",
-            "nueva_etapa_perfilado": ETAPA_PERFILADO["pedir_enganche"],
-        }
-
-    if etapa_perfilado == ETAPA_PERFILADO["pedir_buro"]:
-        pfx = f"Hola {nombre}! " if nombre else ""
-        return {
-            "reply_text": f"{pfx}Solo me falta saber cómo estás en buró de crédito (bueno, regular o iniciando) para enviarte una propuesta real.",
-            "selected_version": version_final, "send_pdf": False, "send_images": False,
-            "requiere_asesor": False, "detected_profile": {},
-            "reasoning_tags": ["fallback_insistir_buro"],
-            "accion_ofrecida": "pedir_buro",
-            "nueva_etapa_perfilado": ETAPA_PERFILADO["pedir_buro"],
-        }
-    
-    if version_final and senales.get("pregunta_videos"):
-        return {
-            "reply_text": f"Claro, te comparto un video de {version_final.title()}.",
-            "selected_version": version_final,
-            "send_pdf": False,
-            "send_images": False,
-            "send_videos": True,
-            "requiere_asesor": False,
-            "detected_profile": {},
-            "reasoning_tags": ["fallback_videos"],
-            "accion_ofrecida": "continuar_contexto",
-            "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    if version_final and any([
-        senales["pregunta_pdf"],
-        any(k in _normalizar_texto(texto_usuario) for k in [
-            "FICHA", "ESPECIFICACIONES", "COMO ES", "QUE TRAE", "QUE TIENE",
-            "DIME MAS", "CUENTAME", "INFO", "INFORMACION", "DATOS", 
-        ]),
-    ]):
-        return {
-            "reply_text": _resumen_ficha_texto(version_final), "selected_version": version_final,
-            "send_pdf": True, "send_images": False, "requiere_asesor": False,
-            "detected_profile": {}, "reasoning_tags": ["fallback_pdf"],
-            "accion_ofrecida": "compartir_pdf", "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    if version_final and senales["pregunta_imagenes"]:
-        return {
-            "reply_text": f"Claro, te comparto imágenes de {version_final.title()}.",
-            "selected_version": version_final, "send_pdf": False, "send_images": True,
-            "requiere_asesor": False, "detected_profile": {},
-            "reasoning_tags": ["fallback_imagenes"],
-            "accion_ofrecida": "continuar_contexto", "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    if version_final and senales["pregunta_precio"]:
-        return {
-            "reply_text": _respuesta_precio_version(version_final), "selected_version": version_final,
-            "send_pdf": False, "send_images": False, "requiere_asesor": False,
-            "detected_profile": {}, "reasoning_tags": ["fallback_precio"],
-            "accion_ofrecida": "compartir_precio", "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    if senales["cotizacion_personalizada"] or senales["intencion_compra"]:
-        return {
-            "reply_text": RESPUESTA_CONFIRMAR_ASESOR, "selected_version": version_final,
-            "send_pdf": False, "send_images": False, "requiere_asesor": True,
-            "detected_profile": {}, "reasoning_tags": ["fallback_asesor"],
-            "accion_ofrecida": "confirmar_canalizacion", "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    if version_directa:
-        return {
-            "reply_text": (
-                f"Claro, te comparto información de {version_directa.title()}. "
-                "Puedo ayudarte con precio, imágenes y ficha técnica en PDF."
-            ),
-            "selected_version": version_directa, "send_pdf": False, "send_images": False,
-            "requiere_asesor": False, "detected_profile": {},
-            "reasoning_tags": ["fallback_version_directa"],
-            "accion_ofrecida": "continuar_contexto", "nueva_etapa_perfilado": etapa_perfilado,
-        }
-
-    return {
-        "reply_text": RESPUESTA_FALLBACK, "selected_version": None,
-        "send_pdf": False, "send_images": False, "requiere_asesor": False,
-        "detected_profile": {}, "reasoning_tags": ["fallback_generico"],
-        "accion_ofrecida": "pedir_necesidad", "nueva_etapa_perfilado": etapa_perfilado,
-    }
-
-
 def construir_respuesta_informativa(
     *,
+    expediente: ExpedienteDigital,
     numero_asesor: str,
     telefono: str,
     profile_name: str,
     texto_usuario: str,
     auto_interes_actual: Optional[str] = None,
     ultimo_mensaje_saliente: str = "",
-    historial_reciente: Optional[list[dict[str, str]]] = None,
+    historial_reciente: Optional[list[dict[str, Any]]] = None,
     accion_ofrecida_previa: Optional[str] = None,
     etapa_perfilado: int = 0,
     enganche_registrado: Optional[int] = None,
@@ -1548,45 +2297,12 @@ def construir_respuesta_informativa(
     str,
     int,
 ]:
-    texto_usuario = (texto_usuario or "").strip()
+    texto_usuario = str(texto_usuario or "").strip()
     historial_reciente = historial_reciente or []
-    es_contexto_multimedia = _tiene_contexto_multimedia_analizado(texto_usuario)
-
-    if texto_usuario.upper() in {
-        "[IMAGE]",
-        "[VIDEO]",
-        "[AUDIO]",
-        "[DOCUMENT]",
-        "[STICKER]",
-        "[LOCATION]",
-        "[CONTACTS]",
-        "[ORDER]",
-        "[SYSTEM]",
-        "[UNSUPPORTED_MESSAGE]",
-    }:
-        tipo_placeholder = texto_usuario.strip("[]").lower()
-        return (
-            (
-                "Recibí tu mensaje. Para ayudarte mejor, ¿me confirmas qué necesitas revisar "
-                "o qué modelo te interesa?"
-            ),
-            auto_interes_actual,
-            False,  # send_pdf
-            False,  # send_images
-            False,  # send_videos
-            False,  # requiere_asesor
-            {},
-            {"reasoning_tags": [f"placeholder_{tipo_placeholder}"]},
-            "pedir_necesidad",
-            etapa_perfilado,
-        )
-
-    auto_interes_actual = _normalizar_version_catalogo(auto_interes_actual)
-
-    decision: dict[str, Any] = {}
 
     try:
         decision = _decision_conversacional_ia(
+            expediente=expediente,
             numero_asesor=numero_asesor,
             telefono=telefono,
             nombre_cliente=nombre_cliente or profile_name,
@@ -1601,175 +2317,85 @@ def construir_respuesta_informativa(
             es_primer_mensaje=es_primer_mensaje,
         )
     except Exception:
-        decision = {}
-
-    if not decision:
-        decision = _fallback_respuesta(
-            texto_usuario=texto_usuario,
-            profile_name=profile_name,
-            version_contexto=auto_interes_actual,
-            es_primer_mensaje=es_primer_mensaje,
-            etapa_perfilado=etapa_perfilado,
-            nombre_cliente=nombre_cliente,
-            telefono=telefono,
+        logger.exception(
+            "ERROR CONSTRUYENDO RESPUESTA IA | linea=%s expediente=%s",
+            numero_asesor,
+            expediente.pk,
         )
 
-    selected_version = _normalizar_version_catalogo(
+        decision = {
+            "skip_send": True,
+            "skip_reason": "error_construccion_respuesta",
+        }
+
+    if not decision or decision.get("skip_send"):
+        return (
+            "",
+            auto_interes_actual,
+            False,
+            False,
+            False,
+            False,
+            {},
+            decision or {
+                "skip_send": True,
+                "skip_reason": "decision_vacia",
+            },
+            "ninguna",
+            etapa_perfilado,
+        )
+
+    respuesta_texto = str(
+        decision.get("reply_text") or ""
+    ).strip()
+
+    version_contexto = _normalizar_version_catalogo(
         decision.get("selected_version")
-        or _buscar_version_en_texto(texto_usuario)
-        or auto_interes_actual
     )
 
-    senales_media = _detectar_intencion_minima(texto_usuario)
+    enviar_pdf = bool(
+        decision.get("send_pdf")
+    ) and bool(version_contexto)
 
-    t_norm = _normalizar_texto(texto_usuario)
+    enviar_imagenes = bool(
+        decision.get("send_images")
+    ) and bool(version_contexto)
 
-    pide_pdf_explicito = any(k in t_norm for k in [
-        "PDF",
-        "FICHA",
-        "FICHA TECNICA",
-        "FICHA TÉCNICA",
-        "BROCHURE",
-        "CATALOGO",
-        "CATÁLOGO",
-        "ESPECIFICACIONES",
-    ])
+    enviar_videos = bool(
+        decision.get("send_videos")
+    ) and bool(version_contexto)
 
-    pide_imagenes_explicito = bool(senales_media.get("pregunta_imagenes"))
-    pide_videos_explicito = bool(senales_media.get("pregunta_videos"))
-
-    es_peticion_media = bool(
-        selected_version
-        and (
-            pide_pdf_explicito
-            or pide_imagenes_explicito
-            or pide_videos_explicito
-        )
+    requiere_asesor = bool(
+        decision.get("requiere_asesor")
     )
 
-    requiere_asesor = bool(decision.get("requiere_asesor"))
-
-    # IMPORTANTE:
-    # Si el cliente pidió fotos, video o ficha, NO debemos bloquear el envío
-    # aunque Gemini haya escrito una frase de canalización.
-    if es_peticion_media:
-        requiere_asesor = False
-        decision["requiere_asesor"] = False
-
-    # Si el cliente envió multimedia, Gemini puede interpretar que debe mandar más media.
-    # Lo bloqueamos salvo que el usuario lo pida explícitamente.
-    decision_puede_enviar_media = not es_contexto_multimedia
-
-    send_pdf = (
-        (
-            (bool(decision.get("send_pdf")) and decision_puede_enviar_media)
-            or pide_pdf_explicito
-        )
-        and bool(selected_version)
-        and not requiere_asesor
+    detected_profile = _ia_dict(
+        decision.get("detected_profile")
     )
 
-    send_images = (
-        (
-            (bool(decision.get("send_images")) and decision_puede_enviar_media)
-            or pide_imagenes_explicito
-        )
-        and bool(selected_version)
-        and not requiere_asesor
-    )
-
-    send_videos = (
-        (
-            (bool(decision.get("send_videos")) and decision_puede_enviar_media)
-            or pide_videos_explicito
-        )
-        and bool(selected_version)
-        and not requiere_asesor
-    )
-
-    detected_profile = decision.get("detected_profile") or {}
-
-    reply_text = _limitar_texto(
-        (decision.get("reply_text") or RESPUESTA_FALLBACK).strip()
-    )
-
-    if es_contexto_multimedia and not es_peticion_media and _respuesta_quiere_enviar_media(reply_text):
-        send_pdf = False
-        send_images = False
-        send_videos = False
-        reply_text = _respuesta_desde_contexto_multimedia(
-            texto_usuario=texto_usuario,
-            selected_version=selected_version,
-            telefono=telefono,
-        )
-
-    if es_contexto_multimedia and not es_peticion_media:
-        send_pdf = False
-        send_images = False
-        send_videos = False
-
-    if es_peticion_media:
-        # Prioridad correcta:
-        # si pide video, NO mandar fotos aunque el texto diga "ver".
-        if pide_videos_explicito:
-            send_videos = True
-            send_images = False
-            send_pdf = False
-            reply_text = f"¡Claro! Te comparto un video de {selected_version.title()}."
-
-        elif pide_imagenes_explicito:
-            send_images = True
-            send_videos = False
-            send_pdf = False
-            reply_text = f"¡Claro! Te comparto unas imágenes de {selected_version.title()}."
-
-        elif pide_pdf_explicito:
-            send_pdf = True
-            send_images = False
-            send_videos = False
-            reply_text = f"¡Claro! Te comparto la ficha técnica de {selected_version.title()}."
-
-    accion_ofrecida = (decision.get("accion_ofrecida") or "ninguna").strip()
-
-    if accion_ofrecida not in ACCIONES_OFRECIDAS_VALIDAS:
-        accion_ofrecida = _determinar_accion_ofrecida(
-            reply_text=reply_text,
-            send_pdf=send_pdf,
-            requiere_asesor=requiere_asesor,
-            selected_version=selected_version,
-            texto_usuario=texto_usuario,
-        )
+    accion_ofrecida = str(
+        decision.get("accion_ofrecida") or "ninguna"
+    ).strip()
 
     try:
-        nueva_etapa = max(
-            etapa_perfilado,
-            min(4, int(decision.get("nueva_etapa_perfilado", etapa_perfilado))),
+        nueva_etapa = int(
+            decision.get(
+                "nueva_etapa_perfilado",
+                etapa_perfilado,
+            )
         )
     except (TypeError, ValueError):
         nueva_etapa = etapa_perfilado
 
-    raw_decision = dict(decision)
-
-    raw_decision.update({
-        "selected_version": selected_version,
-        "send_pdf": send_pdf,
-        "send_images": send_images,
-        "send_videos": send_videos,
-        "requiere_asesor": requiere_asesor,
-        "accion_ofrecida": accion_ofrecida,
-        "reply_text": reply_text,
-        "nueva_etapa_perfilado": nueva_etapa,
-    })
-
     return (
-        reply_text,
-        selected_version,
-        send_pdf,
-        send_images,
-        send_videos,
+        respuesta_texto,
+        version_contexto,
+        enviar_pdf,
+        enviar_imagenes,
+        enviar_videos,
         requiere_asesor,
         detected_profile,
-        raw_decision,
+        decision,
         accion_ofrecida,
         nueva_etapa,
     )
@@ -2390,7 +3016,7 @@ def responder_mensaje_automatico(
     auto_interes_actual = _limpiar_auto_interes_invalido(expediente)
     nombre_contexto = (cliente.nombre or "").strip() or _extraer_nombre_basico(profile_name, "") or ""
     ultimo_mensaje_saliente = _obtener_ultimo_mensaje_saliente(cliente, numero_asesor)
-    historial_reciente = _serializar_historial(cliente, numero_asesor)
+    historial_reciente = _serializar_historial(cliente,numero_asesor,limite=20,)
     accion_ofrecida_previa = _obtener_ultima_accion_ofrecida(cliente, numero_asesor)
 
     total_entrantes = _contar_mensajes_entrantes(cliente, numero_asesor)
@@ -2406,10 +3032,18 @@ def responder_mensaje_automatico(
     )
 
     (
-        respuesta_texto, version_contexto, enviar_pdf, enviar_imagenes, enviar_videos,
-        requiere_asesor, detected_profile, raw_decision, accion_ofrecida,
+        respuesta_texto,
+        version_contexto,
+        enviar_pdf,
+        enviar_imagenes,
+        enviar_videos,
+        requiere_asesor,
+        detected_profile,
+        raw_decision,
+        accion_ofrecida,
         nueva_etapa_perfilado,
     ) = construir_respuesta_informativa(
+        expediente=expediente,
         numero_asesor=numero_asesor,
         telefono=telefono,
         profile_name=profile_name,
@@ -2426,11 +3060,49 @@ def responder_mensaje_automatico(
     )
 
     _guardar_datos_detectados_en_cliente_y_expediente(
-        cliente=cliente, expediente=expediente, profile_name=profile_name,
-        detected_profile=detected_profile, version_detectada=version_contexto,
+        cliente=cliente,
+        expediente=expediente,
+        profile_name=profile_name,
+        detected_profile=detected_profile,
+        version_detectada=version_contexto,
         nueva_etapa_perfilado=nueva_etapa_perfilado,
         numero_asesor=numero_asesor,
+        correcciones_explicitas=raw_decision.get(
+            "correcciones_explicitas"
+        ),
+        question_key=raw_decision.get("question_key"),
+        intent=raw_decision.get("intent") or "",
+        reply_text=respuesta_texto,
+        requiere_asesor=requiere_asesor,
+        accion_ofrecida=accion_ofrecida,
     )
+
+    if (
+        raw_decision.get("skip_send")
+        or not str(respuesta_texto or "").strip()
+    ):
+        motivo = (
+            raw_decision.get("skip_reason")
+            or "respuesta_ia_no_disponible"
+        )
+
+        logger.warning(
+            "RESPUESTA IA OMITIDA | linea=%s cliente=%s expediente=%s motivo=%s",
+            numero_asesor,
+            telefono,
+            expediente.pk,
+            motivo,
+        )
+
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": motivo,
+            "telefono": telefono,
+            "numero_asesor": numero_asesor,
+            "expediente_id": expediente.pk,
+            "wa_message_id_entrante": wa_message_id_entrante,
+        }
 
     partes_respuesta = _dividir_mensaje_whatsapp(
         respuesta_texto,
@@ -2439,7 +3111,22 @@ def responder_mensaje_automatico(
     )
 
     if not partes_respuesta:
-        partes_respuesta = [RESPUESTA_FALLBACK]
+        logger.warning(
+            "IA SIN PARTES DE RESPUESTA | linea=%s cliente=%s expediente=%s",
+            numero_asesor,
+            telefono,
+            expediente.pk,
+        )
+
+        return {
+            "ok": False,
+            "skipped": True,
+            "reason": "respuesta_sin_contenido",
+            "telefono": telefono,
+            "numero_asesor": numero_asesor,
+            "expediente_id": expediente.pk,
+            "wa_message_id_entrante": wa_message_id_entrante,
+        }
 
     try:
         enviar_indicador_escribiendo_whatsapp(
@@ -2483,25 +3170,26 @@ def responder_mensaje_automatico(
             raw={
                 "reply_to": wa_message_id_entrante,
                 "ia_provider": "gemini",
-                "ia_model": getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+                "ia_model": getattr(
+                    settings,
+                    "GEMINI_MODEL",
+                    "gemini-2.5-flash",
+                ),
                 "numero_asesor": numero_asesor,
                 "version_contexto": version_contexto,
                 "requiere_asesor": requiere_asesor,
                 "detected_profile": detected_profile,
                 "decision": raw_decision,
+                "intent": raw_decision.get("intent") or "",
+                "question_key": raw_decision.get("question_key"),
+                "correcciones_explicitas": raw_decision.get(
+                    "correcciones_explicitas"
+                ) or {},
                 "accion_ofrecida": accion_ofrecida,
                 "nueva_etapa_perfilado": nueva_etapa_perfilado,
                 "parte": index + 1,
                 "partes_total": len(partes_respuesta),
                 "texto_usuario_original": texto_usuario_original,
-                "texto_usuario_enriquecido": texto_usuario,
-                "conversation_meta": {
-                    "accion_ofrecida": accion_ofrecida,
-                    "accion_ofrecida_previa": accion_ofrecida_previa,
-                    "etapa_perfilado": nueva_etapa_perfilado,
-                },
-                "wa_response": wa_res_parte,
-                "raw_message": raw_message or {},
             },
             status_msg="accepted",
         )
