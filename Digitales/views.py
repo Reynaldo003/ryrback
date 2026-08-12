@@ -118,18 +118,20 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         "whatsapp_bloqueado",
     )
 
+    def _modo_ligero(self):
+        valor = str(self.request.query_params.get("ligero", "") or "").strip().casefold()
+        return valor in {"1", "true", "si", "sí", "yes", "on"}
+
     def _base_queryset(self):
-        return (
-            ExpedienteDigital.objects
-            .select_related("cliente")
-            .prefetch_related("evidencias")
-            .order_by(
-                "-ultimo_contacto_asesor",
-                "-primer_contacto_asesor",
-                "-primer_mensaje_cliente",
-                "-actualizado",
-                "-creado",
-            )
+        queryset = ExpedienteDigital.objects.select_related("cliente")
+        if not self._modo_ligero():
+            queryset = queryset.prefetch_related("evidencias")
+        return queryset.order_by(
+            "-ultimo_contacto_asesor",
+            "-primer_contacto_asesor",
+            "-primer_mensaje_cliente",
+            "-actualizado",
+            "-creado",
         )
 
     def _solicita_todos(self):

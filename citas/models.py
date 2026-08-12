@@ -61,6 +61,10 @@ class Cita(models.Model):
     class Meta:
         db_table = "citas"
         managed = True
+        indexes = [
+            models.Index(fields=["fecha_hora_cita", "asesor_digital"], name="citas_fecha_asesor_idx"),
+            models.Index(fields=["agencia", "fecha_hora_cita"], name="citas_agencia_fecha_idx"),
+        ]
 
     def __str__(self):
         return f"Cita #{self.id} - {self.cliente.telefono}"
@@ -184,6 +188,10 @@ class Entregas(models.Model):
     class Meta:
         db_table = "entregas"
         managed = True
+        indexes = [
+            models.Index(fields=["fecha_hora_entrega", "entrega_reportada"], name="ent_fecha_report_idx"),
+            models.Index(fields=["agencia", "fecha_hora_entrega"], name="ent_agencia_fecha_idx"),
+        ]
 
     def __str__(self):
         return f"Entregas #{self.id} - {self.cliente.telefono}"

@@ -566,7 +566,19 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "creado",
             "actualizado",
         ]
-    
+        
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        request = self.context.get("request")
+        if not request or request.method != "GET":
+            return
+        valor = str(request.query_params.get("ligero", "") or "").strip().casefold()
+        if valor not in {"1", "true", "si", "sí", "yes", "on"}:
+            return
+        self.fields.pop("evidencias", None)
+        self.fields.pop("evidencias_nuevas", None)
+        self.fields.pop("delete_evidencia_ids", None)
+
     def validate(self, attrs):
         estado_actual = (
             getattr(self.instance, "estado", "")

@@ -1,6 +1,7 @@
 # citas/views.py
 from io import BytesIO
 from pathlib import Path
+from datetime import datetime
 from html import escape
 
 from django.conf import settings
@@ -52,6 +53,41 @@ NEGRO = colors.black
 BLANCO = colors.white
 GRIS_BORDE = HexColor("#BDBDBD")
 GRIS_CLARO = HexColor("#F0F0F0")
+
+
+def _param_bool(valor):
+    return str(valor or "").strip().casefold() in {"1", "true", "si", "sí", "yes", "on"}
+
+
+def _rango_mes(valor):
+    texto_mes = str(valor or "").strip()
+    if not texto_mes:
+        return None
+
+    try:
+        anio_texto, mes_texto = texto_mes.split("-", 1)
+        anio, mes = int(anio_texto), int(mes_texto)
+        if len(anio_texto) != 4 or len(mes_texto) != 2 or not 1 <= mes <= 12:
+            return False
+        inicio = datetime(anio, mes, 1)
+        fin = datetime(anio + 1, 1, 1) if mes == 12 else datetime(anio, mes + 1, 1)
+        if settings.USE_TZ:
+            zona = timezone.get_current_timezone()
+            inicio = timezone.make_aware(inicio, zona)
+            fin = timezone.make_aware(fin, zona)
+        return inicio, fin
+    except (TypeError, ValueError):
+        return False
+
+
+def _filtrar_por_mes(queryset, campo, valor):
+    rango = _rango_mes(valor)
+    if rango is None:
+        return queryset
+    if rango is False:
+        return queryset.none()
+    inicio, fin = rango
+    return queryset.filter(**{f"{campo}__gte": inicio, f"{campo}__lt": fin})
 
 
 def texto(valor, default="No capturado"):
@@ -539,27 +575,36 @@ class ClienteComercialViewSet(ModelViewSet):
 
 class CitasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
-
     queryset = Cita.objects.select_related("cliente").all().order_by("-id")
     serializer_class = CitaSerializer
+    acciones_publicas = {"list", "retrieve", "create"}
 
-    acciones_publicas = {
-        "list",
-        "retrieve",
-        "create",
-    }
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        queryset = _filtrar_por_mes(queryset, "fecha_hora_cita", params.get("mes"))
+
+        if _param_bool(params.get("solo_digital")):
+            queryset = queryset.exclude(asesor_digital="").exclude(asesor_digital__isnull=True)
+
+        asesor_digital = str(params.get("asesor_digital") or "").strip()
+        agencia = str(params.get("agencia") or "").strip()
+        asistencia = params.get("asistencia")
+
+        if asesor_digital:
+            queryset = queryset.filter(asesor_digital__iexact=asesor_digital)
+        if agencia:
+            queryset = queryset.filter(agencia__iexact=agencia)
+        if asistencia not in (None, ""):
+            queryset = queryset.filter(asistencia=_param_bool(asistencia))
+
+        return queryset
 
     def get_authenticators(self):
-        if getattr(self, "action", None) in self.acciones_publicas:
-            return []
-
-        return [CRMJWTAuthentication()]
+        return [] if getattr(self, "action", None) in self.acciones_publicas else [CRMJWTAuthentication()]
 
     def get_permissions(self):
-        if getattr(self, "action", None) in self.acciones_publicas:
-            return [AllowAny()]
-
-        return [IsAuthenticated()]
+        return [AllowAny()] if getattr(self, "action", None) in self.acciones_publicas else [IsAuthenticated()]
 
 class RegistroPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
@@ -600,28 +645,31 @@ class EvidenciasPruebaManejoViewSet(ModelViewSet):
 
 class EntregasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
-
     queryset = Entregas.objects.select_related("cliente").all().order_by("-id")
     serializer_class = EntregasSerializer
+    acciones_publicas = {"list", "retrieve", "create", "pdf"}
 
-    acciones_publicas = {
-        "list",
-        "retrieve",
-        "create",
-        "pdf",
-    }
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        params = self.request.query_params
+        queryset = _filtrar_por_mes(queryset, "fecha_hora_entrega", params.get("mes"))
+
+        agencia = str(params.get("agencia") or "").strip()
+        asesor_ventas = str(params.get("asesor_ventas") or "").strip()
+        if agencia:
+            queryset = queryset.filter(agencia__iexact=agencia)
+        if asesor_ventas:
+            queryset = queryset.filter(asesor_ventas__iexact=asesor_ventas)
+        if _param_bool(params.get("solo_reportadas")):
+            queryset = queryset.filter(entrega_reportada=True)
+
+        return queryset
 
     def get_authenticators(self):
-        if getattr(self, "action", None) in self.acciones_publicas:
-            return []
-
-        return [CRMJWTAuthentication()]
+        return [] if getattr(self, "action", None) in self.acciones_publicas else [CRMJWTAuthentication()]
 
     def get_permissions(self):
-        if getattr(self, "action", None) in self.acciones_publicas:
-            return [AllowAny()]
-
-        return [IsAuthenticated()]
+        return [AllowAny()] if getattr(self, "action", None) in self.acciones_publicas else [IsAuthenticated()]
 
     @action(detail=True, methods=["get"], url_path="pdf")
     def pdf(self, request, pk=None):
