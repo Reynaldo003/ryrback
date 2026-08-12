@@ -2,7 +2,7 @@
 from io import BytesIO
 from pathlib import Path
 from html import escape
-import datetime
+
 from django.conf import settings
 from django.http import FileResponse
 from django.utils import timezone
@@ -539,6 +539,8 @@ class ClienteComercialViewSet(ModelViewSet):
 
 class CitasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
+
+    queryset = Cita.objects.select_related("cliente").all().order_by("-id")
     serializer_class = CitaSerializer
 
     acciones_publicas = {
@@ -547,79 +549,17 @@ class CitasViewSet(ModelViewSet):
         "create",
     }
 
-    def get_queryset(self):
-        queryset = (
-            Cita.objects
-            .select_related("cliente")
-            .all()
-            .order_by("-id")
-        )
-
-        mes = str(self.request.query_params.get("mes", "") or "").strip()
-
-        solo_digital = str(
-            self.request.query_params.get("solo_digital","",) or "").strip().lower()
-
-        if mes:
-            try:
-                anio, numero_mes = map(int,mes.split("-"),)
-
-                inicio = datetime(anio,numero_mes,1,)
-
-                if numero_mes == 12:
-                    fin = datetime(anio + 1,1,1,)
-                else:
-                    fin = datetime(anio,numero_mes + 1,1,)
-
-                queryset = queryset.filter(
-                    fecha_hora_cita__gte=inicio,
-                    fecha_hora_cita__lt=fin,
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-                pass
-
-        if solo_digital in {"1","true","si","sí",}:
-            queryset = queryset.filter(
-                tipo_cita__iexact="Digital"
-            )
-
-        return queryset
-
     def get_authenticators(self):
-        if (
-            getattr(
-                self,
-                "action",
-                None,
-            )
-            in self.acciones_publicas
-        ):
+        if getattr(self, "action", None) in self.acciones_publicas:
             return []
 
-        return [
-            CRMJWTAuthentication()
-        ]
+        return [CRMJWTAuthentication()]
 
     def get_permissions(self):
-        if (
-            getattr(
-                self,
-                "action",
-                None,
-            )
-            in self.acciones_publicas
-        ):
-            return [
-                AllowAny()
-            ]
+        if getattr(self, "action", None) in self.acciones_publicas:
+            return [AllowAny()]
 
-        return [
-            IsAuthenticated()
-        ]
+        return [IsAuthenticated()]
 
 class RegistroPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
@@ -660,6 +600,8 @@ class EvidenciasPruebaManejoViewSet(ModelViewSet):
 
 class EntregasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
+
+    queryset = Entregas.objects.select_related("cliente").all().order_by("-id")
     serializer_class = EntregasSerializer
 
     acciones_publicas = {
@@ -669,112 +611,25 @@ class EntregasViewSet(ModelViewSet):
         "pdf",
     }
 
-    def get_queryset(self):
-        queryset = (
-            Entregas.objects
-            .select_related("cliente")
-            .all()
-            .order_by("-id")
-        )
-
-        mes = str(
-            self.request.query_params.get("mes", "")
-            or ""
-        ).strip()
-
-        if mes:
-            try:
-                anio, numero_mes = map(
-                    int,
-                    mes.split("-"),
-                )
-
-                inicio = datetime(
-                    anio,
-                    numero_mes,
-                    1,
-                )
-
-                if numero_mes == 12:
-                    fin = datetime(
-                        anio + 1,
-                        1,
-                        1,
-                    )
-                else:
-                    fin = datetime(
-                        anio,
-                        numero_mes + 1,
-                        1,
-                    )
-
-                queryset = queryset.filter(
-                    fecha_hora_entrega__gte=inicio,
-                    fecha_hora_entrega__lt=fin,
-                )
-
-            except (
-                TypeError,
-                ValueError,
-            ):
-                pass
-
-        return queryset
-
     def get_authenticators(self):
-        if (
-            getattr(
-                self,
-                "action",
-                None,
-            )
-            in self.acciones_publicas
-        ):
+        if getattr(self, "action", None) in self.acciones_publicas:
             return []
 
-        return [
-            CRMJWTAuthentication()
-        ]
+        return [CRMJWTAuthentication()]
 
     def get_permissions(self):
-        if (
-            getattr(
-                self,
-                "action",
-                None,
-            )
-            in self.acciones_publicas
-        ):
-            return [
-                AllowAny()
-            ]
+        if getattr(self, "action", None) in self.acciones_publicas:
+            return [AllowAny()]
 
-        return [
-            IsAuthenticated()
-        ]
+        return [IsAuthenticated()]
 
-    @action(
-        detail=True,
-        methods=["get"],
-        url_path="pdf",
-    )
+    @action(detail=True, methods=["get"], url_path="pdf")
     def pdf(self, request, pk=None):
         entrega = self.get_object()
         buffer = generar_pdf_entrega(entrega)
 
-        cliente_slug = (
-            slugify(
-                entrega.cliente.nombre
-                or "cliente"
-            )
-            or "cliente"
-        )
-
-        filename = (
-            f"encuesta_entrega_"
-            f"{entrega.id}_"
-            f"{cliente_slug}.pdf"
-        )
+        cliente_slug = slugify(entrega.cliente.nombre or "cliente") or "cliente"
+        filename = f"encuesta_entrega_{entrega.id}_{cliente_slug}.pdf"
 
         response = FileResponse(
             buffer,
@@ -782,9 +637,5 @@ class EntregasViewSet(ModelViewSet):
             filename=filename,
             content_type="application/pdf",
         )
-
-        response["Content-Disposition"] = (
-            f'inline; filename="{filename}"'
-        )
-
+        response["Content-Disposition"] = f'inline; filename="{filename}"'
         return response
