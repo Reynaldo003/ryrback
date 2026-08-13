@@ -36,7 +36,6 @@ class TareaClienteSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError("El título de la tarea es requerido.")
         return limpio
 
-
 class OrdenServicioVentaVWSerializer(serializers.ModelSerializer):
     class Meta:
         model = OrdenServicioVentaVW
@@ -67,9 +66,9 @@ class OrdenServicioVentaVWSerializer(serializers.ModelSerializer):
             "estado_actividad",
             "meses_desde_venta",
             "segmento",
+            "cumpleaños",
         )
         read_only_fields = fields
-
 
 class OrdenServicioCompletaVWSerializer(serializers.ModelSerializer):
     class Meta:

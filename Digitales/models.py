@@ -48,6 +48,7 @@ class ExpedienteDigital(models.Model):
     # autorizado | rechazado | condicionado
 
     vin_facturado = models.CharField(max_length=32, blank=True, default="")
+    facturado_at = models.DateTimeField(null=True,blank=True,db_index=True)
     vin_estatus_entrega = models.CharField(max_length=30, blank=True, default="")
     # entregado | cancelado
 

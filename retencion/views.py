@@ -186,6 +186,7 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             "estado_actividad",
             "meses_desde_venta",
             "segmento",
+            "cumpleaños",
         )
 
         qs = self.get_queryset().values(*campos)[:limite]
@@ -195,12 +196,13 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             data.append(
                 {
                     **{k: (item.get(k) or "") for k in campos if k not in (
-                        "fecha_venta", "fecha_salida", "fecha_ultima_os",
-                        "total_nota", "total_ultimo_servicio", "meses_desde_venta",
+                        "fecha_venta", "fecha_salida", "fecha_ultima_os", "cumpleaños",
+                          "total_nota", "total_ultimo_servicio","meses_desde_venta",
                     )},
                     "fecha_venta": fecha_iso(item.get("fecha_venta")),
                     "fecha_salida": fecha_iso(item.get("fecha_salida")),
                     "fecha_ultima_os": fecha_iso(item.get("fecha_ultima_os")),
+                    "cumpleaños": fecha_iso(item.get("cumpleaños")),
                     "total_nota": item.get("total_nota") or "",
                     "total_nota_numero": decimal_desde_texto(item.get("total_nota")),
                     "total_ultimo_servicio": item.get("total_ultimo_servicio") or "",

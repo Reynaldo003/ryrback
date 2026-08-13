@@ -499,6 +499,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "folio_solicitud_credito",
             "solicitud_credito_estado",
             "vin_facturado",
+            "facturado_at",
             "vin_estatus_entrega",
 
             "evidencias",
@@ -559,6 +560,8 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "usuario_crm_asignado",
             "asignado_automaticamente_at",
 
+            "facturado_at",
+
             "tiempo_respuesta_asesor_min",
             "tiempo_respuesta_asesor_label",
             "primer_contacto_at",
@@ -566,7 +569,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "creado",
             "actualizado",
         ]
-        
+
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         request = self.context.get("request")
@@ -721,6 +724,12 @@ class ProspectoSerializer(serializers.ModelSerializer):
         nombre = validated_data.pop("nombre", "")
         telefono = validated_data.pop("telefono", "")
         correo = validated_data.pop("correo", "")
+        vin_facturado = str(validated_data.get("vin_facturado") or "").strip().upper()
+                
+        validated_data["vin_facturado"] = vin_facturado
+
+        if vin_facturado:
+            validated_data["facturado_at"] = timezone.now()
 
         cli = self._get_or_create_cliente(telefono, nombre, correo)
 
@@ -805,6 +814,24 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         cambios = []
 
+        vin_anterior = str(instance.vin_facturado or "").strip().upper()
+
+        if "vin_facturado" in validated_data:
+            vin_nuevo = str(validated_data.get("vin_facturado") or "").strip().upper()
+            validated_data["vin_facturado"] = vin_nuevo
+
+            # Primera vez que se registra un VIN:
+            # en ese momento consideramos que el expediente fue facturado.
+            if vin_nuevo and not vin_anterior and not instance.facturado_at:
+                instance.facturado_at = timezone.now()
+                cambios.append("facturado_at")
+
+            # Si se elimina completamente el VIN,
+            # deja de considerarse una facturación válida.
+            elif not vin_nuevo and vin_anterior:
+                instance.facturado_at = None
+                cambios.append("facturado_at")
+
         for campo, valor in validated_data.items():
             if campo == "vin_facturado" and isinstance(valor, str):
                 valor = valor.strip().upper()
@@ -812,6 +839,14 @@ class ProspectoSerializer(serializers.ModelSerializer):
             if getattr(instance, campo) != valor:
                 setattr(instance, campo, valor)
                 cambios.append(campo)
+
+        if cambios:
+            cambios.append("actualizado")
+            instance.save(
+                update_fields=list(dict.fromkeys(cambios))
+            )
+        else:
+            instance.save()
 
         if cambios:
             cambios.append("actualizado")

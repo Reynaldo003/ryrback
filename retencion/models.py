@@ -47,6 +47,7 @@ class OrdenServicioVentaVW(models.Model):
         db_column="MesesDesdeVenta", blank=True, null=True
     )
     segmento = models.CharField(db_column="Segmento", max_length=20, blank=True, null=True)
+    cumpleaños = models.DateField(db_column="Cumpleaños", blank=True, null=True)
 
     class Meta:
         managed = False
