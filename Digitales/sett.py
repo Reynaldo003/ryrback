@@ -212,7 +212,7 @@ WHATSAPP_LINES = {
         "key": "servicio_cba",
         "phone_number_id": "1166025403270294",
         "waba_id": "28166086789721171",
-        "access_token": whatsapp_token_ryr,
+        "access_token": whatsapp_token,
         "asesor_digital": "Asesor de Servicio CBA",
         "messages_url": whatsapp_url_servicio_cba,
         "agencia": "VW Cordoba",
