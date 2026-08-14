@@ -13,7 +13,7 @@ import re
 from django.conf import settings
 from django.db import close_old_connections
 from django.core.files.storage import default_storage
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import OuterRef, Q, Subquery
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -896,43 +896,6 @@ def _unread_count(exp: ExpedienteDigital, numero_asesor: str) -> int:
     if lectura and lectura.last_read_at:
         qs = qs.filter(created_at__gt=lectura.last_read_at)
     return qs.count()
-
-
-def _contar_no_leidos_chats(expedientes, numero_asesor: str) -> dict[str, int]:
-    """Calcula los no leídos de una página completa sin ejecutar una consulta por cada chat."""
-    expedientes = list(expedientes or [])
-    if not expedientes:
-        return {}
-
-    ids = [exp.id for exp in expedientes if exp.id]
-    lecturas = {
-        item["expediente_id"]: item["last_read_at"]
-        for item in LecturaWhatsApp.objects.filter(expediente_id__in=ids, numero_asesor=numero_asesor)
-        .values("expediente_id", "last_read_at")
-    }
-
-    filtro = Q()
-    for exp in expedientes:
-        telefono = normaliza_tel_mx(exp.cliente.telefono)
-        if not telefono:
-            continue
-        condicion = Q(telefono=telefono)
-        last_read_at = lecturas.get(exp.id)
-        if last_read_at:
-            condicion &= Q(created_at__gt=last_read_at)
-        filtro |= condicion
-
-    if not filtro.children:
-        return {}
-
-    conteos = (
-        MensajeWhatsApp.objects
-        .filter(numero_asesor=numero_asesor, direction=MensajeWhatsApp.Direccion.IN)
-        .filter(filtro)
-        .values("telefono")
-        .annotate(total=Count("id"))
-    )
-    return {normaliza_tel_mx(item["telefono"]): int(item["total"] or 0) for item in conteos}
 
 def _parse_hora_ia(value):
     try:
@@ -1933,101 +1896,92 @@ def media_descargar_mp3_view(request, media_id: str):
 @permission_classes([IsAuthenticated])
 def chats_list(request):
     numero_asesor = _get_numero_asesor_request(request)
-    paginado = str(request.query_params.get("paginado", "0") or "").strip().casefold() in {"1", "true", "yes", "si", "sí", "on"}
-    limit = _int_param(request, "limit", 30, 10, 60) if paginado else 200
-    busqueda = str(request.query_params.get("q", "") or "").strip()[:120]
-    scope = str(request.query_params.get("scope", "recientes") or "recientes").strip().casefold()
-    dias = _int_param(request, "dias", 3, 1, 30)
-    before = _parse_dt_param(request.query_params.get("before", ""))
-    try:
-        before_id = int(request.query_params.get("before_id", "") or 0)
-    except (TypeError, ValueError):
-        before_id = 0
+    limit = 200
 
-    limite_recientes = timezone.now() - timedelta(days=dias)
     last_msg_qs = (
         MensajeWhatsApp.objects
-        .filter(telefono=OuterRef("cliente__telefono"), numero_asesor=numero_asesor)
-        .order_by("-created_at", "-id")
+        .filter(
+            telefono=OuterRef("cliente__telefono"),
+            numero_asesor=numero_asesor,
+        )
+        .order_by("-created_at")
     )
-    qs = (
-        ExpedienteDigital.objects.select_related("cliente")
-        .filter(cliente__mensajes_whatsapp__numero_asesor=numero_asesor)
+
+    expedientes_qs = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(
+            cliente__mensajes_whatsapp__numero_asesor=(
+                numero_asesor
+            )
+        )
     )
-    qs = _filtrar_expedientes_por_asignacion(request=request, queryset=qs, numero_asesor=numero_asesor)
-    qs = qs.annotate(
-        last_text=Subquery(last_msg_qs.values("body")[:1]),
-        last_time=Subquery(last_msg_qs.values("created_at")[:1]),
-    ).distinct()
 
-    if busqueda:
-        digitos = re.sub(r"\D", "", busqueda)
-        filtro_busqueda = Q(cliente__nombre__icontains=busqueda)
-        if digitos:
-            telefono_busqueda = digitos[-10:] if len(digitos) >= 10 else digitos
-            filtro_busqueda |= Q(cliente__telefono__icontains=telefono_busqueda)
-        qs = qs.filter(filtro_busqueda)
-        scope = "busqueda"
-    elif paginado:
-        if scope == "historico":
-            qs = qs.filter(last_time__lt=limite_recientes)
-        else:
-            scope = "recientes"
-            qs = qs.filter(last_time__gte=limite_recientes)
+    expedientes_qs = (
+        _filtrar_expedientes_por_asignacion(
+            request=request,
+            queryset=expedientes_qs,
+            numero_asesor=numero_asesor,
+        )
+    )
 
-    if paginado and before:
-        if before_id:
-            qs = qs.filter(Q(last_time__lt=before) | Q(last_time=before, id__lt=before_id))
-        else:
-            qs = qs.filter(last_time__lt=before)
+    expedientes = (
+        expedientes_qs
+        .annotate(
+            last_text=Subquery(
+                last_msg_qs.values("body")[:1]
+            ),
+            last_time=Subquery(
+                last_msg_qs.values(
+                    "created_at"
+                )[:1]
+            ),
+        )
+        .distinct()
+        .order_by(
+            "-last_time",
+            "-actualizado",
+            "-creado",
+        )[:limit]
+    )
 
-    consulta = qs.order_by("-last_time", "-id")
-    if paginado:
-        pagina = list(consulta[:limit + 1])
-        has_more = len(pagina) > limit
-        expedientes = pagina[:limit]
-    else:
-        expedientes = list(consulta[:limit])
-        has_more = False
-
-    no_leidos = _contar_no_leidos_chats(expedientes, numero_asesor)
     data = []
     for exp in expedientes:
-        dt_original = exp.last_time
-        dt_ui = dt_original
-        if dt_ui and settings.USE_TZ and timezone.is_aware(dt_ui):
-            dt_ui = timezone.localtime(dt_ui)
-        telefono = normaliza_tel_mx(exp.cliente.telefono)
-        estado_ia = None if paginado else obtener_estado_ia_conversacion(numero_asesor=numero_asesor, expediente=exp)
+        if exp.last_time:
+            dt = exp.last_time
+            if settings.USE_TZ and timezone.is_aware(dt):
+                dt = timezone.localtime(dt)
+            last_time_str = dt.strftime("%I:%M %p").lower()
+        else:
+            dt = None
+            last_time_str = ""
+        estado_ia = obtener_estado_ia_conversacion(
+            numero_asesor=numero_asesor,
+            expediente=exp,
+        )
         data.append({
-            "id": exp.id, "telefono": telefono, "nombre": exp.cliente.nombre or "Prospecto",
-            "agencia": exp.agencia or "", "linea": exp.business or "", "estado": exp.estado or "",
-            "unread": int(no_leidos.get(telefono, 0)), "last_text": exp.last_text or "",
-            "last_time": dt_ui.strftime("%I:%M %p").lower() if dt_ui else "",
-            "last_message_at": dt_original.isoformat() if dt_original else None, "numero_asesor": numero_asesor,
-            "asesor_digital": exp.asesor_digital or "", "usuario_crm_asignado": exp.usuario_crm_asignado or "",
-            # En la lista paginada el detalle de IA se obtiene al abrir el chat; el modo legacy conserva su respuesta anterior.
+            "id": exp.id,
+            "telefono": exp.cliente.telefono,
+            "nombre": exp.cliente.nombre or "Prospecto",
+            "agencia": exp.agencia or "",
+            "linea": exp.business or "",
+            "estado": exp.estado or "",
+            "unread": _unread_count(exp, numero_asesor),
+            "last_text": exp.last_text or "",
+            "last_time": last_time_str,
+            "last_message_at": dt.isoformat() if dt else None,
+            "numero_asesor": numero_asesor,
+            "asesor_digital": exp.asesor_digital or "",
+            "usuario_crm_asignado": (exp.usuario_crm_asignado or ""),
             "ia_estado": estado_ia,
-            "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False) if estado_ia else bool(exp.ia_pausada),
-            "ia_bloqueos": estado_ia.get("bloqueos", []) if estado_ia else [],
-            "whatsapp_bloqueado": bool(exp.whatsapp_bloqueado),
+            "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False),
+            "ia_bloqueos": estado_ia.get("bloqueos", []),
+            "whatsapp_bloqueado": bool(getattr(exp, "whatsapp_bloqueado", False)),
             "whatsapp_bloqueado_at": exp.whatsapp_bloqueado_at.isoformat() if exp.whatsapp_bloqueado_at else None,
             "whatsapp_bloqueado_motivo": exp.whatsapp_bloqueado_motivo or "",
         })
 
-    if not paginado:
-        return Response(data, status=status.HTTP_200_OK)
-
-    ultimo = expedientes[-1] if expedientes else None
-    next_scope = "historico" if not busqueda and scope == "recientes" and not has_more else ""
-    return Response({
-        "ok": True, "results": data,
-        "paginacion": {
-            "limit": limit, "has_more": has_more, "scope": scope, "next_scope": next_scope,
-            "before": ultimo.last_time.isoformat() if ultimo and ultimo.last_time else "",
-            "before_id": ultimo.id if ultimo else 0, "dias_recientes": dias, "query": busqueda,
-        },
-    }, status=status.HTTP_200_OK)
+    return Response(data, status=status.HTTP_200_OK)
 
 def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
     """
@@ -2096,54 +2050,92 @@ def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
 def contacto_por_telefono(request):
     numero_asesor = _get_numero_asesor_request(request)
     tel = normaliza_tel_mx(request.query_params.get("tel", ""))
+
     if not tel:
         return Response({"ok": False, "error": "Falta tel"}, status=status.HTTP_400_BAD_REQUEST)
 
-    limit = _int_param(request, "limit", 8, 1, 50)
-    before_id = str(request.query_params.get("before_id", "") or "").strip()
-    mark_read = str(request.query_params.get("mark_read", "1") or "1").strip().casefold() not in {"0", "false", "no", "off"}
-    incluir_contexto = str(request.query_params.get("incluir_contexto", "1") or "1").strip().casefold() not in {"0", "false", "no", "off"}
+    limit = _int_param(request=request, name="limit", default=20, min_value=1, max_value=80)
+    before_id = request.query_params.get("before_id", "").strip()
+
+    mark_read_raw = str(request.query_params.get("mark_read", "1")).strip().lower()
+    mark_read = mark_read_raw not in ("0", "false", "no", "off")
 
     cliente = ClienteComercial.objects.filter(telefono=tel).first()
-    exp = ExpedienteDigital.objects.select_related("cliente").filter(cliente=cliente).first() if cliente else None
-    if not exp:
-        return Response({"ok": False, "error": "No existe expediente"}, status=status.HTTP_404_NOT_FOUND)
-    _validar_acceso_expediente(request=request, expediente=exp, numero_asesor=numero_asesor)
+    exp = None
+    if cliente:
+        exp = (
+            ExpedienteDigital.objects
+            .select_related("cliente")
+            .filter(cliente=cliente)
+            .first()
+        )
 
-    qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor)
+    if not exp:
+        return Response(
+            {"ok": False, "error": "No existe expediente"},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    qs = MensajeWhatsApp.objects.filter(
+        telefono=tel,
+        numero_asesor=numero_asesor,
+    )
+
     if before_id:
-        try:
-            id_referencia = int(before_id)
-        except (TypeError, ValueError):
-            id_referencia = 0
-        if id_referencia:
-            ref = qs.filter(id=id_referencia).only("id", "created_at").first()
-            if ref:
-                qs = qs.filter(Q(created_at__lt=ref.created_at) | Q(created_at=ref.created_at, id__lt=ref.id))
+        ref = qs.filter(id=before_id).only("id", "created_at").first()
+        if ref:
+            qs = qs.filter(
+                Q(created_at__lt=ref.created_at) |
+                Q(created_at=ref.created_at, id__lt=ref.id)
+            )
 
     mensajes_desc = list(qs.order_by("-created_at", "-id")[:limit + 1])
     has_more = len(mensajes_desc) > limit
-    mensajes = list(reversed(mensajes_desc[:limit]))
-    if not before_id and mark_read:
-        _mark_read_exp(exp, numero_asesor)
+    mensajes_desc = mensajes_desc[:limit]
+    mensajes = list(reversed(mensajes_desc))
 
-    prospecto_data, ia_estado = None, None
-    if incluir_contexto:
-        ia_estado = obtener_estado_ia_conversacion(tel=tel, numero_asesor=numero_asesor, expediente=exp)
-        prospecto_data = ProspectoSerializer(exp, context={"request": request}).data
-        prospecto_data["origen_preview"] = _obtener_origen_preview_para_contacto(
-            expediente=exp, tel=tel, numero_asesor=numero_asesor
-        )
+    if exp and not before_id and mark_read:
+        _mark_read_exp(exp, numero_asesor)
 
     oldest_id = mensajes[0].id if mensajes else None
     newest_id = mensajes[-1].id if mensajes else None
+    oldest_created_at = mensajes[0].created_at.isoformat() if mensajes and mensajes[0].created_at else None
+    newest_created_at = mensajes[-1].created_at.isoformat() if mensajes and mensajes[-1].created_at else None
+
+    ia_estado = obtener_estado_ia_conversacion(
+        tel=tel,
+        numero_asesor=numero_asesor,
+        expediente=exp,
+    ) if exp else None
+
+    prospecto_data = ProspectoSerializer(exp).data if exp else None
+
+    if prospecto_data is not None:
+        prospecto_data["origen_preview"] = _obtener_origen_preview_para_contacto(
+            expediente=exp,
+            tel=tel,
+            numero_asesor=numero_asesor,
+        )
+
     return Response({
-        "ok": True, "numero_asesor_activo": numero_asesor, "prospecto": prospecto_data, "ia_estado": ia_estado,
+        "ok": True,
+        "numero_asesor_activo": numero_asesor,
+        "prospecto": prospecto_data,
+        "ia_estado": ia_estado,
         "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data,
         "paginacion": {
-            "limit": limit, "has_more": has_more, "oldest_id": oldest_id, "newest_id": newest_id,
-            "oldest_created_at": mensajes[0].created_at.isoformat() if mensajes and mensajes[0].created_at else None,
-            "newest_created_at": mensajes[-1].created_at.isoformat() if mensajes and mensajes[-1].created_at else None,
+            "limit": limit,
+            "has_more": has_more,
+            "oldest_id": oldest_id,
+            "newest_id": newest_id,
+            "oldest_created_at": oldest_created_at,
+            "newest_created_at": newest_created_at,
             "before_id": oldest_id,
         },
     }, status=status.HTTP_200_OK)
@@ -2302,36 +2294,56 @@ def mark_read_view(request):
 def contacto_updates(request):
     numero_asesor = _get_numero_asesor_request(request)
     tel = normaliza_tel_mx(request.query_params.get("tel", ""))
-    after = str(request.query_params.get("after", "") or "").strip()
-    try:
-        after_id = int(request.query_params.get("after_id", "") or 0)
-    except (TypeError, ValueError):
-        after_id = 0
-    limit = _int_param(request, "limit", 50, 1, 100)
+    after = request.query_params.get("after", "")
+    limit = _int_param(request=request, name="limit", default=50, min_value=1, max_value=100)
+
     if not tel:
-        return Response({"ok": False, "error": "Falta tel"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {"ok": False, "error": "Falta tel"},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-    cliente = ClienteComercial.objects.filter(telefono=tel).first()
-    exp = ExpedienteDigital.objects.select_related("cliente").filter(cliente=cliente).first() if cliente else None
-    _validar_acceso_expediente(request=request, expediente=exp, numero_asesor=numero_asesor)
+    cliente = ClienteComercial.objects.filter(
+        telefono=tel,
+    ).first()
 
-    qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor).order_by("created_at", "id")
+    exp = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(cliente=cliente)
+        .first()
+        if cliente
+        else None
+    )
+
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    qs = (
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=tel,
+            numero_asesor=numero_asesor,
+        )
+        .order_by("created_at", "id")
+    )
     after_dt = _parse_dt_param(after)
-    if after_dt and after_id:
-        qs = qs.filter(Q(created_at__gt=after_dt) | Q(created_at=after_dt, id__gt=after_id))
-    elif after_dt:
+    if after_dt:
         qs = qs.filter(created_at__gt=after_dt)
-    elif after_id:
-        qs = qs.filter(id__gt=after_id)
     else:
         qs = qs.none()
 
     mensajes = list(qs[:limit])
     return Response({
-        "ok": True, "numero_asesor_activo": numero_asesor,
+        "ok": True,
+        "numero_asesor_activo": numero_asesor,
         "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data,
         "server_now": timezone.now().isoformat(),
     }, status=status.HTTP_200_OK)
+
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
