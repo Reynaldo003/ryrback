@@ -5,6 +5,7 @@ from datetime import datetime
 from html import escape
 
 from django.conf import settings
+from django.db.models import Count
 from django.http import FileResponse
 from django.utils import timezone
 from django.utils.text import slugify
@@ -14,6 +15,8 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
+
+from .pagination import CitasPagination
 
 from reportlab.lib import colors
 from reportlab.lib.colors import HexColor
@@ -45,6 +48,7 @@ from .serializers import (
     CitaSerializer,
     RegistroPisoSerializer,
     PruebaManejoSerializer,
+    PruebaManejoListSerializer,
     EvidenciaPruebaManejoSerializer,
     EntregasSerializer,
 )
@@ -617,14 +621,21 @@ class RegistroPisoViewSet(ModelViewSet):
 class PruebasManejoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
+    pagination_class = CitasPagination
 
     queryset = (
         PruebaManejo.objects.select_related("cliente")
         .prefetch_related("evidencias")
+        .annotate(evidencias_count=Count("evidencias"))
         .all()
         .order_by("-id")
     )
     serializer_class = PruebaManejoSerializer
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return PruebaManejoListSerializer
+        return PruebaManejoSerializer
 
 
 class EvidenciasPruebaManejoViewSet(ModelViewSet):

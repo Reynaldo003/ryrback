@@ -161,6 +161,14 @@ class PruebaManejoSerializer(BaseConClienteInputMixin):
         fields = "__all__"
 
 
+class PruebaManejoListSerializer(BaseConClienteInputMixin):
+    evidencias_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = PruebaManejo
+        fields = "__all__"
+
+
 class EntregasSerializer(BaseConClienteInputMixin):
     class Meta:
         model = Entregas
