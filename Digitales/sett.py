@@ -209,7 +209,7 @@ WHATSAPP_LINES = {
         "template_names": [],
     },
     whatsapp_numero_servicio_cba: {
-        "key": "ryr",
+        "key": "servicio_cba",
         "phone_number_id": "1166025403270294",
         "waba_id": "28166086789721171",
         "access_token": whatsapp_token_ryr,
