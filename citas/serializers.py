@@ -17,6 +17,12 @@ class ClienteComercialSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
+class ClienteComercialListSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClienteComercial
+        fields = "__all__"
+
+
 def obtener_o_crear_cliente(*, nombre, telefono, correo) -> ClienteComercial:
     telefono = normaliza_tel_mx(telefono)
     if not telefono:
@@ -132,7 +138,19 @@ class CitaSerializer(BaseConClienteInputMixin):
         fields = "__all__"
 
 
+class CitaListSerializer(BaseConClienteInputMixin):
+    class Meta:
+        model = Cita
+        fields = "__all__"
+
+
 class RegistroPisoSerializer(BaseConClienteInputMixin):
+    class Meta:
+        model = RegistroPiso
+        fields = "__all__"
+
+
+class RegistroPisoListSerializer(BaseConClienteInputMixin):
     class Meta:
         model = RegistroPiso
         fields = "__all__"
@@ -170,6 +188,12 @@ class PruebaManejoListSerializer(BaseConClienteInputMixin):
 
 
 class EntregasSerializer(BaseConClienteInputMixin):
+    class Meta:
+        model = Entregas
+        fields = "__all__"
+
+
+class EntregasListSerializer(BaseConClienteInputMixin):
     class Meta:
         model = Entregas
         fields = "__all__"

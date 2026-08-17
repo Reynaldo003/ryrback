@@ -45,12 +45,16 @@ from .models import (
 )
 from .serializers import (
     ClienteComercialSerializer,
+    ClienteComercialListSerializer,
     CitaSerializer,
+    CitaListSerializer,
     RegistroPisoSerializer,
+    RegistroPisoListSerializer,
     PruebaManejoSerializer,
     PruebaManejoListSerializer,
     EvidenciaPruebaManejoSerializer,
     EntregasSerializer,
+    EntregasListSerializer,
 )
 
 NEGRO = colors.black
@@ -514,9 +518,15 @@ def generar_pdf_entrega(entrega):
 class ClienteComercialViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
+    pagination_class = CitasPagination
 
     queryset = ClienteComercial.objects.all().order_by("-id_cliente")
     serializer_class = ClienteComercialSerializer
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return ClienteComercialListSerializer
+        return ClienteComercialSerializer
 
     @action(detail=True, methods=["get"])
     def agenda(self, request, pk=None):
@@ -583,6 +593,11 @@ class CitasViewSet(ModelViewSet):
     serializer_class = CitaSerializer
     acciones_publicas = {"list", "retrieve", "create"}
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return CitaListSerializer
+        return CitaSerializer
+
     def get_queryset(self):
         queryset = super().get_queryset()
         params = self.request.query_params
@@ -613,9 +628,15 @@ class CitasViewSet(ModelViewSet):
 class RegistroPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
+    pagination_class = CitasPagination
 
     queryset = RegistroPiso.objects.select_related("cliente").all().order_by("-id")
     serializer_class = RegistroPisoSerializer
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return RegistroPisoListSerializer
+        return RegistroPisoSerializer
 
 
 class PruebasManejoViewSet(ModelViewSet):
@@ -658,7 +679,13 @@ class EntregasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     queryset = Entregas.objects.select_related("cliente").all().order_by("-id")
     serializer_class = EntregasSerializer
+    pagination_class = CitasPagination
     acciones_publicas = {"list", "retrieve", "create", "pdf"}
+
+    def get_serializer_class(self):
+        if self.action == "list":
+            return EntregasListSerializer
+        return EntregasSerializer
 
     def get_queryset(self):
         queryset = super().get_queryset()
