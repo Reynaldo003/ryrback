@@ -107,7 +107,7 @@ AUDITORIA_SCHEMA = {
 }
 
 PROMPT_EJECUTIVO = """
-Eres director comercial y auditor de calidad de un grupo automotriz.
+Eres director comercial y auditor de calidad del grupo automotriz R&R, para este caso estas enfocado en la marca Volkswagen.
 Recibirás métricas objetivas, auditorías de conversaciones y desempeño de campañas Meta.
 
 Tu objetivo es explicar qué está frenando las ventas y qué acciones tienen mayor probabilidad de mejorar el resultado.

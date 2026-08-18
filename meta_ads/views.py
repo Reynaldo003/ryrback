@@ -27,6 +27,7 @@ LIST_FIELDS = (
     "inicio_campana",
     "fin_campana",
     "total_resultados",
+    "messaging_first_reply",
     "alcance",
     "impresiones",
     "presupuesto_anuncio",
@@ -224,6 +225,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
         data = qs.aggregate(
             total_campanas=Count("id_campana"),
             total_resultados=Sum("total_resultados"),
+            messaging_first_reply=Sum("messaging_first_reply"),
             resultados_fb=Sum("resultados_fb"),
             resultados_ig=Sum("resultados_ig"),
             resultados_wp=Sum("resultados_wp"),

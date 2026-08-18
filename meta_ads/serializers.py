@@ -19,6 +19,7 @@ class CampanaMetaListSerializer(serializers.ModelSerializer):
             "inicio_campana",
             "fin_campana",
             "total_resultados",
+            "messaging_first_reply",
             "alcance",
             "impresiones",
             "presupuesto_anuncio",
