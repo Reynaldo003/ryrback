@@ -591,6 +591,7 @@ class CitasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     queryset = Cita.objects.select_related("cliente").all().order_by("-id")
     serializer_class = CitaSerializer
+    pagination_class = CitasPagination
     acciones_publicas = {"list", "retrieve", "create"}
 
     def get_serializer_class(self):
@@ -608,14 +609,38 @@ class CitasViewSet(ModelViewSet):
 
         asesor_digital = str(params.get("asesor_digital") or "").strip()
         agencia = str(params.get("agencia") or "").strip()
+        asesor_piso = str(params.get("asesor_piso") or "").strip()
         asistencia = params.get("asistencia")
 
         if asesor_digital:
             queryset = queryset.filter(asesor_digital__iexact=asesor_digital)
         if agencia:
             queryset = queryset.filter(agencia__iexact=agencia)
+        if asesor_piso:
+            queryset = queryset.filter(asesor_piso__iexact=asesor_piso)
         if asistencia not in (None, ""):
             queryset = queryset.filter(asistencia=_param_bool(asistencia))
+
+        search = str(params.get("search") or "").strip()
+        if search:
+            from django.db.models import Q
+            queryset = queryset.filter(
+                Q(cliente__nombre__icontains=search)
+                | Q(cliente__telefono__icontains=search)
+                | Q(agencia__icontains=search)
+                | Q(auto_interes__icontains=search)
+                | Q(tipo_cita__icontains=search)
+                | Q(asesor_digital__icontains=search)
+                | Q(asesor_piso__icontains=search)
+                | Q(comentarios__icontains=search)
+            )
+
+        fecha_desde = str(params.get("fecha_desde") or "").strip()
+        fecha_hasta = str(params.get("fecha_hasta") or "").strip()
+        if fecha_desde:
+            queryset = queryset.filter(fecha_hora_cita__date__gte=fecha_desde)
+        if fecha_hasta:
+            queryset = queryset.filter(fecha_hora_cita__date__lte=fecha_hasta)
 
         return queryset
 

@@ -138,10 +138,32 @@ class CitaSerializer(BaseConClienteInputMixin):
         fields = "__all__"
 
 
+class ClienteComercialLightSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = ClienteComercial
+        fields = ["id_cliente", "nombre", "telefono"]
+
+
 class CitaListSerializer(BaseConClienteInputMixin):
+    cliente = ClienteComercialLightSerializer(read_only=True)
+
     class Meta:
         model = Cita
-        fields = "__all__"
+        fields = [
+            "id",
+            "agencia",
+            "auto_interes",
+            "fecha_hora_cita",
+            "asistencia",
+            "tipo_cita",
+            "motivo_cita",
+            "fuente_prospeccion",
+            "asesor_digital",
+            "asesor_piso",
+            "comentarios",
+            "creado_en",
+            "cliente",
+        ]
 
 
 class RegistroPisoSerializer(BaseConClienteInputMixin):
