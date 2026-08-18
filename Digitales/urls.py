@@ -2,7 +2,7 @@
 # Digitales/urls.py
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
-
+from .resultados_ia import resultados_ia_view
 from .views import (
     bienvenido,
     webhook,
@@ -90,6 +90,9 @@ urlpatterns = [
     path("analitica/asesores/", analitica_asesores_view, name="digitales-analitica-asesores"),
     path("analitica/asesores/cliente/<int:expediente_id>/", analitica_cliente_view, name="digitales-analitica-cliente",),
     path("analitica/eventos/<uuid:evento_id>/resultado/",analitica_evento_resultado_view,name="digitales-analitica-evento-resultado",),
+
+    path("analitica/resultados-ia/",resultados_ia_view,name="digitales-resultados-ia",),
+
     path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),
     path("api/prospectos/<int:prospecto_id>/generar-resumen/",generar_resumen_prospecto_view,),
