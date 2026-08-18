@@ -9,7 +9,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, time, timedelta
 from statistics import median
 from typing import Any
-
+import time
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count, Max, Q
@@ -31,7 +31,8 @@ from .sett import WHATSAPP_LINES
 
 logger = logging.getLogger(__name__)
 
-MAX_LOTE_CHARS = 120_000
+GEMINI_PRESUPUESTO_SEGUNDOS = 120
+MAX_LOTE_CHARS = 60_000
 MAX_CONVERSACION_CHARS = 55_000
 CACHE_SECONDS = 60 * 30
 BUSINESS_COMERCIALES = {"nuevos", "usados", "comerciales"}
@@ -586,10 +587,33 @@ def _estado_medicion_respuesta(*, primer_cliente, primera_respuesta_humana, nume
 
 
 def _get_gemini_client():
-    api_key = _texto(getattr(settings, "GEMINI_API_KEY", ""))
+    api_key = _texto(
+        getattr(
+            settings,
+            "GEMINI_API_KEY",
+            "",
+        )
+    )
+
     if not api_key:
-        raise RuntimeError("Falta configurar GEMINI_API_KEY en settings.py")
-    return genai.Client(api_key=api_key)
+        raise RuntimeError(
+            "Falta configurar GEMINI_API_KEY en settings.py"
+        )
+
+    timeout_ms = int(
+        getattr(
+            settings,
+            "GEMINI_RESULTS_TIMEOUT_MS",
+            45000,
+        )
+    )
+
+    return genai.Client(
+        api_key=api_key,
+        http_options=types.HttpOptions(
+            timeout=timeout_ms,
+        ),
+    )
 
 
 def _modelo_gemini() -> str:
@@ -803,19 +827,44 @@ def _lotes_contextos(contextos: list[dict]) -> list[list[dict]]:
     return lotes
 
 
-def _auditar_con_gemini(contextos: list[dict]) -> tuple[list[dict], list[str]]:
+def _auditar_con_gemini(
+    contextos: list[dict],
+    *,
+    limite_tiempo: float | None = None,
+) -> tuple[list[dict], list[str]]:
     if not contextos:
         return [], []
+
     client = _get_gemini_client()
     modelo = _modelo_gemini()
+
     salida_por_id = {}
     errores = []
 
-    for indice, lote in enumerate(_lotes_contextos(contextos), start=1):
+    for indice, lote in enumerate(
+        _lotes_contextos(contextos),
+        start=1,
+    ):
+        if (
+            limite_tiempo is not None
+            and time.monotonic() >= limite_tiempo
+        ):
+            errores.append(
+                "Se alcanzó el tiempo máximo destinado "
+                "al análisis IA. Las conversaciones "
+                "restantes utilizaron análisis de respaldo."
+            )
+            break
+
         contenido = (
-            "Audita todas las conversaciones del siguiente lote. Respeta exactamente el id de cada una.\n\n"
-            + json.dumps(lote, ensure_ascii=False)
+            "Audita todas las conversaciones del siguiente "
+            "lote. Respeta exactamente el id de cada una.\n\n"
+            + json.dumps(
+                lote,
+                ensure_ascii=False,
+            )
         )
+
         try:
             response = client.models.generate_content(
                 model=modelo,
@@ -827,31 +876,104 @@ def _auditar_con_gemini(contextos: list[dict]) -> tuple[list[dict], list[str]]:
                     temperature=0.15,
                 ),
             )
-            data = _parse_json(getattr(response, "text", "") or "")
-            for item in data.get("conversaciones") or []:
-                if isinstance(item, dict) and _texto(item.get("id")):
-                    salida_por_id[_texto(item["id"])] = item
+
+            data = _parse_json(
+                getattr(
+                    response,
+                    "text",
+                    "",
+                )
+                or ""
+            )
+
+            for item in data.get(
+                "conversaciones",
+                [],
+            ):
+                if (
+                    isinstance(item, dict)
+                    and _texto(item.get("id"))
+                ):
+                    salida_por_id[
+                        _texto(item["id"])
+                    ] = item
+
         except Exception as exc:
-            logger.exception("Error en lote de resultados IA %s", indice)
-            errores.append(f"Lote {indice}: {exc}")
+            logger.exception(
+                "Error en lote de resultados IA %s",
+                indice,
+            )
+
+            errores.append(
+                f"Lote {indice}: {exc}"
+            )
 
     salida = []
+
     for ctx in contextos:
-        item = salida_por_id.get(ctx["id"]) or _fallback_auditoria(ctx)
-        item["puntaje_atencion"] = max(0, min(100, int(item.get("puntaje_atencion") or 0)))
-        # Regla objetiva: solo penalizamos ausencia de atención cuando ya transcurrió tiempo hábil.
-        if ctx.get("sin_respuesta_humana_evaluable"):
+        item = (
+            salida_por_id.get(ctx["id"])
+            or _fallback_auditoria(ctx)
+        )
+
+        try:
+            puntaje = int(
+                item.get(
+                    "puntaje_atencion",
+                    0,
+                )
+                or 0
+            )
+        except (TypeError, ValueError):
+            puntaje = 0
+
+        item["puntaje_atencion"] = max(
+            0,
+            min(
+                100,
+                puntaje,
+            ),
+        )
+
+        if ctx.get(
+            "sin_respuesta_humana_evaluable"
+        ):
             item["mal_atendido"] = True
             item["calidad_atencion"] = "critica"
-            item["puntaje_atencion"] = min(item["puntaje_atencion"], 30)
-            item["riesgo_perdida"] = "alto" if item.get("senal_compra") else item.get("riesgo_perdida", "medio")
-            deficiencias = list(item.get("deficiencias") or [])
-            if not any("respuesta humana" in _normaliza(x) for x in deficiencias):
-                deficiencias.append("El cliente escribió y no existe respuesta humana posterior.")
-            item["deficiencias"] = deficiencias
-        salida.append(item)
-    return salida, errores
 
+            item["puntaje_atencion"] = min(
+                item["puntaje_atencion"],
+                30,
+            )
+
+            if item.get("senal_compra"):
+                item["riesgo_perdida"] = "alto"
+
+            deficiencias = list(
+                item.get("deficiencias")
+                or []
+            )
+
+            if not any(
+                "respuesta humana"
+                in _normaliza(x)
+                for x in deficiencias
+            ):
+                deficiencias.append(
+                    "El cliente escribió y no existe "
+                    "respuesta humana posterior."
+                )
+
+            item["deficiencias"] = deficiencias
+
+        salida.append(item)
+
+    try:
+        client.close()
+    except Exception:
+        pass
+
+    return salida, errores
 
 def _normalizar_modelo(value: str) -> str:
     value = _texto(value)
@@ -1223,23 +1345,34 @@ def resultados_ia_view(request):
     campanas = _campanas_mes(inicio=inicio, fin=fin, agencia_filtro=agencia)
 
     errores_ia = []
+    limite_ia = (time.monotonic()+ GEMINI_PRESUPUESTO_SEGUNDOS)
     try:
-        auditorias, errores_lotes = _auditar_con_gemini(contextos)
+        auditorias, errores_lotes = _auditar_con_gemini(contextos,limite_tiempo=limite_ia,)
         errores_ia.extend(errores_lotes)
     except Exception as exc:
         logger.exception("No fue posible iniciar auditoría Gemini de resultados")
         errores_ia.append(str(exc))
-        auditorias = [_fallback_auditoria(ctx) for ctx in contextos]
+        auditorias = [_fallback_auditoria(ctx) for ctx in contextos        ]
 
     agregados = _agregar_metricas(contextos, auditorias, campanas)
 
     try:
-        ejecutivo = _analisis_ejecutivo_gemini(agregados, auditorias) if contextos else _fallback_ejecutivo(agregados)
-        ia_ejecutiva = bool(contextos)
+        tiempo_disponible = time.monotonic()< limite_ia
+
+        if contextos and tiempo_disponible:
+            ejecutivo = _analisis_ejecutivo_gemini(agregados,auditorias,)
+            ia_ejecutiva = True
+
+        else:
+            ejecutivo = _fallback_ejecutivo(agregados)
+            ia_ejecutiva = False
+
+            if contextos:
+                errores_ia.append("El análisis ejecutivo utilizó fallback porque se alcanzó el presupuesto máximo de tiempo IA.")
     except Exception as exc:
         logger.exception("Error generando análisis ejecutivo de resultados")
         errores_ia.append(str(exc))
-        ejecutivo = _fallback_ejecutivo(agregados)
+        ejecutivo = (_fallback_ejecutivo(agregados))
         ia_ejecutiva = False
 
     _fusionar_recomendaciones_asesores(agregados, ejecutivo, auditorias)
