@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, time
+from datetime import datetime, time, timedelta
 from statistics import median
 from typing import Any
 
@@ -34,6 +35,16 @@ MAX_LOTE_CHARS = 120_000
 MAX_CONVERSACION_CHARS = 55_000
 CACHE_SECONDS = 60 * 30
 BUSINESS_COMERCIALES = {"nuevos", "usados", "comerciales"}
+DIAS_SEMANA = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
+HORARIO_RESPUESTA_PREDETERMINADO = {
+    "lunes": {"activo": True, "inicio": "09:00", "fin": "19:00"},
+    "martes": {"activo": True, "inicio": "09:00", "fin": "19:00"},
+    "miercoles": {"activo": True, "inicio": "09:00", "fin": "19:00"},
+    "jueves": {"activo": True, "inicio": "09:00", "fin": "19:00"},
+    "viernes": {"activo": True, "inicio": "09:00", "fin": "19:00"},
+    "sabado": {"activo": True, "inicio": "09:00", "fin": "14:00"},
+    "domingo": {"activo": False, "inicio": "09:00", "fin": "14:00"},
+}
 
 PROMPT_AUDITORIA = """
 Eres un auditor comercial senior especializado en venta automotriz por WhatsApp.
@@ -49,7 +60,9 @@ Contexto del negocio:
 - Interés comercial real requiere señales como precio, disponibilidad, versión, cotización,
   financiamiento, mensualidad, enganche, crédito, toma de auto, cita, visita o intención de compra.
 - No inventes datos. No asumas una venta si no existe evidencia.
-- Si el cliente escribió y no hubo respuesta humana posterior, la atención debe considerarse deficiente.
+- Si el cliente escribió y no hubo respuesta humana posterior, la atención debe considerarse deficiente SOLO cuando sin_respuesta_humana_evaluable=true.
+- Si espera_fuera_horario=true o medicion_tiempo_habilitada=false, no penalices al asesor por rapidez ni por ausencia de respuesta en ese tramo.
+- tiempo_primera_respuesta_segundos ya representa tiempo HÁBIL, no tiempo calendario.
 - Si la IA atendió pero luego era necesaria intervención humana y no ocurrió, señálalo.
 - Usa las métricas objetivas proporcionadas; no recalcules tiempos imaginarios.
 - Devuelve exclusivamente JSON compatible con el esquema.
@@ -390,6 +403,173 @@ def _rango_mes(mes_raw: str):
     return f"{anio:04d}-{mes:02d}", desde, hasta
 
 
+def _copiar_horario_predeterminado() -> dict:
+    return {dia: dict(config) for dia, config in HORARIO_RESPUESTA_PREDETERMINADO.items()}
+
+
+def _hora_hhmm(valor: str, default: str) -> str:
+    valor = _texto(valor)
+    if re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", valor):
+        return valor
+    return default
+
+
+def _parsear_horario_respuesta(valor: str) -> dict:
+    horario = _copiar_horario_predeterminado()
+    valor = _texto(valor)
+    if not valor:
+        return horario
+
+    try:
+        recibido = json.loads(valor)
+    except Exception:
+        return horario
+
+    if not isinstance(recibido, dict):
+        return horario
+
+    for dia in DIAS_SEMANA:
+        item = recibido.get(dia)
+        if not isinstance(item, dict):
+            continue
+
+        base = horario[dia]
+        activo = item.get("activo", base["activo"])
+        if isinstance(activo, str):
+            activo = _normaliza(activo) in {"1", "true", "si", "sí", "yes", "on"}
+
+        inicio = _hora_hhmm(item.get("inicio"), base["inicio"])
+        fin = _hora_hhmm(item.get("fin"), base["fin"])
+        if fin <= inicio:
+            activo = False
+
+        horario[dia] = {"activo": bool(activo), "inicio": inicio, "fin": fin}
+
+    return horario
+
+
+def _parsear_lineas_excluidas_tiempo(valor, lineas_permitidas) -> set[str]:
+    if isinstance(valor, (list, tuple, set)):
+        partes = list(valor)
+    else:
+        texto = _texto(valor)
+        if texto.startswith("["):
+            try:
+                parsed = json.loads(texto)
+                partes = parsed if isinstance(parsed, list) else []
+            except Exception:
+                partes = re.split(r"[,;|\n]+", texto)
+        else:
+            partes = re.split(r"[,;|\n]+", texto)
+
+    permitidas = set(lineas_permitidas or [])
+    return {
+        numero
+        for numero in (normaliza_tel_mx(item or "") for item in partes)
+        if numero and numero in permitidas
+    }
+
+
+def _datetime_local(valor):
+    if valor is None:
+        return None
+    if settings.USE_TZ:
+        zona = timezone.get_current_timezone()
+        if timezone.is_naive(valor):
+            valor = timezone.make_aware(valor, zona)
+        return timezone.localtime(valor, zona)
+    if timezone.is_aware(valor):
+        return timezone.make_naive(valor, timezone.get_current_timezone())
+    return valor
+
+
+def _datetime_dia_hora(fecha, hhmm: str):
+    hora, minuto = (int(x) for x in hhmm.split(":"))
+    valor = datetime.combine(fecha, time(hora=hora, minute=minuto))
+    if settings.USE_TZ:
+        return timezone.make_aware(valor, timezone.get_current_timezone())
+    return valor
+
+
+def _segundos_habiles_entre(inicio, fin, horario: dict) -> int:
+    inicio = _datetime_local(inicio)
+    fin = _datetime_local(fin)
+    if not inicio or not fin or fin <= inicio:
+        return 0
+
+    total = 0.0
+    fecha = inicio.date()
+    fecha_fin = fin.date()
+
+    while fecha <= fecha_fin:
+        dia = DIAS_SEMANA[fecha.weekday()]
+        config = horario.get(dia) or {}
+        if config.get("activo"):
+            jornada_inicio = _datetime_dia_hora(fecha, config.get("inicio") or "09:00")
+            jornada_fin = _datetime_dia_hora(fecha, config.get("fin") or "19:00")
+            desde = max(inicio, jornada_inicio)
+            hasta = min(fin, jornada_fin)
+            if hasta > desde:
+                total += (hasta - desde).total_seconds()
+        fecha += timedelta(days=1)
+
+    return max(0, int(total))
+
+
+def _estado_medicion_respuesta(*, primer_cliente, primera_respuesta_humana, numero: str, horario: dict, lineas_excluidas: set[str], corte):
+    if not primer_cliente:
+        return {
+            "medicion_tiempo_habilitada": False,
+            "motivo_exclusion_tiempo": "sin_mensaje_cliente",
+            "tiempo_primera_respuesta_segundos": None,
+            "tiempo_primera_respuesta_crudo_segundos": None,
+            "segundos_habiles_transcurridos": 0,
+            "espera_fuera_horario": False,
+            "sin_respuesta_humana_evaluable": False,
+        }
+
+    if numero in lineas_excluidas:
+        return {
+            "medicion_tiempo_habilitada": False,
+            "motivo_exclusion_tiempo": "linea_excluida",
+            "tiempo_primera_respuesta_segundos": None,
+            "tiempo_primera_respuesta_crudo_segundos": None,
+            "segundos_habiles_transcurridos": 0,
+            "espera_fuera_horario": False,
+            "sin_respuesta_humana_evaluable": False,
+        }
+
+    inicio = primer_cliente.get("created_at")
+    fin_medicion = primera_respuesta_humana.get("created_at") if primera_respuesta_humana else corte
+    segundos_habiles = _segundos_habiles_entre(inicio, fin_medicion, horario)
+    crudos = None
+    if primera_respuesta_humana and inicio and primera_respuesta_humana.get("created_at"):
+        crudos = max(0, int((primera_respuesta_humana["created_at"] - inicio).total_seconds()))
+
+    if primera_respuesta_humana and segundos_habiles <= 0:
+        return {
+            "medicion_tiempo_habilitada": False,
+            "motivo_exclusion_tiempo": "respuesta_completa_fuera_de_horario",
+            "tiempo_primera_respuesta_segundos": None,
+            "tiempo_primera_respuesta_crudo_segundos": crudos,
+            "segundos_habiles_transcurridos": 0,
+            "espera_fuera_horario": False,
+            "sin_respuesta_humana_evaluable": False,
+        }
+
+    sin_respuesta = primera_respuesta_humana is None
+    espera_fuera_horario = bool(sin_respuesta and segundos_habiles <= 0)
+    return {
+        "medicion_tiempo_habilitada": True,
+        "motivo_exclusion_tiempo": "",
+        "tiempo_primera_respuesta_segundos": segundos_habiles if primera_respuesta_humana else None,
+        "tiempo_primera_respuesta_crudo_segundos": crudos,
+        "segundos_habiles_transcurridos": segundos_habiles,
+        "espera_fuera_horario": espera_fuera_horario,
+        "sin_respuesta_humana_evaluable": bool(sin_respuesta and segundos_habiles > 0),
+    }
+
+
 def _get_gemini_client():
     api_key = _texto(getattr(settings, "GEMINI_API_KEY", ""))
     if not api_key:
@@ -440,7 +620,7 @@ def _rol_mensaje(row: dict) -> str:
     return "IA" if _es_ia(row.get("raw")) else "Asesor humano"
 
 
-def _contextos_conversacion(*, lineas, inicio, fin, request, es_admin, es_coordinador):
+def _contextos_conversacion(*, lineas, inicio, fin, request, es_admin, es_coordinador, horario_respuesta, lineas_excluidas_tiempo):
     mensajes = list(
         MensajeWhatsApp.objects
         .filter(numero_asesor__in=lineas, created_at__gte=inicio, created_at__lt=fin)
@@ -502,9 +682,16 @@ def _contextos_conversacion(*, lineas, inicio, fin, request, es_admin, es_coordi
                     primera_respuesta_humana = r
                     break
 
-        segundos_respuesta = None
-        if primer_cliente and primera_respuesta_humana:
-            segundos_respuesta = max(0, int((primera_respuesta_humana["created_at"] - primer_cliente["created_at"]).total_seconds()))
+        ahora = timezone.now()
+        corte = min(ahora, fin) if ahora >= inicio else inicio
+        medicion = _estado_medicion_respuesta(
+            primer_cliente=primer_cliente,
+            primera_respuesta_humana=primera_respuesta_humana,
+            numero=numero,
+            horario=horario_respuesta,
+            lineas_excluidas=lineas_excluidas_tiempo,
+            corte=corte,
+        )
 
         lineas_texto = []
         for r in rows:
@@ -537,8 +724,14 @@ def _contextos_conversacion(*, lineas, inicio, fin, request, es_admin, es_coordi
             "facturado": bool(_texto(getattr(exp, "vin_facturado", "") if exp else "")),
             "primer_mensaje_cliente": primer_cliente["created_at"].isoformat() if primer_cliente else None,
             "primera_respuesta_humana": primera_respuesta_humana["created_at"].isoformat() if primera_respuesta_humana else None,
-            "tiempo_primera_respuesta_segundos": segundos_respuesta,
-            "tiempo_primera_respuesta_label": _segundos_label(segundos_respuesta),
+            "medicion_tiempo_habilitada": medicion["medicion_tiempo_habilitada"],
+            "motivo_exclusion_tiempo": medicion["motivo_exclusion_tiempo"],
+            "tiempo_primera_respuesta_segundos": medicion["tiempo_primera_respuesta_segundos"],
+            "tiempo_primera_respuesta_label": _segundos_label(medicion["tiempo_primera_respuesta_segundos"]),
+            "tiempo_primera_respuesta_crudo_segundos": medicion["tiempo_primera_respuesta_crudo_segundos"],
+            "segundos_habiles_transcurridos": medicion["segundos_habiles_transcurridos"],
+            "espera_fuera_horario": medicion["espera_fuera_horario"],
+            "sin_respuesta_humana_evaluable": medicion["sin_respuesta_humana_evaluable"],
             "mensajes": len(rows),
             "mensajes_cliente": sum(1 for r in rows if r.get("direction") == MensajeWhatsApp.Direccion.IN),
             "mensajes_humanos": sum(1 for r in rows if r.get("direction") == MensajeWhatsApp.Direccion.OUT and not _es_ia(r.get("raw"))),
@@ -561,7 +754,7 @@ def _fallback_auditoria(ctx: dict) -> dict:
     nivel = "medio" if senal else "bajo"
     if ctx.get("facturado") or ctx.get("tiene_cita") or ctx.get("cotizacion_pendiente"):
         nivel = "alto"
-    sin_humano = bool(ctx.get("mensajes_cliente") and not ctx.get("mensajes_humanos"))
+    sin_humano = bool(ctx.get("sin_respuesta_humana_evaluable"))
     segundos = ctx.get("tiempo_primera_respuesta_segundos")
     lento = segundos is not None and segundos > 4 * 3600
     mal = sin_humano or lento
@@ -631,8 +824,8 @@ def _auditar_con_gemini(contextos: list[dict]) -> tuple[list[dict], list[str]]:
     for ctx in contextos:
         item = salida_por_id.get(ctx["id"]) or _fallback_auditoria(ctx)
         item["puntaje_atencion"] = max(0, min(100, int(item.get("puntaje_atencion") or 0)))
-        # Regla objetiva: si hubo mensaje del cliente y ninguna atención humana, no permitimos una calificación positiva.
-        if ctx.get("mensajes_cliente") and not ctx.get("mensajes_humanos"):
+        # Regla objetiva: solo penalizamos ausencia de atención cuando ya transcurrió tiempo hábil.
+        if ctx.get("sin_respuesta_humana_evaluable"):
             item["mal_atendido"] = True
             item["calidad_atencion"] = "critica"
             item["puntaje_atencion"] = min(item["puntaje_atencion"], 30)
@@ -722,7 +915,7 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
         alta_intencion += int(aud.get("nivel_interes") == "alto" or aud.get("senal_compra"))
         mal_atendidos += int(bool(aud.get("mal_atendido")))
         riesgo_alto += int(aud.get("riesgo_perdida") == "alto")
-        sin_humano += int(bool(ctx.get("mensajes_cliente") and not ctx.get("mensajes_humanos")))
+        sin_humano += int(bool(ctx.get("sin_respuesta_humana_evaluable")))
         facturados += int(ctx.get("facturado", False))
         citas += int(ctx.get("tiene_cita", False))
         if ctx.get("tiempo_primera_respuesta_segundos") is not None:
@@ -745,7 +938,7 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
         row["interesados"] += int(es_interesado)
         row["mal_atendidos"] += int(bool(aud.get("mal_atendido")))
         row["riesgo_alto"] += int(aud.get("riesgo_perdida") == "alto")
-        row["sin_humano"] += int(bool(ctx.get("mensajes_cliente") and not ctx.get("mensajes_humanos")))
+        row["sin_humano"] += int(bool(ctx.get("sin_respuesta_humana_evaluable")))
         row["puntajes"].append(int(aud.get("puntaje_atencion") or 0))
         if ctx.get("tiempo_primera_respuesta_segundos") is not None:
             row["tiempos"].append(int(ctx["tiempo_primera_respuesta_segundos"]))
@@ -831,6 +1024,9 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
         "primera_respuesta_p90_label": _segundos_label(p90),
         "campanas_activas_periodo": len(campanas),
         "gasto_meta": round(sum(float(c.get("gasto") or 0) for c in campanas), 2),
+        "conversaciones_tiempo_evaluable": sum(1 for ctx in contextos if ctx.get("medicion_tiempo_habilitada")),
+        "conversaciones_tiempo_excluidas": sum(1 for ctx in contextos if not ctx.get("medicion_tiempo_habilitada")),
+        "esperando_inicio_jornada": sum(1 for ctx in contextos if ctx.get("espera_fuera_horario")),
     }
 
     distribucion_interes = Counter(a.get("nivel_interes", "nulo") for a in auditorias)
@@ -952,6 +1148,28 @@ def resultados_ia_view(request):
     if error:
         return error
 
+    horario_respuesta = _parsear_horario_respuesta(request.query_params.get("horario_respuesta", ""))
+    lineas_excluidas_tiempo = _parsear_lineas_excluidas_tiempo(
+        request.query_params.get("lineas_excluir_tiempo", ""),
+        lineas,
+    )
+
+    if _normaliza(request.query_params.get("configuracion", "")) in {"1", "true", "si", "yes"}:
+        return Response({
+            "ok": True,
+            "solo_configuracion": True,
+            "horario_predeterminado": _copiar_horario_predeterminado(),
+            "lineas": [
+                {
+                    "numero": numero,
+                    "asesor_digital": _texto(WHATSAPP_LINES.get(numero, {}).get("asesor_digital")),
+                    "agencia": _texto(WHATSAPP_LINES.get(numero, {}).get("agencia")),
+                    "business": _texto(WHATSAPP_LINES.get(numero, {}).get("business")),
+                }
+                for numero in lineas
+            ],
+        })
+
     mes, inicio, fin = _rango_mes(request.query_params.get("mes", ""))
     forzar = _normaliza(request.query_params.get("forzar", "")) in {"1", "true", "si", "yes"}
     agencia = _texto(request.query_params.get("agencia", ""))
@@ -962,9 +1180,19 @@ def resultados_ia_view(request):
         .filter(numero_asesor__in=lineas, created_at__gte=inicio, created_at__lt=fin)
         .aggregate(total=Count("id"), ultimo_id=Max("id"), ultimo_at=Max("created_at"))
     )
+    firma_config = hashlib.sha1(
+        json.dumps(
+            {
+                "horario": horario_respuesta,
+                "lineas_excluidas": sorted(lineas_excluidas_tiempo),
+            },
+            sort_keys=True,
+            ensure_ascii=True,
+        ).encode("utf-8")
+    ).hexdigest()[:12]
     cache_key = "digitales:resultados_ia:" + ":".join([
         mes, ",".join(sorted(lineas)), _normaliza(agencia) or "todos", _normaliza(business) or "todos",
-        str(firma.get("total") or 0), str(firma.get("ultimo_id") or 0),
+        firma_config, str(firma.get("total") or 0), str(firma.get("ultimo_id") or 0),
     ])
     if not forzar:
         cached = cache.get(cache_key)
@@ -975,6 +1203,8 @@ def resultados_ia_view(request):
     contextos, cobertura_base = _contextos_conversacion(
         lineas=lineas, inicio=inicio, fin=fin, request=request,
         es_admin=es_admin, es_coordinador=es_coordinador,
+        horario_respuesta=horario_respuesta,
+        lineas_excluidas_tiempo=lineas_excluidas_tiempo,
     )
     campanas = _campanas_mes(inicio=inicio, fin=fin, agencia_filtro=agencia)
 
@@ -1032,6 +1262,12 @@ def resultados_ia_view(request):
             for numero in lineas
         ],
         "filtros": {"agencia": agencia, "business": business, "numero_asesor": request.query_params.get("numero_asesor", "")},
+        "configuracion_tiempo_respuesta": {
+            "horario": horario_respuesta,
+            "lineas_excluidas": sorted(lineas_excluidas_tiempo),
+            "metodo": "minutos_habiles",
+            "nota": "El tiempo fuera del horario configurado no se suma y una conversación aún fuera de jornada no se penaliza como falta de respuesta.",
+        },
     }
 
     cache.set(cache_key, payload, CACHE_SECONDS)
