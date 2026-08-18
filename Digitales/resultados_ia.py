@@ -483,13 +483,28 @@ def _datetime_local(valor):
     return valor
 
 
-def _datetime_dia_hora(fecha, hhmm: str):
-    hora, minuto = (int(x) for x in hhmm.split(":"))
-    valor = datetime.combine(fecha, time(hora=hora, minute=minuto))
-    if settings.USE_TZ:
-        return timezone.make_aware(valor, timezone.get_current_timezone())
-    return valor
+def _datetime_dia_hora(fecha, hora_texto: str):
+    try:
+        partes = str(hora_texto or "09:00").strip().split(":")
+        hora = int(partes[0])
+        minuto = int(partes[1]) if len(partes) > 1 else 0
 
+        hora = max(0, min(hora, 23))
+        minuto = max(0, min(minuto, 59))
+    except (TypeError, ValueError, IndexError):
+        hora = 9
+        minuto = 0
+
+    valor = datetime.combine(fecha,time(hour=hora, minute=minuto),)
+
+    if settings.USE_TZ:
+        if timezone.is_naive(valor):
+            valor = timezone.make_aware(
+                valor,
+                timezone.get_current_timezone(),
+            )
+
+    return valor
 
 def _segundos_habiles_entre(inicio, fin, horario: dict) -> int:
     inicio = _datetime_local(inicio)
@@ -885,7 +900,6 @@ def _campanas_mes(*, inicio, fin, agencia_filtro: str = "") -> list[dict]:
             "resultados_sin_genero": int(c.resultados_sin_genero or 0),
         })
     return salida
-
 
 def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: list[dict]):
     audit_por_id = {a.get("id"): a for a in auditorias}
