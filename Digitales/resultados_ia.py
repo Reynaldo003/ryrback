@@ -9,7 +9,6 @@ from collections import Counter, defaultdict
 from datetime import datetime, time, timedelta
 from statistics import median
 from typing import Any
-import time
 from django.conf import settings
 from django.core.cache import cache
 from django.db.models import Count, Max, Q
@@ -1180,7 +1179,6 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
         ],
         "campanas": campanas,
     }
-
 
 def _fallback_ejecutivo(agregados: dict) -> dict:
     m = agregados["metricas"]
