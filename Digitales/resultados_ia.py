@@ -901,14 +901,30 @@ def _auditar_con_gemini(
                     ] = item
 
         except Exception as exc:
+            mensaje = str(exc)
+
             logger.exception(
                 "Error en lote de resultados IA %s",
                 indice,
             )
 
             errores.append(
-                f"Lote {indice}: {exc}"
+                f"Lote {indice}: {mensaje}"
             )
+
+            if (
+                "503" in mensaje
+                or "UNAVAILABLE" in mensaje
+                or "high demand" in mensaje.lower()
+                or "504" in mensaje
+                or "DEADLINE_EXCEEDED" in mensaje
+            ):
+                errores.append(
+                    "Gemini se encuentra temporalmente saturado. "
+                    "Las conversaciones restantes utilizaron "
+                    "el análisis de respaldo."
+                )
+                break
 
     salida = []
 
