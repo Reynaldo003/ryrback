@@ -5,9 +5,9 @@ import json
 import logging
 import math
 import re
+import time as time_module
 from collections import Counter, defaultdict
 from datetime import datetime, time as datetime_time, timedelta
-import time as time_module
 from statistics import median
 from typing import Any
 from django.conf import settings
@@ -38,13 +38,19 @@ CACHE_SECONDS = 60 * 30
 BUSINESS_COMERCIALES = {"nuevos", "usados", "comerciales"}
 DIAS_SEMANA = ("lunes", "martes", "miercoles", "jueves", "viernes", "sabado", "domingo")
 HORARIO_RESPUESTA_PREDETERMINADO = {
-    "lunes": {"activo": True, "inicio": "09:00", "fin": "19:00"},
-    "martes": {"activo": True, "inicio": "09:00", "fin": "19:00"},
-    "miercoles": {"activo": True, "inicio": "09:00", "fin": "19:00"},
-    "jueves": {"activo": True, "inicio": "09:00", "fin": "19:00"},
-    "viernes": {"activo": True, "inicio": "09:00", "fin": "19:00"},
+    "lunes": {"activo": True, "inicio": "09:00", "fin": "18:00"},
+    "martes": {"activo": True, "inicio": "09:00", "fin": "18:00"},
+    "miercoles": {"activo": True, "inicio": "09:00", "fin": "18:00"},
+    "jueves": {"activo": True, "inicio": "09:00", "fin": "18:00"},
+    "viernes": {"activo": True, "inicio": "09:00", "fin": "18:00"},
     "sabado": {"activo": True, "inicio": "09:00", "fin": "14:00"},
     "domingo": {"activo": False, "inicio": "09:00", "fin": "14:00"},
+}
+PAUSA_COMIDA_PREDETERMINADA = {
+    "activo": True,
+    "inicio": "14:00",
+    "fin": "15:00",
+    "dias": ["lunes", "martes", "miercoles", "jueves", "viernes"],
 }
 
 PROMPT_AUDITORIA = """
@@ -107,7 +113,7 @@ AUDITORIA_SCHEMA = {
 }
 
 PROMPT_EJECUTIVO = """
-Eres director comercial y auditor de calidad del grupo automotriz R&R, para este caso estas enfocado en la marca Volkswagen.
+Eres director comercial y auditor de calidad de un grupo automotriz.
 Recibirás métricas objetivas, auditorías de conversaciones y desempeño de campañas Meta.
 
 Tu objetivo es explicar qué está frenando las ventas y qué acciones tienen mayor probabilidad de mejorar el resultado.
@@ -405,7 +411,12 @@ def _rango_mes(mes_raw: str):
 
 
 def _copiar_horario_predeterminado() -> dict:
-    return {dia: dict(config) for dia, config in HORARIO_RESPUESTA_PREDETERMINADO.items()}
+    horario = {dia: dict(config) for dia, config in HORARIO_RESPUESTA_PREDETERMINADO.items()}
+    horario["pausa_comida"] = {
+        **PAUSA_COMIDA_PREDETERMINADA,
+        "dias": list(PAUSA_COMIDA_PREDETERMINADA["dias"]),
+    }
+    return horario
 
 
 def _hora_hhmm(valor: str, default: str) -> str:
@@ -445,6 +456,22 @@ def _parsear_horario_respuesta(valor: str) -> dict:
             activo = False
 
         horario[dia] = {"activo": bool(activo), "inicio": inicio, "fin": fin}
+
+    pausa_recibida = recibido.get("pausa_comida")
+    if isinstance(pausa_recibida, dict):
+        base = horario["pausa_comida"]
+        activo = pausa_recibida.get("activo", base["activo"])
+        if isinstance(activo, str):
+            activo = _normaliza(activo) in {"1", "true", "si", "sí", "yes", "on"}
+        inicio = _hora_hhmm(pausa_recibida.get("inicio"), base["inicio"])
+        fin = _hora_hhmm(pausa_recibida.get("fin"), base["fin"])
+        dias = pausa_recibida.get("dias", base["dias"])
+        if not isinstance(dias, (list, tuple, set)):
+            dias = base["dias"]
+        dias = [dia for dia in dias if dia in DIAS_SEMANA]
+        if fin <= inicio:
+            activo = False
+        horario["pausa_comida"] = {"activo": bool(activo), "inicio": inicio, "fin": fin, "dias": dias}
 
     return horario
 
@@ -496,16 +523,14 @@ def _datetime_dia_hora(fecha, hora_texto: str):
         hora = 9
         minuto = 0
 
-    valor = datetime.combine(
-        fecha,
-        datetime_time(hour=hora, minute=minuto),
-    )
+    valor = datetime.combine(fecha, datetime_time(hour=hora, minute=minuto))
 
-    if settings.USE_TZ and timezone.is_naive(valor):
-        valor = timezone.make_aware(
-            valor,
-            timezone.get_current_timezone(),
-        )
+    if settings.USE_TZ:
+        if timezone.is_naive(valor):
+            valor = timezone.make_aware(
+                valor,
+                timezone.get_current_timezone(),
+            )
 
     return valor
 
@@ -518,17 +543,27 @@ def _segundos_habiles_entre(inicio, fin, horario: dict) -> int:
     total = 0.0
     fecha = inicio.date()
     fecha_fin = fin.date()
+    pausa = horario.get("pausa_comida") or PAUSA_COMIDA_PREDETERMINADA
+    dias_pausa = set(pausa.get("dias") or [])
 
     while fecha <= fecha_fin:
         dia = DIAS_SEMANA[fecha.weekday()]
         config = horario.get(dia) or {}
         if config.get("activo"):
             jornada_inicio = _datetime_dia_hora(fecha, config.get("inicio") or "09:00")
-            jornada_fin = _datetime_dia_hora(fecha, config.get("fin") or "19:00")
+            jornada_fin = _datetime_dia_hora(fecha, config.get("fin") or "18:00")
             desde = max(inicio, jornada_inicio)
             hasta = min(fin, jornada_fin)
             if hasta > desde:
-                total += (hasta - desde).total_seconds()
+                segundos_dia = (hasta - desde).total_seconds()
+                if pausa.get("activo") and dia in dias_pausa:
+                    pausa_inicio = _datetime_dia_hora(fecha, pausa.get("inicio") or "14:00")
+                    pausa_fin = _datetime_dia_hora(fecha, pausa.get("fin") or "15:00")
+                    solape_inicio = max(desde, pausa_inicio)
+                    solape_fin = min(hasta, pausa_fin)
+                    if solape_fin > solape_inicio:
+                        segundos_dia -= (solape_fin - solape_inicio).total_seconds()
+                total += max(0, segundos_dia)
         fecha += timedelta(days=1)
 
     return max(0, int(total))
@@ -901,28 +936,24 @@ def _auditar_con_gemini(
                     ] = item
 
         except Exception as exc:
-            mensaje = str(exc)
-
             logger.exception(
                 "Error en lote de resultados IA %s",
                 indice,
             )
 
-            errores.append(
-                f"Lote {indice}: {mensaje}"
-            )
-
+            mensaje_error = str(exc)
+            errores.append(f"Lote {indice}: {mensaje_error}")
+            mensaje_normalizado = mensaje_error.lower()
             if (
-                "503" in mensaje
-                or "UNAVAILABLE" in mensaje
-                or "high demand" in mensaje.lower()
-                or "504" in mensaje
-                or "DEADLINE_EXCEEDED" in mensaje
+                "503" in mensaje_error
+                or "504" in mensaje_error
+                or "unavailable" in mensaje_normalizado
+                or "high demand" in mensaje_normalizado
+                or "deadline_exceeded" in mensaje_normalizado
             ):
                 errores.append(
-                    "Gemini se encuentra temporalmente saturado. "
-                    "Las conversaciones restantes utilizaron "
-                    "el análisis de respaldo."
+                    "Gemini está temporalmente saturado o agotó su tiempo de respuesta; "
+                    "los lotes restantes utilizaron análisis de respaldo."
                 )
                 break
 
@@ -1017,7 +1048,7 @@ def _campanas_mes(*, inicio, fin, agencia_filtro: str = "") -> list[dict]:
         if agencia_filtro and _grupo_agencia(c.sucursal) != _grupo_agencia(agencia_filtro):
             continue
         gasto = float(c.importe_gastado or 0)
-        resultados = int(c.total_resultados or 0)
+        resultados = int(c.messaging_first_reply or 0)
         salida.append({
             "id_campana": str(c.id_campana),
             "sucursal": _texto(c.sucursal),
@@ -1031,7 +1062,8 @@ def _campanas_mes(*, inicio, fin, agencia_filtro: str = "") -> list[dict]:
             "alcance": int(c.alcance or 0),
             "impresiones": int(c.impresiones or 0),
             "gasto": round(gasto, 2),
-            "costo_resultado": round(float(c.coste_resultados or 0), 2),
+            "costo_resultado": round(gasto / resultados, 2) if resultados else None,
+            "indicador_resultado": "messaging_first_reply",
             "edad_audiencia": _texto(c.edad_audiencia),
             "intereses_audiencia": _texto(c.intereses_audiencia),
             "comportamiento_audiencia": _texto(c.comportamiento_audiencia),
@@ -1040,6 +1072,70 @@ def _campanas_mes(*, inicio, fin, agencia_filtro: str = "") -> list[dict]:
             "resultados_sin_genero": int(c.resultados_sin_genero or 0),
         })
     return salida
+
+def _agregar_metricas_bd(contextos: list[dict], campanas: list[dict]) -> dict:
+    tiempos = [int(ctx["tiempo_primera_respuesta_segundos"]) for ctx in contextos if ctx.get("tiempo_primera_respuesta_segundos") is not None]
+    promedio = round(sum(tiempos) / len(tiempos)) if tiempos else None
+    mediana_t = round(median(tiempos)) if tiempos else None
+    p90 = _percentil(tiempos, .90)
+    gasto_meta = round(sum(float(c.get("gasto") or 0) for c in campanas), 2)
+    resultados_meta = sum(int(c.get("resultados") or 0) for c in campanas)
+
+    por_asesor = defaultdict(lambda: {"conversaciones": 0, "mensajes": 0, "tiempos": [], "citas": 0, "facturados": 0, "agencias": Counter(), "business": Counter()})
+    for ctx in contextos:
+        asesor = ctx.get("asesor") or "Sin asesor"
+        row = por_asesor[asesor]
+        row["conversaciones"] += 1
+        row["mensajes"] += int(ctx.get("mensajes") or 0)
+        row["citas"] += int(bool(ctx.get("tiene_cita")))
+        row["facturados"] += int(bool(ctx.get("facturado")))
+        row["agencias"][ctx.get("agencia") or "Sin agencia"] += 1
+        row["business"][ctx.get("business") or "Sin business"] += 1
+        if ctx.get("tiempo_primera_respuesta_segundos") is not None:
+            row["tiempos"].append(int(ctx["tiempo_primera_respuesta_segundos"]))
+
+    asesores_bd = []
+    for asesor, row in por_asesor.items():
+        prom = round(sum(row["tiempos"]) / len(row["tiempos"])) if row["tiempos"] else None
+        asesores_bd.append({
+            "asesor": asesor,
+            "conversaciones": row["conversaciones"],
+            "mensajes": row["mensajes"],
+            "citas": row["citas"],
+            "facturados": row["facturados"],
+            "tiempo_primera_respuesta_segundos": prom,
+            "tiempo_primera_respuesta_label": _segundos_label(prom),
+            "agencia": row["agencias"].most_common(1)[0][0] if row["agencias"] else "",
+            "business": row["business"].most_common(1)[0][0] if row["business"] else "",
+        })
+    asesores_bd.sort(key=lambda x: (x["tiempo_primera_respuesta_segundos"] is None, x["tiempo_primera_respuesta_segundos"] or 0))
+
+    return {
+        "metricas": {
+            "conversaciones": len(contextos),
+            "mensajes": sum(int(ctx.get("mensajes") or 0) for ctx in contextos),
+            "mensajes_cliente": sum(int(ctx.get("mensajes_cliente") or 0) for ctx in contextos),
+            "mensajes_humanos": sum(int(ctx.get("mensajes_humanos") or 0) for ctx in contextos),
+            "mensajes_ia": sum(int(ctx.get("mensajes_ia") or 0) for ctx in contextos),
+            "citas": sum(int(bool(ctx.get("tiene_cita"))) for ctx in contextos),
+            "facturados": sum(int(bool(ctx.get("facturado"))) for ctx in contextos),
+            "primera_respuesta_promedio_segundos": promedio,
+            "primera_respuesta_promedio_label": _segundos_label(promedio),
+            "primera_respuesta_mediana_segundos": mediana_t,
+            "primera_respuesta_mediana_label": _segundos_label(mediana_t),
+            "primera_respuesta_p90_segundos": p90,
+            "primera_respuesta_p90_label": _segundos_label(p90),
+            "campanas_activas_periodo": len(campanas),
+            "gasto_meta": gasto_meta,
+            "resultados_meta": resultados_meta,
+            "costo_resultado_meta": round(gasto_meta / resultados_meta, 2) if resultados_meta else None,
+            "conversaciones_tiempo_evaluable": sum(1 for ctx in contextos if ctx.get("medicion_tiempo_habilitada")),
+            "conversaciones_tiempo_excluidas": sum(1 for ctx in contextos if not ctx.get("medicion_tiempo_habilitada")),
+            "esperando_inicio_jornada": sum(1 for ctx in contextos if ctx.get("espera_fuera_horario")),
+        },
+        "asesores_bd": asesores_bd,
+        "campanas": campanas,
+    }
 
 def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: list[dict]):
     audit_por_id = {a.get("id"): a for a in auditorias}
@@ -1178,6 +1274,11 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
         "primera_respuesta_p90_label": _segundos_label(p90),
         "campanas_activas_periodo": len(campanas),
         "gasto_meta": round(sum(float(c.get("gasto") or 0) for c in campanas), 2),
+        "resultados_meta": sum(int(c.get("resultados") or 0) for c in campanas),
+        "costo_resultado_meta": (
+            round(sum(float(c.get("gasto") or 0) for c in campanas) / sum(int(c.get("resultados") or 0) for c in campanas), 2)
+            if sum(int(c.get("resultados") or 0) for c in campanas) else None
+        ),
         "conversaciones_tiempo_evaluable": sum(1 for ctx in contextos if ctx.get("medicion_tiempo_habilitada")),
         "conversaciones_tiempo_excluidas": sum(1 for ctx in contextos if not ctx.get("medicion_tiempo_habilitada")),
         "esperando_inicio_jornada": sum(1 for ctx in contextos if ctx.get("espera_fuera_horario")),
@@ -1327,6 +1428,7 @@ def resultados_ia_view(request):
     forzar = _normaliza(request.query_params.get("forzar", "")) in {"1", "true", "si", "yes"}
     agencia = _texto(request.query_params.get("agencia", ""))
     business = _texto(request.query_params.get("business", ""))
+    solo_bd = _normaliza(request.query_params.get("solo_bd", "")) in {"1", "true", "si", "yes"}
 
     firma = (
         MensajeWhatsApp.objects
@@ -1347,7 +1449,7 @@ def resultados_ia_view(request):
         mes, ",".join(sorted(lineas)), _normaliza(agencia) or "todos", _normaliza(business) or "todos",
         firma_config, str(firma.get("total") or 0), str(firma.get("ultimo_id") or 0),
     ])
-    if not forzar:
+    if not solo_bd and not forzar:
         cached = cache.get(cache_key)
         if isinstance(cached, dict):
             cached = {**cached, "cache": True}
@@ -1361,8 +1463,36 @@ def resultados_ia_view(request):
     )
     campanas = _campanas_mes(inicio=inicio, fin=fin, agencia_filtro=agencia)
 
+    if solo_bd:
+        base = _agregar_metricas_bd(contextos, campanas)
+        return Response({
+            "ok": True,
+            "solo_bd": True,
+            "mes": mes,
+            "rango": {"inicio": inicio.isoformat(), "fin_exclusivo": fin.isoformat()},
+            "generado_at": timezone.now().isoformat(),
+            "cobertura": {**cobertura_base, "conversaciones": len(contextos)},
+            **base,
+            "lineas": [
+                {
+                    "numero": numero,
+                    "asesor_digital": _texto(WHATSAPP_LINES.get(numero, {}).get("asesor_digital")),
+                    "agencia": _texto(WHATSAPP_LINES.get(numero, {}).get("agencia")),
+                    "business": _texto(WHATSAPP_LINES.get(numero, {}).get("business")),
+                }
+                for numero in lineas
+            ],
+            "filtros": {"agencia": agencia, "business": business, "numero_asesor": request.query_params.get("numero_asesor", "")},
+            "configuracion_tiempo_respuesta": {
+                "horario": horario_respuesta,
+                "lineas_excluidas": sorted(lineas_excluidas_tiempo),
+                "metodo": "minutos_habiles_con_pausa_comida",
+                "nota": "No se contabilizan horas fuera de jornada ni la pausa de comida configurada.",
+            },
+        })
+
     errores_ia = []
-    limite_ia = time_module.monotonic() + GEMINI_PRESUPUESTO_SEGUNDOS
+    limite_ia = (time_module.monotonic()+ GEMINI_PRESUPUESTO_SEGUNDOS)
     try:
         auditorias, errores_lotes = _auditar_con_gemini(contextos,limite_tiempo=limite_ia,)
         errores_ia.extend(errores_lotes)
@@ -1374,7 +1504,7 @@ def resultados_ia_view(request):
     agregados = _agregar_metricas(contextos, auditorias, campanas)
 
     try:
-        tiempo_disponible = time_module.monotonic() < limite_ia
+        tiempo_disponible = time_module.monotonic()< limite_ia
 
         if contextos and tiempo_disponible:
             ejecutivo = _analisis_ejecutivo_gemini(agregados,auditorias,)
@@ -1429,8 +1559,8 @@ def resultados_ia_view(request):
         "configuracion_tiempo_respuesta": {
             "horario": horario_respuesta,
             "lineas_excluidas": sorted(lineas_excluidas_tiempo),
-            "metodo": "minutos_habiles",
-            "nota": "El tiempo fuera del horario configurado no se suma y una conversación aún fuera de jornada no se penaliza como falta de respuesta.",
+            "metodo": "minutos_habiles_con_pausa_comida",
+            "nota": "El tiempo fuera del horario configurado y la pausa de comida no se suman; una conversación aún fuera de jornada no se penaliza como falta de respuesta.",
         },
     }
 
