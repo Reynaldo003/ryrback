@@ -6,7 +6,8 @@ import logging
 import math
 import re
 from collections import Counter, defaultdict
-from datetime import datetime, time, timedelta
+from datetime import datetime, time as datetime_time, timedelta
+import time as time_module
 from statistics import median
 from typing import Any
 from django.conf import settings
@@ -495,14 +496,16 @@ def _datetime_dia_hora(fecha, hora_texto: str):
         hora = 9
         minuto = 0
 
-    valor = datetime.combine(fecha,time(hour=hora, minute=minuto),)
+    valor = datetime.combine(
+        fecha,
+        datetime_time(hour=hora, minute=minuto),
+    )
 
-    if settings.USE_TZ:
-        if timezone.is_naive(valor):
-            valor = timezone.make_aware(
-                valor,
-                timezone.get_current_timezone(),
-            )
+    if settings.USE_TZ and timezone.is_naive(valor):
+        valor = timezone.make_aware(
+            valor,
+            timezone.get_current_timezone(),
+        )
 
     return valor
 
@@ -846,7 +849,7 @@ def _auditar_con_gemini(
     ):
         if (
             limite_tiempo is not None
-            and time.monotonic() >= limite_tiempo
+            and time_module.monotonic() >= limite_tiempo
         ):
             errores.append(
                 "Se alcanzó el tiempo máximo destinado "
@@ -1343,7 +1346,7 @@ def resultados_ia_view(request):
     campanas = _campanas_mes(inicio=inicio, fin=fin, agencia_filtro=agencia)
 
     errores_ia = []
-    limite_ia = (time.monotonic()+ GEMINI_PRESUPUESTO_SEGUNDOS)
+    limite_ia = time_module.monotonic() + GEMINI_PRESUPUESTO_SEGUNDOS
     try:
         auditorias, errores_lotes = _auditar_con_gemini(contextos,limite_tiempo=limite_ia,)
         errores_ia.extend(errores_lotes)
@@ -1355,7 +1358,7 @@ def resultados_ia_view(request):
     agregados = _agregar_metricas(contextos, auditorias, campanas)
 
     try:
-        tiempo_disponible = time.monotonic()< limite_ia
+        tiempo_disponible = time_module.monotonic() < limite_ia
 
         if contextos and tiempo_disponible:
             ejecutivo = _analisis_ejecutivo_gemini(agregados,auditorias,)
