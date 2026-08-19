@@ -1,3 +1,4 @@
+#Digitales/resultados_ia.py
 from __future__ import annotations
 
 import hashlib
@@ -1424,6 +1425,8 @@ def resultados_ia_view(request):
             ],
         })
 
+    lineas_analisis = [numero for numero in lineas if numero not in lineas_excluidas_tiempo]
+
     mes, inicio, fin = _rango_mes(request.query_params.get("mes", ""))
     forzar = _normaliza(request.query_params.get("forzar", "")) in {"1", "true", "si", "yes"}
     agencia = _texto(request.query_params.get("agencia", ""))
@@ -1432,7 +1435,7 @@ def resultados_ia_view(request):
 
     firma = (
         MensajeWhatsApp.objects
-        .filter(numero_asesor__in=lineas, created_at__gte=inicio, created_at__lt=fin)
+        .filter(numero_asesor__in=lineas_analisis, created_at__gte=inicio, created_at__lt=fin)
         .aggregate(total=Count("id"), ultimo_id=Max("id"), ultimo_at=Max("created_at"))
     )
     firma_config = hashlib.sha1(
@@ -1446,7 +1449,7 @@ def resultados_ia_view(request):
         ).encode("utf-8")
     ).hexdigest()[:12]
     cache_key = "digitales:resultados_ia:" + ":".join([
-        mes, ",".join(sorted(lineas)), _normaliza(agencia) or "todos", _normaliza(business) or "todos",
+        mes, ",".join(sorted(lineas_analisis)), _normaliza(agencia) or "todos", _normaliza(business) or "todos",
         firma_config, str(firma.get("total") or 0), str(firma.get("ultimo_id") or 0),
     ])
     if not solo_bd and not forzar:
@@ -1456,9 +1459,8 @@ def resultados_ia_view(request):
             return Response(cached)
 
     contextos, cobertura_base = _contextos_conversacion(
-        lineas=lineas, inicio=inicio, fin=fin, request=request,
-        es_admin=es_admin, es_coordinador=es_coordinador,
-        horario_respuesta=horario_respuesta,
+        lineas=lineas_analisis, inicio=inicio, fin=fin, request=request,
+        es_admin=es_admin, es_coordinador=es_coordinador, horario_respuesta=horario_respuesta,
         lineas_excluidas_tiempo=lineas_excluidas_tiempo,
     )
     campanas = _campanas_mes(inicio=inicio, fin=fin, agencia_filtro=agencia)
