@@ -1138,6 +1138,57 @@ def _agregar_metricas_bd(contextos: list[dict], campanas: list[dict]) -> dict:
         "campanas": campanas,
     }
 
+def _score_rapidez(segundos) -> float:
+    if segundos is None:
+        return 50.0
+    if segundos <= 15 * 60:
+        return 100.0
+    if segundos <= 30 * 60:
+        return 92.0
+    if segundos <= 60 * 60:
+        return 82.0
+    if segundos <= 2 * 60 * 60:
+        return 70.0
+    if segundos <= 4 * 60 * 60:
+        return 55.0
+    if segundos <= 6 * 60 * 60:
+        return 40.0
+    return 25.0
+
+
+def _deficiencias_resumen_asesor(row: dict, prom_resp) -> list[str]:
+    conversaciones = max(1, row["conversaciones"])
+    salida = []
+
+    if row["sin_humano"] > 0:
+        salida.append(f"{row['sin_humano']} chat(s) sin respuesta humana posterior")
+
+    if prom_resp is not None:
+        if prom_resp > 4 * 60 * 60:
+            salida.append("Promedio de primera respuesta superior a 4 horas")
+        elif prom_resp > 2 * 60 * 60:
+            salida.append("Promedio de primera respuesta superior a 2 horas")
+        elif prom_resp > 60 * 60:
+            salida.append("Promedio de primera respuesta superior a 1 hora")
+
+    extras = []
+    for nombre, total in row["deficiencias"].most_common():
+        nombre_norm = _normaliza(nombre)
+        if "respuesta humana" in nombre_norm:
+            continue
+        if "primera respuesta superior a 4 horas" in nombre_norm:
+            continue
+        if "tiempo de respuesta" in nombre_norm:
+            continue
+        if total < 2:
+            continue
+        if (total / conversaciones) < 0.05:
+            continue
+        extras.append(nombre)
+
+    salida.extend(extras[:4])
+    return salida[:6]
+
 def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: list[dict]):
     audit_por_id = {a.get("id"): a for a in auditorias}
     total = len(contextos)
@@ -1207,7 +1258,22 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
     asesores = []
     for asesor, row in por_asesor.items():
         prom_resp = round(sum(row["tiempos"]) / len(row["tiempos"])) if row["tiempos"] else None
-        score = round(sum(row["puntajes"]) / len(row["puntajes"]), 1) if row["puntajes"] else 0
+        score_calidad = round(sum(row["puntajes"]) / len(row["puntajes"]), 1) if row["puntajes"] else 0.0
+        score_rapidez = _score_rapidez(prom_resp)
+        score_interes = _porcentaje(row["interesados"], row["conversaciones"])
+        penalizacion_sin_respuesta = min(20.0, row["sin_humano"] * 5.0)
+        penalizacion_mal_atendido = min(20.0, _porcentaje(row["mal_atendidos"], row["conversaciones"]) * 0.2)
+
+        score_final = round(
+            (score_calidad * 0.50)
+            + (score_rapidez * 0.30)
+            + (score_interes * 0.20)
+            - penalizacion_sin_respuesta
+            - penalizacion_mal_atendido,
+            1,
+        )
+        score_final = max(0.0, min(100.0, score_final))
+
         asesores.append({
             "asesor": asesor,
             "conversaciones": row["conversaciones"],
@@ -1217,14 +1283,27 @@ def _agregar_metricas(contextos: list[dict], auditorias: list[dict], campanas: l
             "mal_atendidos_pct": _porcentaje(row["mal_atendidos"], row["conversaciones"]),
             "riesgo_alto": row["riesgo_alto"],
             "sin_respuesta_humana": row["sin_humano"],
-            "puntaje_atencion": score,
+            "puntaje_atencion": score_final,
+            "puntaje_base_ia": score_calidad,
+            "score_rapidez": score_rapidez,
+            "score_interes": score_interes,
+            "penalizacion_sin_respuesta": penalizacion_sin_respuesta,
+            "penalizacion_mal_atendido": penalizacion_mal_atendido,
+            "score_detalle": {
+                "calidad_atencion": score_calidad,
+                "rapidez_respuesta": score_rapidez,
+                "aprovechamiento_interes": score_interes,
+                "penalizacion_sin_respuesta": penalizacion_sin_respuesta,
+                "penalizacion_mal_atendido": penalizacion_mal_atendido,
+                "formula": "50% calidad + 30% rapidez + 20% interés - penalizaciones",
+            },
             "tiempo_primera_respuesta_segundos": prom_resp,
             "tiempo_primera_respuesta_label": _segundos_label(prom_resp),
             "citas": row["citas"],
             "facturados": row["facturados"],
             "agencia": row["agencias"].most_common(1)[0][0] if row["agencias"] else "",
             "business": row["business"].most_common(1)[0][0] if row["business"] else "",
-            "deficiencias_principales": [{"nombre": k, "total": v} for k, v in row["deficiencias"].most_common(4)],
+            "deficiencias_principales": [{"nombre": x, "total": None} for x in _deficiencias_resumen_asesor(row, prom_resp)],
         })
     asesores.sort(key=lambda x: (x["mal_atendidos_pct"], -(x["puntaje_atencion"] or 0)), reverse=True)
 
@@ -1394,7 +1473,6 @@ def _fusionar_recomendaciones_campanas(agregados: dict, ejecutivo: dict):
         )), None)
         campana["analisis_ia"] = match or {}
 
-
 @api_view(["GET"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
@@ -1425,6 +1503,7 @@ def resultados_ia_view(request):
             ],
         })
 
+    # Estas sí participarán en el análisis completo.
     lineas_analisis = [numero for numero in lineas if numero not in lineas_excluidas_tiempo]
 
     mes, inicio, fin = _rango_mes(request.query_params.get("mes", ""))
@@ -1438,6 +1517,7 @@ def resultados_ia_view(request):
         .filter(numero_asesor__in=lineas_analisis, created_at__gte=inicio, created_at__lt=fin)
         .aggregate(total=Count("id"), ultimo_id=Max("id"), ultimo_at=Max("created_at"))
     )
+
     firma_config = hashlib.sha1(
         json.dumps(
             {
@@ -1448,10 +1528,17 @@ def resultados_ia_view(request):
             ensure_ascii=True,
         ).encode("utf-8")
     ).hexdigest()[:12]
+
     cache_key = "digitales:resultados_ia:" + ":".join([
-        mes, ",".join(sorted(lineas_analisis)), _normaliza(agencia) or "todos", _normaliza(business) or "todos",
-        firma_config, str(firma.get("total") or 0), str(firma.get("ultimo_id") or 0),
+        mes,
+        ",".join(sorted(lineas_analisis)),
+        _normaliza(agencia) or "todos",
+        _normaliza(business) or "todos",
+        firma_config,
+        str(firma.get("total") or 0),
+        str(firma.get("ultimo_id") or 0),
     ])
+
     if not solo_bd and not forzar:
         cached = cache.get(cache_key)
         if isinstance(cached, dict):
@@ -1459,10 +1546,16 @@ def resultados_ia_view(request):
             return Response(cached)
 
     contextos, cobertura_base = _contextos_conversacion(
-        lineas=lineas_analisis, inicio=inicio, fin=fin, request=request,
-        es_admin=es_admin, es_coordinador=es_coordinador, horario_respuesta=horario_respuesta,
+        lineas=lineas_analisis,
+        inicio=inicio,
+        fin=fin,
+        request=request,
+        es_admin=es_admin,
+        es_coordinador=es_coordinador,
+        horario_respuesta=horario_respuesta,
         lineas_excluidas_tiempo=lineas_excluidas_tiempo,
     )
+
     campanas = _campanas_mes(inicio=inicio, fin=fin, agencia_filtro=agencia)
 
     if solo_bd:
@@ -1494,34 +1587,32 @@ def resultados_ia_view(request):
         })
 
     errores_ia = []
-    limite_ia = (time_module.monotonic()+ GEMINI_PRESUPUESTO_SEGUNDOS)
+    limite_ia = time_module.monotonic() + GEMINI_PRESUPUESTO_SEGUNDOS
+
     try:
-        auditorias, errores_lotes = _auditar_con_gemini(contextos,limite_tiempo=limite_ia,)
+        auditorias, errores_lotes = _auditar_con_gemini(contextos, limite_tiempo=limite_ia)
         errores_ia.extend(errores_lotes)
     except Exception as exc:
         logger.exception("No fue posible iniciar auditoría Gemini de resultados")
         errores_ia.append(str(exc))
-        auditorias = [_fallback_auditoria(ctx) for ctx in contextos        ]
+        auditorias = [_fallback_auditoria(ctx) for ctx in contextos]
 
     agregados = _agregar_metricas(contextos, auditorias, campanas)
 
     try:
-        tiempo_disponible = time_module.monotonic()< limite_ia
-
+        tiempo_disponible = time_module.monotonic() < limite_ia
         if contextos and tiempo_disponible:
-            ejecutivo = _analisis_ejecutivo_gemini(agregados,auditorias,)
+            ejecutivo = _analisis_ejecutivo_gemini(agregados, auditorias)
             ia_ejecutiva = True
-
         else:
             ejecutivo = _fallback_ejecutivo(agregados)
             ia_ejecutiva = False
-
             if contextos:
                 errores_ia.append("El análisis ejecutivo utilizó fallback porque se alcanzó el presupuesto máximo de tiempo IA.")
     except Exception as exc:
         logger.exception("Error generando análisis ejecutivo de resultados")
         errores_ia.append(str(exc))
-        ejecutivo = (_fallback_ejecutivo(agregados))
+        ejecutivo = _fallback_ejecutivo(agregados)
         ia_ejecutiva = False
 
     _fusionar_recomendaciones_asesores(agregados, ejecutivo, auditorias)
