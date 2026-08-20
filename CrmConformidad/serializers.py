@@ -3,6 +3,7 @@ from rest_framework import serializers
 from .models import Cliente, ExpedienteConformidad, ExpedienteDocumento, Usuario, Rol
 from django.contrib.auth.hashers import make_password, check_password
 from django.core import signing
+import re
 
 DEALERS_VALIDOS = [
     "VW Cordoba",
@@ -32,6 +33,58 @@ def limpiar_agencias(valor):
 
     return "|".join(agencias)
 
+def limpiar_telefonos(valor):
+    if not valor: return ""
+
+    telefonos = []
+    for telefono in str(valor).split("|"):
+        telefono = telefono.strip()
+        if not telefono: continue
+
+        numero = re.sub(r"[\s()+-]", "", telefono)
+
+        if not numero.isdigit():
+            raise serializers.ValidationError(f"El teléfono '{telefono}' contiene caracteres inválidos.")
+        if not 8 <= len(numero) <= 15:
+            raise serializers.ValidationError(f"El teléfono '{telefono}' debe contener entre 8 y 15 dígitos.")
+        if numero in telefonos:
+            raise serializers.ValidationError(f"El teléfono '{numero}' está repetido para este usuario.")
+
+        telefonos.append(numero)
+
+    resultado = "|".join(telefonos)
+    if len(resultado) > 100: raise serializers.ValidationError("La cantidad de teléfonos excede el espacio disponible.")
+    return resultado
+
+def validar_nombre_usuario(valor, excluir_id=None):
+    valor = str(valor or "").strip()
+
+    if len(valor) > 10:
+        raise serializers.ValidationError(
+            "El usuario no puede tener más de 10 caracteres."
+        )
+
+    if not re.fullmatch(r"[A-Za-z0-9._-]+", valor):
+        raise serializers.ValidationError(
+            "El usuario solo puede contener letras, números, punto, guion y guion bajo."
+        )
+
+    consulta = Usuario.objects.filter(usuario__iexact=valor)
+
+    if excluir_id:
+        consulta = consulta.exclude(id_usuario=excluir_id)
+
+    if consulta.exists():
+        raise serializers.ValidationError("Ese usuario ya existe.")
+
+    return valor
+
+def validar_correo_usuario(valor, excluir_id=None):
+    valor = str(valor or "").strip().lower()
+    consulta = Usuario.objects.filter(correo__iexact=valor)
+    if excluir_id: consulta = consulta.exclude(id_usuario=excluir_id)
+    if consulta.exists(): raise serializers.ValidationError("Ese correo ya está registrado.")
+    return valor
 
 class ExpedienteDocumentoSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
@@ -256,32 +309,73 @@ class UsuarioLoginSerializer(serializers.Serializer):
         attrs["user"] = user
         return attrs
 
-
 class AdminUsuarioCreateSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=50)
-    apellidos = serializers.CharField(max_length=70, required=False, allow_blank=True, allow_null=True)
+    apellidos = serializers.CharField(
+        max_length=70,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
     usuario = serializers.CharField(max_length=10)
     correo = serializers.EmailField(max_length=255)
+    telefono = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
     contrasena = serializers.CharField(write_only=True)
     agencia = serializers.CharField(max_length=255)
     id_rol = serializers.IntegerField()
 
-    def validate_agencia(self, value):
-        return limpiar_agencias(value)
+    def validate_nombre(self, value):
+        value = value.strip()
+
+        if not value:
+            raise serializers.ValidationError("El nombre es requerido.")
+
+        return value
 
     def validate_usuario(self, value):
-        if Usuario.objects.filter(usuario=value).exists():
-            raise serializers.ValidationError("Ese usuario ya existe.")
-        return value
+        return validar_nombre_usuario(value)
 
     def validate_correo(self, value):
-        if Usuario.objects.filter(correo=value).exists():
-            raise serializers.ValidationError("Ese correo ya existe.")
-        return value
+        return validar_correo_usuario(value)
+
+    def validate_telefono(self, value):
+        return limpiar_telefonos(value)
+
+    def validate_agencia(self, value):
+        return limpiar_agencias(value)
 
     def validate_id_rol(self, value):
         if not Rol.objects.filter(id_rol=value).exists():
             raise serializers.ValidationError("Rol inválido.")
+
+        return value
+
+    def validate_contrasena(self, value):
+        if len(value) < 8:
+            raise serializers.ValidationError(
+                "La contraseña debe tener al menos 8 caracteres."
+            )
+
+        if not re.search(r"[A-Z]", value):
+            raise serializers.ValidationError(
+                "La contraseña debe contener al menos una mayúscula."
+            )
+
+        if not re.search(r"[0-9]", value):
+            raise serializers.ValidationError(
+                "La contraseña debe contener al menos un número."
+            )
+
+        if not re.search(r"[^A-Za-z0-9]", value):
+            raise serializers.ValidationError(
+                "La contraseña debe contener al menos un símbolo."
+            )
+
         return value
 
     def create(self, validated_data):
@@ -292,12 +386,68 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
             apellidos=validated_data.get("apellidos") or "",
             usuario=validated_data["usuario"],
             correo=validated_data["correo"],
+            telefono=validated_data.get("telefono") or "",
             contrasena=make_password(validated_data["contrasena"]),
             rol=rol,
             agencia=validated_data["agencia"],
         )
 
+class AdminUsuarioUpdateSerializer(serializers.Serializer):
+    nombre = serializers.CharField(max_length=50, required=False)
+    apellidos = serializers.CharField(max_length=70, required=False, allow_blank=True, allow_null=True)
+    usuario = serializers.CharField(max_length=10, required=False)
+    correo = serializers.EmailField(max_length=255, required=False)
+    telefono = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
+    contrasena = serializers.CharField(write_only=True, required=False, allow_blank=True)
+    agencia = serializers.CharField(max_length=255, required=False)
+    id_rol = serializers.IntegerField(required=False)
 
+    def validate_nombre(self, value):
+        value = value.strip()
+        if not value: raise serializers.ValidationError("El nombre no puede quedar vacío.")
+        return value
+
+    def validate_usuario(self, value):
+        return validar_nombre_usuario(value, excluir_id=self.instance.id_usuario)
+
+    def validate_correo(self, value):
+        return validar_correo_usuario(value, excluir_id=self.instance.id_usuario)
+
+    def validate_telefono(self, value):
+        return limpiar_telefonos(value)
+
+    def validate_agencia(self, value):
+        value = limpiar_agencias(value)
+        if not value: raise serializers.ValidationError("Selecciona al menos una agencia.")
+        return value
+
+    def validate_id_rol(self, value):
+        if not Rol.objects.filter(id_rol=value).exists(): raise serializers.ValidationError("Rol inválido.")
+        return value
+
+    def validate_contrasena(self, value):
+        if not value: return ""
+        if len(value) < 8: raise serializers.ValidationError("La contraseña debe tener al menos 8 caracteres.")
+        if not re.search(r"[A-Z]", value): raise serializers.ValidationError("La contraseña debe contener al menos una mayúscula.")
+        if not re.search(r"[0-9]", value): raise serializers.ValidationError("La contraseña debe contener al menos un número.")
+        if not re.search(r"[^A-Za-z0-9]", value): raise serializers.ValidationError("La contraseña debe contener al menos un símbolo.")
+        return value
+
+    def update(self, instance, validated_data):
+        if "nombre" in validated_data: instance.nombre = validated_data["nombre"].strip()
+        if "apellidos" in validated_data: instance.apellidos = (validated_data.get("apellidos") or "").strip()
+        if "usuario" in validated_data: instance.usuario = validated_data["usuario"].strip()
+        if "correo" in validated_data: instance.correo = validated_data["correo"].strip().lower()
+        if "telefono" in validated_data: instance.telefono = validated_data.get("telefono") or ""
+        if "agencia" in validated_data: instance.agencia = validated_data["agencia"]
+        if "id_rol" in validated_data: instance.rol = Rol.objects.get(id_rol=validated_data["id_rol"])
+
+        contrasena = validated_data.get("contrasena")
+        if contrasena: instance.contrasena = make_password(contrasena)
+
+        instance.save()
+        return instance
+    
 def generar_token_usuario(id_usuario: int) -> str:
     signer = signing.TimestampSigner()
     return signer.sign(str(id_usuario))

@@ -20,7 +20,7 @@ from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
 from rest_framework import status, viewsets
-from rest_framework.decorators import api_view, permission_classes, parser_classes, authentication_classes
+from rest_framework.decorators import api_view, permission_classes, parser_classes, authentication_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
@@ -42,7 +42,7 @@ from .models import (
     CatalogoVehiculos,
     ControlRepartoWhatsApp,
 )
-from .serializers import ProspectoSerializer, WhatsAppMessageSerializer
+from .serializers import ProspectoSerializer, WhatsAppMessageSerializer, EvidenciaProspectoDigitalSerializer
 from .services import generar_y_guardar_resumen, debe_generar_resumen_al_llegar_a_6
 from .contacto import (
     obtener_mensaje_whatsapp,
@@ -226,15 +226,14 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         )
 
         if es_admin:
-            if (
-                accion in {
-                    "retrieve",
-                    "update",
-                    "partial_update",
-                    "destroy",
-                }
-                or self._solicita_todos()
-            ):
+            if accion in {
+                "retrieve",
+                "update",
+                "partial_update",
+                "destroy",
+                "evidencias",
+                "eliminar_evidencia",
+            } or self._solicita_todos():
                 return self._base_queryset()
 
         numero_asesor = (
@@ -286,6 +285,49 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             antes=antes,
             request=self.request,
         )
+
+    @action(detail=True, methods=["get", "post"], url_path="evidencias", parser_classes=[MultiPartParser, FormParser])
+    def evidencias(self, request, pk=None):
+        expediente = self.get_object()
+
+        if request.method == "GET":
+            queryset = expediente.evidencias.all().order_by("-creado")
+            serializer = EvidenciaProspectoDigitalSerializer(queryset, many=True, context={"request": request})
+            return Response(serializer.data, status=status.HTTP_200_OK)
+
+        archivos = request.FILES.getlist("archivos")
+        if not archivos:
+            return Response({"detail": "No se recibieron archivos."}, status=status.HTTP_400_BAD_REQUEST)
+
+        usuario = _usuario_login(getattr(request, "user", None))
+        evidencias_creadas = []
+
+        for archivo in archivos:
+            evidencia = expediente.evidencias.create(
+                archivo=archivo,
+                nombre_original=getattr(archivo, "name", "") or "",
+                mime_type=getattr(archivo, "content_type", "") or "",
+                size_bytes=getattr(archivo, "size", 0) or 0,
+                subido_por=usuario,
+            )
+            evidencias_creadas.append(evidencia)
+
+        serializer = EvidenciaProspectoDigitalSerializer(evidencias_creadas, many=True, context={"request": request})
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=["delete"], url_path=r"evidencias/(?P<evidencia_id>\d+)")
+    def eliminar_evidencia(self, request, pk=None, evidencia_id=None):
+        expediente = self.get_object()
+        evidencia = expediente.evidencias.filter(pk=evidencia_id).first()
+
+        if not evidencia:
+            return Response({"detail": "La evidencia no existe o no pertenece a este prospecto."}, status=status.HTTP_404_NOT_FOUND)
+
+        if evidencia.archivo:
+            evidencia.archivo.delete(save=False)
+
+        evidencia.delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
         
 # ── Vistas simples ────────────────────────────────────────────────────────────
 

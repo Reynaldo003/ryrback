@@ -12,13 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .jwt_authentication import CRMJWTAuthentication
 from .models import ExpedienteConformidad, ExpedienteDocumento, Usuario, Rol
 from .permissions import IsAdminRole
-from .serializers import (
-    CasoSerializer,
-    ExpedienteDocumentoSerializer,
-    UsuarioRegisterSerializer,
-    UsuarioLoginSerializer,
-    AdminUsuarioCreateSerializer,
-)
+from .serializers import CasoSerializer, ExpedienteDocumentoSerializer, UsuarioRegisterSerializer, UsuarioLoginSerializer, AdminUsuarioCreateSerializer, AdminUsuarioUpdateSerializer
 
 
 # ============================================================
@@ -373,54 +367,60 @@ class AdminPermisosCatalogView(APIView):
 
         return Response(data)
 
+def serializar_usuario_admin(u):
+    return {
+        "id": u.id_usuario,
+        "id_usuario": u.id_usuario,
+        "nombre": u.nombre,
+        "apellidos": u.apellidos,
+        "usuario": u.usuario,
+        "correo": u.correo,
+        "estado": "Activo",
+        "agencia": u.agencia,
+        "telefono": u.telefono or "",
+        "id_rol": u.rol.id_rol if u.rol else None,
+        "nombre_rol": u.rol.nombre if u.rol else "",
+    }
 
 class AdminUsuariosCreateView(APIView):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated, IsAdminRole]
+    parser_classes = [MultiPartParser, FormParser]
 
     def get(self, request):
         usuarios = Usuario.objects.select_related("rol").all().order_by("id_usuario")
-
-        data = [
-            {
-                "id": u.id_usuario,
-                "id_usuario": u.id_usuario,
-                "nombre": u.nombre,
-                "apellidos": u.apellidos,
-                "usuario": u.usuario,
-                "correo": u.correo,
-                "estado": "Activo",
-                "agencia": u.agencia,
-                "telefono": u.telefono,
-                "id_rol": u.rol.id_rol if u.rol else None,
-                "nombre_rol": u.rol.nombre if u.rol else "",
-            }
-            for u in usuarios
-        ]
-
-        return Response(data)
+        return Response([serializar_usuario_admin(u) for u in usuarios])
 
     def post(self, request):
         ser = AdminUsuarioCreateSerializer(data=request.data)
+        if not ser.is_valid(): return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
-        if not ser.is_valid():
-            return Response(
-                ser.errors,
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+        usuario = ser.save()
+        return Response(serializar_usuario_admin(usuario), status=status.HTTP_201_CREATED)
 
-        u = ser.save()
+class AdminUsuarioDetailView(APIView):
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminRole]
+    parser_classes = [MultiPartParser, FormParser]
 
-        return Response(
-            {
-                "id_usuario": u.id_usuario,
-                "usuario": u.usuario,
-                "correo": u.correo,
-                "rol": u.rol.nombre if u.rol else "",
-                "agencia": u.agencia,
-            },
-            status=status.HTTP_201_CREATED,
-        )
+    def get_object(self, pk):
+        return get_object_or_404(Usuario.objects.select_related("rol"), id_usuario=pk)
+
+    def get(self, request, pk):
+        return Response(serializar_usuario_admin(self.get_object(pk)))
+
+    @transaction.atomic
+    def patch(self, request, pk):
+        usuario = self.get_object(pk)
+        ser = AdminUsuarioUpdateSerializer(usuario, data=request.data, partial=True)
+
+        if not ser.is_valid(): return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+
+        usuario = ser.save()
+        usuario.refresh_from_db()
+        usuario = Usuario.objects.select_related("rol").get(id_usuario=usuario.id_usuario)
+
+        return Response(serializar_usuario_admin(usuario), status=status.HTTP_200_OK)
     
 class PerfilUsuarioView(APIView):
     permission_classes = [IsAuthenticated]
