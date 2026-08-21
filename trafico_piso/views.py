@@ -12,9 +12,12 @@ from CrmConformidad.models import Usuario
 from .models import TraficoPiso
 from .serializers import TraficoPisoSerializer
 
+from .pagination import TraficoPisoPagination
+
 
 class TraficoPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
+    pagination_class = TraficoPisoPagination
 
     queryset = TraficoPiso.objects.all()
     serializer_class = TraficoPisoSerializer
