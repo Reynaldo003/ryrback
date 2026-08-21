@@ -757,54 +757,77 @@ class EntregasViewSet(ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         params = self.request.query_params
-        queryset = _filtrar_por_mes(queryset, "fecha_hora_entrega", params.get("mes"))
+
+        queryset = _filtrar_por_mes(
+            queryset,
+            "fecha_hora_entrega",
+            params.get("mes"),
+        )
 
         agencia = str(params.get("agencia") or "").strip()
         asesor_ventas = str(params.get("asesor_ventas") or "").strip()
         tipo_venta = str(params.get("tipo_venta") or "").strip()
+
         if agencia:
-            queryset = queryset.filter(agencia__iexact=agencia)
-            if tipo_venta:
-             queryset = queryset.filter(tipo_venta__iexact=tipo_venta)
+            queryset = queryset.filter(
+                agencia__iexact=agencia
+            )
+
+        if tipo_venta:
+            queryset = queryset.filter(
+                tipo_venta__iexact=tipo_venta
+            )
+
         if asesor_ventas:
-            queryset = queryset.filter(asesor_ventas__iexact=asesor_ventas)
+            queryset = queryset.filter(
+                asesor_ventas__iexact=asesor_ventas
+            )
+
         if _param_bool(params.get("solo_reportadas")):
-            queryset = queryset.filter(entrega_reportada=True)
+            queryset = queryset.filter(
+                entrega_reportada=True
+            )
 
-            search = str(params.get("search") or "").strip()
+        search = str(params.get("search") or "").strip()
 
-            if search:
-                from django.db.models import Q
+        if search:
+            from django.db.models import Q
 
-                queryset = queryset.filter(
-                    Q(cliente__nombre__icontains=search)
-                    | Q(cliente__telefono__icontains=search)
-                    | Q(agencia__icontains=search)
-                    | Q(vin__icontains=search)
-                    | Q(modelo_version__icontains=search)
-                    | Q(version__icontains=search)
-                    | Q(color__icontains=search)
-                    | Q(asesor_ventas__icontains=search)
-                    | Q(preparada_por__icontains=search)
-                    | Q(id_cliente_sf_nadin__icontains=search)
-                    | Q(id_cliente_sf_dms__icontains=search)
-                    | Q(comentarios__icontains=search)
-                )
+            queryset = queryset.filter(
+                Q(cliente__nombre__icontains=search)
+                | Q(cliente__telefono__icontains=search)
+                | Q(agencia__icontains=search)
+                | Q(vin__icontains=search)
+                | Q(modelo_version__icontains=search)
+                | Q(version__icontains=search)
+                | Q(color__icontains=search)
+                | Q(asesor_ventas__icontains=search)
+                | Q(preparada_por__icontains=search)
+                | Q(id_cliente_sf_nadin__icontains=search)
+                | Q(id_cliente_sf_dms__icontains=search)
+                | Q(comentarios__icontains=search)
+            )
 
-            fecha_desde = str(params.get("fecha_desde") or "").strip()
-            fecha_hasta = str(params.get("fecha_hasta") or "").strip()
+        fecha_desde = str(
+            params.get("fecha_desde") or ""
+        ).strip()
 
-            if fecha_desde:
-                queryset = queryset.filter(
-                    fecha_hora_entrega__date__gte=fecha_desde
-                )
+        fecha_hasta = str(
+            params.get("fecha_hasta") or ""
+        ).strip()
 
-            if fecha_hasta:
-                queryset = queryset.filter(
-                    fecha_hora_entrega__date__lte=fecha_hasta
-                )
+        if fecha_desde:
+            queryset = queryset.filter(
+                fecha_hora_entrega__date__gte=fecha_desde
+            )
+
+        if fecha_hasta:
+            queryset = queryset.filter(
+                fecha_hora_entrega__date__lte=fecha_hasta
+            )
+
         return queryset
-
+   
     def get_authenticators(self):
         return [] if getattr(self, "action", None) in self.acciones_publicas else [CRMJWTAuthentication()]
 
