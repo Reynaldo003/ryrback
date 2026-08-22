@@ -1,12 +1,11 @@
 #volkswagen
 # Digitales/serializers.py
 from datetime import timedelta
-
+import re
 from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
-
 from citas.models import ClienteComercial, normaliza_tel_mx
 from .models import ExpedienteDigital, MensajeWhatsApp, EvidenciaProspectoDigital
 
@@ -104,6 +103,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
 
     attachments = serializers.SerializerMethodField()
     origin_preview = serializers.SerializerMethodField()
+    error_message = serializers.SerializerMethodField()
 
     class Meta:
         model = MensajeWhatsApp
@@ -117,6 +117,7 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             "wa_message_id",
             "reply_to_message_id",
             "status",
+            "error_message",
             "raw",
             "created_at",
             "time",
@@ -204,6 +205,59 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
             path = f"{path}?numero_asesor={numero_asesor}"
 
         return absolute_backend_url(path)
+
+    def get_error_message(self, obj):
+        if str(obj.status or "").strip().lower() != "failed":
+            return ""
+
+        raw = obj.raw if isinstance(obj.raw, dict) else {}
+
+        errors = raw.get("errors")
+
+        if not isinstance(errors, list) or not errors:
+            status_payload = raw.get("status_payload")
+            status_payload = status_payload if isinstance(status_payload, dict) else {}
+            errors = status_payload.get("errors")
+
+        errors = errors if isinstance(errors, list) else []
+        error = errors[0] if errors and isinstance(errors[0], dict) else {}
+
+        error_data = error.get("error_data")
+        error_data = error_data if isinstance(error_data, dict) else {}
+
+        details = str(error_data.get("details") or "").strip()
+        title = str(error.get("title") or error.get("message") or "").strip()
+
+        if details:
+            # Caso Meta:
+            # "Mensaje... Visit https://... to resolve this issue."
+            details = re.sub(
+                r"\s*Visit\s+https?://\S+\s+to resolve this issue\.?\s*$",
+                "",
+                details,
+                flags=re.IGNORECASE,
+            )
+
+            # Seguridad adicional por si Meta cambia el formato.
+            details = re.sub(r"https?://\S+", "", details)
+            details = re.sub(r"\s{2,}", " ", details).strip()
+
+            if details:
+                return details
+
+        meta = raw.get("meta")
+        meta = meta if isinstance(meta, dict) else {}
+
+        meta_media = raw.get("meta_media")
+        meta_media = meta_media if isinstance(meta_media, dict) else {}
+
+        return (
+            title
+            or str(meta.get("meta_message") or "").strip()
+            or str(meta_media.get("message") or "").strip()
+            or str(raw.get("error") or "").strip()
+            or "No se pudo entregar el mensaje."
+        )
 
     @staticmethod
     def _safe_dict(value):
