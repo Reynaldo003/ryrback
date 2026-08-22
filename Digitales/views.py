@@ -3065,10 +3065,13 @@ def enviar_plantilla_view(request):
             status="accepted",
             raw={
                 "provider": "meta",
+                "type": "template",
                 "send": wa_res,
                 "numero_asesor": numero_asesor,
                 "template_name": template_name,
                 "idioma": idioma,
+                "params": params or [],
+                "components": components or [],
                 "origen": "asesor_humano",
             },
         )

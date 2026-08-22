@@ -150,12 +150,26 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
 
     def get_is_media(self, obj):
         raw = obj.raw or {}
-
-        if raw.get("meta_type") in ("image", "video", "audio", "document", "sticker"):
+        if not isinstance(raw, dict):
+            return False
+        if raw.get("meta_type") in ("image","video","audio","document","sticker",):
             return True
+        components = raw.get("components") or []
+        if isinstance(components,list,):
+            for component in components:
+                if not isinstance(component,dict,):
+                    continue
+                if str(component.get("type")or "").lower() != "header":
+                    continue
+                for parameter in (component.get("parameters")or []):
+                    if not isinstance(parameter,dict,):
+                        continue
+                    if str(parameter.get("type") or "").lower() in ("image","video","document",):
+                        return True
 
         body = (obj.body or "").strip()
-        return body.startswith("[FILE:") or "\n[FILE:" in body
+
+        return (body.startswith("[FILE:") or "\n[FILE:" in body)
 
     def get_is_ai(self, obj):
         raw = obj.raw or {}
@@ -357,51 +371,209 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
 
         if not isinstance(raw, dict):
             return []
+        components = raw.get("components") or []
 
-        # Archivos enviados desde el CRM: subir_media_whatsapp()
-        # En views.py se guarda como "meta_upload".
-        upload = raw.get("meta_upload") or raw.get("upload") or {}
+        if isinstance(components, list):
+            for component in components:
+                if not isinstance(component, dict):
+                    continue
 
-        if upload and raw.get("meta_type"):
-            media_id = upload.get("id") or raw.get("media_id") or ""
-            kind = raw.get("meta_type")
+                if str(component.get("type") or "").lower() != "header":
+                    continue
 
-            local_url = (
+                parameters = component.get("parameters") or []
+
+                if not isinstance(parameters, list):
+                    continue
+
+                for parameter in parameters:
+                    if not isinstance(parameter, dict):
+                        continue
+
+                    media_type = str(
+                        parameter.get("type") or ""
+                    ).lower().strip()
+
+                    if media_type not in (
+                        "image",
+                        "video",
+                        "document",
+                    ):
+                        continue
+
+                    media_data = parameter.get(
+                        media_type
+                    ) or {}
+
+                    if not isinstance(
+                        media_data,
+                        dict,
+                    ):
+                        continue
+
+                    media_id = str(
+                        media_data.get("id") or ""
+                    ).strip()
+
+                    media_link = str(
+                        media_data.get("link") or ""
+                    ).strip()
+
+                    filename = str(
+                        media_data.get("filename")
+                        or raw.get("filename")
+                        or ""
+                    ).strip()
+
+                    default_mime = {
+                        "image": "image/jpeg",
+                        "video": "video/mp4",
+                        "document": "application/pdf",
+                    }.get(
+                        media_type,
+                        "",
+                    )
+
+                    if media_id:
+                        return [
+                            {
+                                "id": media_id,
+                                "kind": (
+                                    "file"
+                                    if media_type == "document"
+                                    else media_type
+                                ),
+                                "url": self._media_proxy_url(
+                                    media_id,
+                                    obj,
+                                ),
+                                "mime": str(
+                                    media_data.get("mime_type")
+                                    or raw.get("content_type")
+                                    or default_mime
+                                ),
+                                "name": filename,
+                                "size": int(
+                                    media_data.get("size")
+                                    or raw.get("size")
+                                    or 0
+                                ),
+                            }
+                        ]
+
+                    if media_link:
+                        return [
+                            {
+                                "id": media_link,
+                                "kind": (
+                                    "file"
+                                    if media_type == "document"
+                                    else media_type
+                                ),
+                                "url": absolute_backend_url(
+                                    media_link
+                                ),
+                                "mime": str(
+                                    media_data.get("mime_type")
+                                    or default_mime
+                                ),
+                                "name": filename,
+                                "size": int(
+                                    media_data.get("size")
+                                    or 0
+                                ),
+                            }
+                        ]
+        upload = (
+            raw.get("meta_upload")
+            or raw.get("upload")
+            or {}
+        )
+
+        if (
+            isinstance(upload, dict)
+            and upload
+            and raw.get("meta_type")
+        ):
+            media_id = str(
+                upload.get("id")
+                or raw.get("media_id")
+                or ""
+            ).strip()
+
+            kind = str(
+                raw.get("meta_type")
+                or ""
+            ).lower()
+
+            local_url = str(
                 raw.get("media_link")
                 or raw.get("document_link")
                 or raw.get("local_media_url")
                 or ""
-            )
+            ).strip()
 
             if local_url:
                 return [
                     {
                         "id": media_id or local_url,
-                        "kind": "file" if kind == "document" else kind,
-                        "url": absolute_backend_url(local_url),
-                        "mime": raw.get("content_type") or "",
-                        "name": raw.get("filename") or "",
-                        "size": 0,
+                        "kind": (
+                            "file"
+                            if kind == "document"
+                            else kind
+                        ),
+                        "url": absolute_backend_url(
+                            local_url
+                        ),
+                        "mime": raw.get(
+                            "content_type"
+                        ) or "",
+                        "name": raw.get(
+                            "filename"
+                        ) or "",
+                        "size": int(
+                            raw.get("size")
+                            or 0
+                        ),
                     }
                 ]
 
             if media_id:
-                url = self._media_proxy_url(media_id, obj)
-
                 return [
                     {
                         "id": media_id,
-                        "kind": "file" if kind == "document" else kind,
-                        "url": url,
-                        "mime": raw.get("content_type") or "",
-                        "name": raw.get("filename") or "",
-                        "size": 0,
+                        "kind": (
+                            "file"
+                            if kind == "document"
+                            else kind
+                        ),
+                        "url": self._media_proxy_url(
+                            media_id,
+                            obj,
+                        ),
+                        "mime": raw.get(
+                            "content_type"
+                        ) or "",
+                        "name": raw.get(
+                            "filename"
+                        ) or "",
+                        "size": int(
+                            raw.get("size")
+                            or 0
+                        ),
                     }
                 ]
+        if raw.get("meta_type") in (
+            "image",
+            "video",
+            "audio",
+            "document",
+            "sticker",
+        ):
+            kind = raw.get(
+                "meta_type"
+            )
 
-        # Archivos enviados por link desde catálogo/IA.
-        if raw.get("meta_type") in ("image", "video", "audio", "document", "sticker"):
-            kind = raw.get("meta_type")
             media_url = (
                 raw.get("media_link")
                 or raw.get("document_link")
@@ -416,39 +588,96 @@ class WhatsAppMessageSerializer(serializers.ModelSerializer):
                     "audio": "audio/mpeg",
                     "document": "application/pdf",
                     "sticker": "image/webp",
-                }.get(kind, "")
+                }.get(
+                    kind,
+                    "",
+                )
 
                 return [
                     {
-                        "id": raw.get("wa_message_id") or raw.get("filename") or media_url,
-                        "kind": "file" if kind == "document" else kind,
-                        "url": absolute_backend_url(media_url),
-                        "mime": raw.get("content_type") or default_mime,
-                        "name": raw.get("filename") or "",
-                        "size": 0,
+                        "id": (
+                            raw.get("wa_message_id")
+                            or raw.get("filename")
+                            or media_url
+                        ),
+                        "kind": (
+                            "file"
+                            if kind == "document"
+                            else kind
+                        ),
+                        "url": absolute_backend_url(
+                            media_url
+                        ),
+                        "mime": (
+                            raw.get("content_type")
+                            or default_mime
+                        ),
+                        "name": (
+                            raw.get("filename")
+                            or ""
+                        ),
+                        "size": int(
+                            raw.get("size")
+                            or 0
+                        ),
                     }
                 ]
+        message_type = str(
+            raw.get("type")
+            or ""
+        ).lower()
 
-        # Archivos entrantes desde webhook Meta.
-        message_type = (raw.get("type") or "").lower()
+        if message_type in (
+            "image",
+            "video",
+            "audio",
+            "document",
+            "sticker",
+        ):
+            payload = raw.get(
+                message_type
+            ) or {}
 
-        if message_type in ("image", "video", "audio", "document", "sticker"):
-            payload = raw.get(message_type) or {}
-            media_id = payload.get("id") or ""
+            if not isinstance(
+                payload,
+                dict,
+            ):
+                payload = {}
+
+            media_id = str(
+                payload.get("id")
+                or ""
+            ).strip()
 
             if media_id:
-                url = self._media_proxy_url(media_id, obj)
-                name = payload.get("filename") or ""
-                mime = payload.get("mime_type") or ""
-
                 return [
                     {
                         "id": media_id,
-                        "kind": "sticker" if message_type == "sticker" else ("file" if message_type == "document" else message_type),
-                        "url": url,
-                        "mime": mime,
-                        "name": name,
-                        "size": 0,
+                        "kind": (
+                            "sticker"
+                            if message_type == "sticker"
+                            else (
+                                "file"
+                                if message_type == "document"
+                                else message_type
+                            )
+                        ),
+                        "url": self._media_proxy_url(
+                            media_id,
+                            obj,
+                        ),
+                        "mime": (
+                            payload.get("mime_type")
+                            or ""
+                        ),
+                        "name": (
+                            payload.get("filename")
+                            or ""
+                        ),
+                        "size": int(
+                            payload.get("size")
+                            or 0
+                        ),
                     }
                 ]
 
