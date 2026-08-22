@@ -31,6 +31,7 @@ from .views import (
     bloquear_contacto_whatsapp_view,
     desbloquear_contacto_whatsapp_view,
     plantilla_whatsapp_admin_media_view,
+    subir_media_plantilla_view,
 )
 
 
@@ -79,7 +80,8 @@ urlpatterns = [
     path("mensajes/enviar/", enviar_mensaje_view),
     path("mensajes/enviar-media/", enviar_media_view),
     path("mensajes/enviar-plantilla/", enviar_plantilla_view),
-
+    path("mensajes/plantillas/subir-media/", subir_media_plantilla_view,),
+    
     path("mensajes/plantillas/", plantillas_whatsapp_view),
 
     path("mensajes/plantillas/admin/",plantillas_whatsapp_admin_view,),

@@ -93,6 +93,7 @@ from .asignacion_asesores import (
 
 from django.http import JsonResponse
 
+
 TOKEN = "CBAR&RVOLKS"
 logger = logging.getLogger(__name__)
 _cat_logger = logging.getLogger(__name__)
@@ -3440,7 +3441,213 @@ def plantillas_whatsapp_admin_view(request):
         logger.exception("ERROR CREANDO PLANTILLA META | numero=%s error=%s", numero_asesor, exc)
         return Response({"ok": False, "error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
+TEMPLATE_MEDIA_RULES = {
+    "image": {
+        "mime": {
+            "image/jpeg",
+            "image/png",
+        },
+        "max_bytes": 5 * 1024 * 1024,
+        "max_label": "5 MB",
+    },
+    "video": {
+        "mime": {
+            "video/mp4",
+        },
+        "max_bytes": 16 * 1024 * 1024,
+        "max_label": "16 MB",
+    },
+    "document": {
+        "mime": {
+            "application/pdf",
+        },
+        "max_bytes": 100 * 1024 * 1024,
+        "max_label": "100 MB",
+    },
+}
 
+
+@api_view(["POST"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
+@parser_classes([MultiPartParser, FormParser])
+def subir_media_plantilla_view(request):
+    numero_asesor = _get_numero_asesor_request(
+        request
+    )
+
+    file_obj = request.FILES.get(
+        "file"
+    )
+
+    media_type = str(
+        request.data.get(
+            "media_type",
+            ""
+        )
+    ).lower().strip()
+
+    if not file_obj:
+        return Response(
+            {
+                "ok": False,
+                "error": "Falta el archivo.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    rule = TEMPLATE_MEDIA_RULES.get(
+        media_type
+    )
+
+    if not rule:
+        return Response(
+            {
+                "ok": False,
+                "error": "Tipo multimedia no válido.",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    filename = str(
+        getattr(
+            file_obj,
+            "name",
+            "archivo"
+        )
+    )
+
+    content_type = str(
+        getattr(
+            file_obj,
+            "content_type",
+            ""
+        )
+        or mimetypes.guess_type(
+            filename
+        )[0]
+        or ""
+    ).lower()
+
+    if content_type not in rule["mime"]:
+        return Response(
+            {
+                "ok": False,
+                "error": (
+                    f"Formato no permitido "
+                    f"para {media_type}."
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    file_size = int(
+        getattr(
+            file_obj,
+            "size",
+            0
+        )
+        or 0
+    )
+
+    if file_size > rule["max_bytes"]:
+        return Response(
+            {
+                "ok": False,
+                "error": (
+                    "El archivo supera "
+                    f"el límite de "
+                    f"{rule['max_label']}."
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        try:
+            file_obj.seek(0)
+        except Exception:
+            pass
+
+        result = subir_media_whatsapp(
+            file_obj,
+            numero_asesor=numero_asesor,
+            filename=filename,
+            content_type=content_type,
+        )
+
+        media_id = str(
+            result.get("id") or ""
+        ).strip()
+
+        if not media_id:
+            raise RuntimeError(
+                "Meta no regresó media_id."
+            )
+
+        return Response(
+            {
+                "ok": True,
+                "media_id": media_id,
+                "id": media_id,
+                "media_type": media_type,
+                "filename": filename,
+                "mime": content_type,
+                "size": file_size,
+                "numero_asesor":
+                    numero_asesor,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except MetaAPIError as error:
+        logger.warning(
+            (
+                "FALLO SUBIR MEDIA PLANTILLA | "
+                "numero_asesor=%s "
+                "media_type=%s "
+                "filename=%s "
+                "error=%s"
+            ),
+            numero_asesor,
+            media_type,
+            filename,
+            str(error),
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": getattr(
+                    error,
+                    "meta_message",
+                    str(error),
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    except Exception as error:
+        logger.exception(
+            (
+                "ERROR SUBIR MEDIA PLANTILLA | "
+                "numero_asesor=%s "
+                "media_type=%s "
+                "filename=%s"
+            ),
+            numero_asesor,
+            media_type,
+            filename,
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": str(error),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+    
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
