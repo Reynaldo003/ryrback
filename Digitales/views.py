@@ -2350,6 +2350,17 @@ def contacto_updates(request):
     except (TypeError, ValueError):
         after_id = 0
     limit = _int_param(request, "limit", 50, 1, 100)
+    tracked_ids_raw = str(request.query_params.get("tracked_ids", "") or "").strip()
+    tracked_ids = []
+
+    if tracked_ids_raw:
+        for value in tracked_ids_raw.split(","):
+            try:
+                tracked_ids.append(int(value))
+            except (TypeError, ValueError):
+                continue
+
+        tracked_ids = tracked_ids[:100]
     if not tel:
         return Response({"ok": False, "error": "Falta tel"}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2369,9 +2380,31 @@ def contacto_updates(request):
         qs = qs.none()
 
     mensajes = list(qs[:limit])
+
+    status_updates = []
+    if tracked_ids:
+        status_updates = list(
+            MensajeWhatsApp.objects.filter(
+                id__in=tracked_ids,
+                telefono=tel,
+                numero_asesor=numero_asesor,
+                direction=MensajeWhatsApp.Direccion.OUT,
+            )
+        )
+
     return Response({
-        "ok": True, "numero_asesor_activo": numero_asesor,
-        "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data,
+        "ok": True,
+        "numero_asesor_activo": numero_asesor,
+        "mensajes": WhatsAppMessageSerializer(
+            mensajes,
+            many=True,
+            context={"request": request},
+        ).data,
+        "status_updates": WhatsAppMessageSerializer(
+            status_updates,
+            many=True,
+            context={"request": request},
+        ).data,
         "server_now": timezone.now().isoformat(),
     }, status=status.HTTP_200_OK)
 
