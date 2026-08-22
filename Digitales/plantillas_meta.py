@@ -13,6 +13,21 @@ from .sett import GRAPH_VERSION
 
 CACHE_PREFIX = "whatsapp_templates"
 
+HEADER_MEDIA_RULES = {
+    "IMAGE": {
+        "mime": {"image/jpeg", "image/png"},
+        "max_bytes": 5 * 1024 * 1024,
+    },
+    "VIDEO": {
+        "mime": {"video/mp4"},
+        "max_bytes": 16 * 1024 * 1024,
+    },
+    "DOCUMENT": {
+        "mime": {"application/pdf"},
+        "max_bytes": 100 * 1024 * 1024,
+    },
+}
+
 REGLAS_UTILITY = [
     "Debe responder a una acción o solicitud específica que el cliente ya realizó.",
     "Debe informar, confirmar o actualizar un proceso existente: cita, pedido, pago, servicio, documento o solicitud.",
@@ -349,8 +364,8 @@ def analizar_estructura_plantilla(
                 errores.append("buttons debe ser una lista.")
                 buttons = []
 
-            if len(buttons) > 3:
-                errores.append("Este editor permite como máximo 3 botones por plantilla.")
+            if len(buttons) > 10:
+                errores.append("La plantilla permite como máximo 10 botones.")
 
             textos_botones: list[str] = []
             tipos_botones: list[str] = []
@@ -509,6 +524,188 @@ def _waba_id(cfg: dict) -> str:
         raise ValueError("Esta línea no tiene waba_id configurado en WHATSAPP_LINES.")
     return value
 
+def subir_media_plantilla_meta(
+    numero_asesor: str,
+    archivo,
+    formato: str = "",
+) -> dict:
+    if not archivo:
+        raise ValueError(
+            "No se recibió ningún archivo."
+        )
+
+    formato = str(
+        formato or ""
+    ).strip().upper()
+
+    if formato not in HEADER_MEDIA_RULES:
+        raise ValueError(
+            "El formato debe ser IMAGE, VIDEO o DOCUMENT."
+        )
+
+    nombre = str(
+        getattr(
+            archivo,
+            "name",
+            "",
+        )
+        or "archivo"
+    ).strip()
+
+    mime = str(
+        getattr(
+            archivo,
+            "content_type",
+            "",
+        )
+        or ""
+    ).strip().lower()
+
+    size = int(
+        getattr(
+            archivo,
+            "size",
+            0,
+        )
+        or 0
+    )
+
+    regla = HEADER_MEDIA_RULES[
+        formato
+    ]
+
+    if mime not in regla["mime"]:
+        permitidos = ", ".join(
+            sorted(
+                regla["mime"]
+            )
+        )
+
+        raise ValueError(
+            f"Tipo de archivo no permitido para {formato}. "
+            f"Permitidos: {permitidos}."
+        )
+
+    if size <= 0:
+        raise ValueError(
+            "El archivo está vacío."
+        )
+
+    if size > regla["max_bytes"]:
+        raise ValueError(
+            f"El archivo supera el tamaño permitido para {formato}."
+        )
+
+    cfg = obtener_config_linea(
+        numero_asesor=numero_asesor
+    )
+
+    token = _token_linea(
+        cfg
+    )
+
+    auth_headers = {
+        "Authorization":
+            f"Bearer {token}",
+    }
+
+    # Paso 1:
+    # crear sesión de Resumable Upload.
+    session_url = (
+        f"https://graph.facebook.com/"
+        f"{GRAPH_VERSION}/app/uploads/"
+    )
+
+    session_response = requests.post(
+        session_url,
+        headers=auth_headers,
+        params={
+            "file_length": size,
+            "file_type": mime,
+            "file_name": nombre,
+        },
+        timeout=(5, 35),
+    )
+
+    _raise_meta(
+        session_response,
+        "Meta rechazó la creación de la sesión para la muestra multimedia.",
+    )
+
+    session_data = (
+        session_response.json()
+        if session_response.content
+        else {}
+    )
+
+    upload_id = str(
+        session_data.get("id")
+        or ""
+    ).strip()
+
+    if not upload_id:
+        raise ValueError(
+            "Meta no devolvió el identificador de la sesión de carga."
+        )
+
+    # Paso 2:
+    # enviar el contenido binario a la sesión.
+    try:
+        archivo.seek(0)
+    except Exception:
+        pass
+
+    upload_url = (
+        f"https://graph.facebook.com/"
+        f"{GRAPH_VERSION}/"
+        f"{upload_id}"
+    )
+
+    upload_response = requests.post(
+        upload_url,
+        headers={
+            "Authorization":
+                f"Bearer {token}",
+            "file_offset": "0",
+            "Content-Type": mime,
+        },
+        data=archivo,
+        timeout=(5, 120),
+    )
+
+    _raise_meta(
+        upload_response,
+        "Meta rechazó la carga de la muestra multimedia.",
+    )
+
+    upload_data = (
+        upload_response.json()
+        if upload_response.content
+        else {}
+    )
+
+    header_handle = str(
+        upload_data.get("h")
+        or ""
+    ).strip()
+
+    if not header_handle:
+        raise ValueError(
+            "Meta procesó el archivo pero no devolvió el header_handle."
+        )
+
+    return {
+        "header_handle":
+            header_handle,
+        "format":
+            formato,
+        "filename":
+            nombre,
+        "mime_type":
+            mime,
+        "size":
+            size,
+    }
 
 def listar_plantillas_meta(numero_asesor: str) -> list[dict]:
     cfg = obtener_config_linea(numero_asesor=numero_asesor)
@@ -556,119 +753,418 @@ def _validar_variables(texto: str, ejemplos: list[str], etiqueta: str) -> None:
         raise ValueError(f"Faltan ejemplos para las variables de {etiqueta}.")
 
 
-def normalizar_componentes_plantilla(components: list[dict]) -> list[dict]:
-    if not isinstance(components, list):
-        raise ValueError("components debe ser una lista.")
+def normalizar_componentes_plantilla(
+    components: list[dict],
+) -> list[dict]:
+    if not isinstance(
+        components,
+        list,
+    ):
+        raise ValueError(
+            "components debe ser una lista."
+        )
 
     salida: list[dict] = []
     body_encontrado = False
 
     for raw in components:
-        if not isinstance(raw, dict):
+        if not isinstance(
+            raw,
+            dict,
+        ):
             continue
 
-        tipo = str(raw.get("type") or "").upper().strip()
+        tipo = str(
+            raw.get("type")
+            or ""
+        ).upper().strip()
 
         if tipo == "HEADER":
-            formato = str(raw.get("format") or "TEXT").upper().strip()
-            item: dict[str, Any] = {"type": "HEADER", "format": formato}
+            formato = str(
+                raw.get("format")
+                or "TEXT"
+            ).upper().strip()
+
+            if formato not in {
+                "TEXT",
+                "IMAGE",
+                "VIDEO",
+                "DOCUMENT",
+            }:
+                raise ValueError(
+                    f"Formato de encabezado no soportado: {formato}."
+                )
+
+            item: dict[str, Any] = {
+                "type": "HEADER",
+                "format": formato,
+            }
 
             if formato == "TEXT":
-                texto = str(raw.get("text") or "").strip()
+                texto = str(
+                    raw.get("text")
+                    or ""
+                ).strip()
+
                 if not texto:
-                    continue
+                    raise ValueError(
+                        "El encabezado de texto no puede estar vacío."
+                    )
+
                 if len(texto) > 60:
-                    raise ValueError("El encabezado no puede superar 60 caracteres.")
+                    raise ValueError(
+                        "El encabezado no puede superar 60 caracteres."
+                    )
 
-                ejemplos = list(((raw.get("example") or {}).get("header_text") or []))
-                _validar_variables(texto, ejemplos, "encabezado")
+                ejemplos = list(
+                    (
+                        (
+                            raw.get("example")
+                            or {}
+                        ).get(
+                            "header_text"
+                        )
+                        or []
+                    )
+                )
+
+                _validar_variables(
+                    texto,
+                    ejemplos,
+                    "encabezado",
+                )
+
                 item["text"] = texto
-                if _variables(texto):
-                    item["example"] = {"header_text": [str(value) for value in ejemplos[: len(_variables(texto))]]}
-            else:
-                # Para IMAGE, VIDEO o DOCUMENT Meta exige un header_handle obtenido
-                # mediante su flujo de carga. Se conserva cuando el frontend ya lo envía.
-                handles = list(((raw.get("example") or {}).get("header_handle") or []))
-                if handles:
-                    item["example"] = {"header_handle": handles}
-                elif raw.get("example"):
-                    item["example"] = raw.get("example")
 
-            salida.append(item)
+                if _variables(
+                    texto
+                ):
+                    item["example"] = {
+                        "header_text": [
+                            str(value)
+                            for value
+                            in ejemplos[
+                                :len(
+                                    _variables(
+                                        texto
+                                    )
+                                )
+                            ]
+                        ]
+                    }
+
+            else:
+                example = (
+                    raw.get(
+                        "example"
+                    )
+                    or {}
+                )
+
+                handles = list(
+                    example.get(
+                        "header_handle"
+                    )
+                    or []
+                )
+
+                handles = [
+                    str(handle).strip()
+                    for handle
+                    in handles
+                    if str(handle).strip()
+                ]
+
+                if not handles:
+                    raise ValueError(
+                        f"El encabezado {formato} necesita "
+                        "un header_handle generado por Meta."
+                    )
+
+                item["example"] = {
+                    "header_handle":
+                        handles
+                }
+
+            salida.append(
+                item
+            )
 
         elif tipo == "BODY":
-            texto = str(raw.get("text") or "").strip()
+            texto = str(
+                raw.get("text")
+                or ""
+            ).strip()
+
             if not texto:
-                raise ValueError("El cuerpo de la plantilla es obligatorio.")
+                raise ValueError(
+                    "El cuerpo de la plantilla es obligatorio."
+                )
+
             if len(texto) > 1024:
-                raise ValueError("El cuerpo no puede superar 1024 caracteres.")
+                raise ValueError(
+                    "El cuerpo no puede superar 1024 caracteres."
+                )
 
-            body_rows = list(((raw.get("example") or {}).get("body_text") or []))
-            ejemplos = list(body_rows[0]) if body_rows and isinstance(body_rows[0], list) else []
-            _validar_variables(texto, ejemplos, "cuerpo")
+            body_rows = list(
+                (
+                    (
+                        raw.get(
+                            "example"
+                        )
+                        or {}
+                    ).get(
+                        "body_text"
+                    )
+                    or []
+                )
+            )
 
-            item = {"type": "BODY", "text": texto}
-            if _variables(texto):
-                item["example"] = {"body_text": [[str(value) for value in ejemplos[: len(_variables(texto))]]]}
+            ejemplos = (
+                list(
+                    body_rows[0]
+                )
+                if (
+                    body_rows
+                    and isinstance(
+                        body_rows[0],
+                        list,
+                    )
+                )
+                else []
+            )
 
-            salida.append(item)
+            _validar_variables(
+                texto,
+                ejemplos,
+                "cuerpo",
+            )
+
+            item = {
+                "type": "BODY",
+                "text": texto,
+            }
+
+            if _variables(
+                texto
+            ):
+                item["example"] = {
+                    "body_text": [[
+                        str(value)
+                        for value
+                        in ejemplos[
+                            :len(
+                                _variables(
+                                    texto
+                                )
+                            )
+                        ]
+                    ]]
+                }
+
+            salida.append(
+                item
+            )
+
             body_encontrado = True
 
         elif tipo == "FOOTER":
-            texto = str(raw.get("text") or "").strip()
+            texto = str(
+                raw.get("text")
+                or ""
+            ).strip()
+
             if not texto:
                 continue
+
             if len(texto) > 60:
-                raise ValueError("El pie no puede superar 60 caracteres.")
-            salida.append({"type": "FOOTER", "text": texto})
+                raise ValueError(
+                    "El pie no puede superar 60 caracteres."
+                )
+
+            if _variables(
+                texto
+            ):
+                raise ValueError(
+                    "El pie de la plantilla no admite variables."
+                )
+
+            salida.append({
+                "type": "FOOTER",
+                "text": texto,
+            })
 
         elif tipo == "BUTTONS":
+            raw_buttons = (
+                raw.get(
+                    "buttons"
+                )
+                or []
+            )
+
+            if not isinstance(
+                raw_buttons,
+                list,
+            ):
+                raise ValueError(
+                    "buttons debe ser una lista."
+                )
+
+            if len(
+                raw_buttons
+            ) > 10:
+                raise ValueError(
+                    "La plantilla permite como máximo 10 botones."
+                )
+
             botones: list[dict] = []
 
-            for raw_button in raw.get("buttons") or []:
-                if not isinstance(raw_button, dict):
+            for raw_button in raw_buttons:
+                if not isinstance(
+                    raw_button,
+                    dict,
+                ):
                     continue
 
-                button_type = str(raw_button.get("type") or "QUICK_REPLY").upper().strip()
-                text = str(raw_button.get("text") or "").strip()
+                button_type = str(
+                    raw_button.get(
+                        "type"
+                    )
+                    or "QUICK_REPLY"
+                ).upper().strip()
+
+                text = str(
+                    raw_button.get(
+                        "text"
+                    )
+                    or ""
+                ).strip()
+
+                if button_type not in {
+                    "QUICK_REPLY",
+                    "URL",
+                    "PHONE_NUMBER",
+                }:
+                    raise ValueError(
+                        f"Tipo de botón no soportado: {button_type}."
+                    )
 
                 if not text:
-                    continue
-                if len(text) > 25:
-                    raise ValueError("El texto de cada botón no puede superar 25 caracteres.")
+                    raise ValueError(
+                        "Todos los botones necesitan texto visible."
+                    )
 
-                button: dict[str, Any] = {"type": button_type, "text": text}
+                if len(text) > 25:
+                    raise ValueError(
+                        "El texto de cada botón no puede superar 25 caracteres."
+                    )
+
+                button: dict[str, Any] = {
+                    "type":
+                        button_type,
+                    "text":
+                        text,
+                }
 
                 if button_type == "URL":
-                    url = str(raw_button.get("url") or "").strip()
-                    if not url.startswith(("http://", "https://")):
-                        raise ValueError("Los botones URL deben comenzar con http:// o https://.")
-                    button["url"] = url
-                    examples = raw_button.get("example") or []
-                    if _variables(url) and not examples:
-                        raise ValueError("El botón URL dinámico necesita un ejemplo.")
+                    url = str(
+                        raw_button.get(
+                            "url"
+                        )
+                        or ""
+                    ).strip()
+
+                    if not url.startswith(
+                        (
+                            "http://",
+                            "https://",
+                        )
+                    ):
+                        raise ValueError(
+                            "Los botones URL deben comenzar con http:// o https://."
+                        )
+
+                    if len(
+                        _variables(
+                            url
+                        )
+                    ) > 1:
+                        raise ValueError(
+                            "Cada botón URL solo puede tener una variable dinámica."
+                        )
+
+                    button[
+                        "url"
+                    ] = url
+
+                    examples = (
+                        raw_button.get(
+                            "example"
+                        )
+                        or []
+                    )
+
+                    if (
+                        _variables(
+                            url
+                        )
+                        and not examples
+                    ):
+                        raise ValueError(
+                            "El botón URL dinámico necesita un ejemplo."
+                        )
+
                     if examples:
-                        button["example"] = [str(value) for value in examples]
+                        button[
+                            "example"
+                        ] = [
+                            str(value)
+                            for value
+                            in examples
+                        ]
 
-                elif button_type == "PHONE_NUMBER":
-                    phone = re.sub(r"[^0-9+]", "", str(raw_button.get("phone_number") or ""))
+                elif (
+                    button_type
+                    == "PHONE_NUMBER"
+                ):
+                    phone = re.sub(
+                        r"[^0-9+]",
+                        "",
+                        str(
+                            raw_button.get(
+                                "phone_number"
+                            )
+                            or ""
+                        ),
+                    )
+
                     if not phone:
-                        raise ValueError("El botón de llamada necesita phone_number.")
-                    button["phone_number"] = phone
+                        raise ValueError(
+                            "El botón de llamada necesita phone_number."
+                        )
 
-                elif button_type != "QUICK_REPLY":
-                    raise ValueError(f"Tipo de botón no soportado por este editor: {button_type}.")
+                    button[
+                        "phone_number"
+                    ] = phone
 
-                botones.append(button)
+                botones.append(
+                    button
+                )
 
             if botones:
-                salida.append({"type": "BUTTONS", "buttons": botones[:3]})
+                salida.append({
+                    "type":
+                        "BUTTONS",
+                    "buttons":
+                        botones,
+                })
 
     if not body_encontrado:
-        raise ValueError("La plantilla debe incluir un componente BODY.")
+        raise ValueError(
+            "La plantilla debe incluir un componente BODY."
+        )
 
     return salida
-
 
 def _buscar_plantilla_linea(numero_asesor: str, template_id: str, name: str = "") -> dict:
     template_id = str(template_id or "").strip()

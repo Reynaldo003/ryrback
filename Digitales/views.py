@@ -74,6 +74,7 @@ from .plantillas_meta import (
     editar_plantilla_meta,
     eliminar_plantilla_meta,
     listar_plantillas_meta,
+    subir_media_plantilla_meta,
 )
 from .asesor_logs import (
     actualizar_estado_entrega,
@@ -3270,7 +3271,117 @@ def plantillas_whatsapp_view(request):
     except Exception as e:
         return Response({"ok": False, "error": str(e), "items": []}, status=400)
 
+@api_view(["POST"])
+@authentication_classes([
+    CRMJWTAuthentication
+])
+@permission_classes([
+    IsAuthenticated
+])
+@parser_classes([
+    MultiPartParser,
+    FormParser,
+])
+def plantilla_whatsapp_admin_media_view(
+    request,
+):
+    numero_asesor = (
+        _get_numero_asesor_request(
+            request
+        )
+    )
 
+    archivo = (
+        request.FILES.get(
+            "file"
+        )
+        or request.FILES.get(
+            "archivo"
+        )
+    )
+
+    formato = str(
+        request.data.get(
+            "format",
+            "",
+        )
+        or ""
+    ).strip().upper()
+
+    if not archivo:
+        return Response(
+            {
+                "ok": False,
+                "error": (
+                    "No se recibió ningún archivo."
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    try:
+        resultado = (
+            subir_media_plantilla_meta(
+                numero_asesor=
+                    numero_asesor,
+                archivo=
+                    archivo,
+                formato=
+                    formato,
+            )
+        )
+
+        return Response(
+            {
+                "ok": True,
+                "numero_asesor":
+                    numero_asesor,
+                **resultado,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    except MetaAPIError as exc:
+        return _response_meta_error(
+            exc,
+            numero_asesor=
+                numero_asesor,
+            extra={
+                "tipo":
+                    "template_media_upload",
+            },
+        )
+
+    except ValueError as exc:
+        return Response(
+            {
+                "ok": False,
+                "error": str(
+                    exc
+                ),
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    except Exception as exc:
+        logger.exception(
+            "ERROR SUBIENDO MEDIA DE PLANTILLA "
+            "| numero=%s error=%s",
+            numero_asesor,
+            exc,
+        )
+
+        return Response(
+            {
+                "ok": False,
+                "error": (
+                    "No se pudo cargar "
+                    "la muestra multimedia."
+                ),
+            },
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        )
+    
 @api_view(["GET", "POST"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
