@@ -54,6 +54,9 @@ class Cita(models.Model):
     fuente_prospeccion = models.CharField(max_length=120, blank=True, default="")
     asesor_digital = models.CharField(max_length=200, blank=True, default="")
     asesor_piso = models.CharField(max_length=200, blank=True, default="")
+    vin = models.CharField(max_length=32, blank=True, default="")
+    avaluo_cerrado = models.BooleanField(default=False)
+    prueba_manejo = models.BooleanField(default=False)
     comentarios = models.CharField(max_length=2000, blank=True, default="")
 
     creado_en = models.DateTimeField(auto_now_add=True)
