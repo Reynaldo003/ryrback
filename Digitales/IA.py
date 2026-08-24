@@ -1436,6 +1436,78 @@ def _decision_conversacional_ia(
             ):
                 decision["question_key"] = "buro"
 
+        perfil_actual = _perfil_confirmado_para_ia(
+            expediente=expediente,
+            conversacion=conversacion,
+            nombre_cliente=nombre_cliente,
+        )
+
+        perfil_detectado_turno = _ia_dict(
+            decision.get("detected_profile")
+        )
+
+        campos_faltantes_prioritarios = [
+            campo
+            for campo in (
+                "tipo_cliente",
+                "uso_vehiculo",
+                "plazo_compra",
+            )
+            if not (
+                perfil_actual.get(campo)
+                or _texto_detectado(
+                    perfil_detectado_turno.get(campo)
+                )
+            )
+        ]
+        texto_usuario_lower = str(
+            texto_usuario or ""
+        ).lower()
+
+        cliente_pidio_asesor = any(
+            frase in texto_usuario_lower
+            for frase in (
+                "quiero hablar con un asesor",
+                "quiero un asesor",
+                "asesor humano",
+                "que me contacte un asesor",
+                "que me llame un asesor",
+                "hablar con una persona",
+                "hablar con alguien",
+            )
+        )
+
+        if (
+            decision.get("requiere_asesor")
+            and campos_faltantes_prioritarios
+            and not cliente_pidio_asesor
+        ):
+            decision["requiere_asesor"] = False
+            decision["accion_ofrecida"] = "ninguna"
+            decision["intent"] = "continuar_perfilamiento"
+
+            siguiente_campo = campos_faltantes_prioritarios[0]
+            decision["question_key"] = siguiente_campo
+
+            preguntas_faltantes = {
+                "tipo_cliente": (
+                    "Para seguir completando tu perfil, ¿la compra sería "
+                    "como particular o como empresa?"
+                ),
+                "uso_vehiculo": (
+                    "Para seguir completando tu perfil, ¿qué uso le darías "
+                    "principalmente al vehículo: personal, familiar o trabajo?"
+                ),
+                "plazo_compra": (
+                    "Para seguir completando tu perfil, ¿en cuánto tiempo "
+                    "tienes pensado realizar la compra?"
+                ),
+            }
+
+            decision["reply_text"] = preguntas_faltantes[
+                siguiente_campo
+            ]
+
         respuesta = decision.get("reply_text") or ""
 
         if respuesta and _respuesta_ia_es_repetida(
@@ -2102,8 +2174,26 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
     ).copy()
 
     def esta_vacio(valor: Any) -> bool:
-        return valor in (None, "", [], {})
+        if valor in (None, "", [], {}):
+            return True
 
+        if isinstance(valor, str):
+            return valor.strip().lower() in {
+                "desconocido",
+                "desconocida",
+                "no especificado",
+                "no especificada",
+                "no definido",
+                "no definida",
+                "sin especificar",
+                "sin definir",
+                "null",
+                "none",
+                "n/a",
+                "na",
+            }
+
+        return False
     def permite_actualizar(
         campo_ia: str,
         valor_actual: Any,
