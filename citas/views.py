@@ -5,7 +5,7 @@ from datetime import datetime
 from html import escape
 
 from django.conf import settings
-from django.db.models import Count
+from django.db.models import Count, Exists, OuterRef
 from django.http import FileResponse
 from django.utils import timezone
 from django.utils.text import slugify
@@ -604,6 +604,14 @@ class CitasViewSet(ModelViewSet):
         params = self.request.query_params
         queryset = _filtrar_por_mes(queryset, "fecha_hora_cita", params.get("mes"))
 
+        # Estado real de pruebas de manejo del cliente, según el módulo de Pruebas de Manejo.
+        prueba_asistida = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=True)
+        prueba_programada = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=False)
+        queryset = queryset.annotate(
+            tiene_prueba_asistida=Exists(prueba_asistida),
+            tiene_prueba_programada=Exists(prueba_programada),
+        )
+
         if _param_bool(params.get("solo_digital")):
             queryset = queryset.exclude(asesor_digital="").exclude(asesor_digital__isnull=True)
 
@@ -687,6 +695,18 @@ class PruebasManejoViewSet(ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         params = self.request.query_params
+
+        cliente_id = str(params.get("cliente") or "").strip()
+
+        if cliente_id.isdigit():
+            queryset = queryset.filter(cliente_id=int(cliente_id))
+
+        telefono = "".join(ch for ch in str(params.get("telefono") or "") if ch.isdigit())
+
+        if len(telefono) >= 10:
+            queryset = queryset.filter(
+                cliente__telefono__endswith=telefono[-10:]
+            )
 
         agencia = str(params.get("agencia") or "").strip()
 

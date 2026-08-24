@@ -133,9 +133,18 @@ class BaseConClienteInputMixin(serializers.ModelSerializer):
 
 
 class CitaSerializer(BaseConClienteInputMixin):
+    tiene_prueba_asistida = serializers.SerializerMethodField()
+    tiene_prueba_programada = serializers.SerializerMethodField()
+
     class Meta:
         model = Cita
         fields = "__all__"
+
+    def get_tiene_prueba_asistida(self, obj):
+        return bool(getattr(obj, "tiene_prueba_asistida", False))
+
+    def get_tiene_prueba_programada(self, obj):
+        return bool(getattr(obj, "tiene_prueba_programada", False))
 
 
 class ClienteComercialLightSerializer(serializers.ModelSerializer):
@@ -146,6 +155,8 @@ class ClienteComercialLightSerializer(serializers.ModelSerializer):
 
 class CitaListSerializer(BaseConClienteInputMixin):
     cliente = ClienteComercialLightSerializer(read_only=True)
+    tiene_prueba_asistida = serializers.SerializerMethodField()
+    tiene_prueba_programada = serializers.SerializerMethodField()
 
     class Meta:
         model = Cita
@@ -160,6 +171,8 @@ class CitaListSerializer(BaseConClienteInputMixin):
             "vin",
             "avaluo_cerrado",
             "prueba_manejo",
+            "tiene_prueba_asistida",
+            "tiene_prueba_programada",
             "fuente_prospeccion",
             "asesor_digital",
             "asesor_piso",
@@ -167,6 +180,12 @@ class CitaListSerializer(BaseConClienteInputMixin):
             "creado_en",
             "cliente",
         ]
+
+    def get_tiene_prueba_asistida(self, obj):
+        return bool(getattr(obj, "tiene_prueba_asistida", False))
+
+    def get_tiene_prueba_programada(self, obj):
+        return bool(getattr(obj, "tiene_prueba_programada", False))
 
 
 class RegistroPisoSerializer(BaseConClienteInputMixin):
