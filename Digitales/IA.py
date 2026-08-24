@@ -1410,6 +1410,18 @@ def _decision_conversacional_ia(
             etapa_perfilado=etapa_perfilado,
         )
 
+        if not decision.get("question_key"):
+            respuesta_lower = str(
+                decision.get("reply_text") or ""
+            ).lower()
+
+            if (
+                "historial crediticio" in respuesta_lower
+                or "buró" in respuesta_lower
+                or "buro" in respuesta_lower
+            ):
+                decision["question_key"] = "buro"
+
         respuesta = decision.get("reply_text") or ""
 
         if respuesta and _respuesta_ia_es_repetida(
