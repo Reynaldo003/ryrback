@@ -320,7 +320,8 @@ ETAPA_PERFILADO = {
 }
 
 STOPWORDS_NOMBRE = {
-    "SI", "SIP", "OK", "OKEY", "VA", "CLARO", "EN", "PDF", "MANDAMELA", "MANDAME",
+    "HOLA", "HOLAA", "HOLAAA", "BUENAS", "SALUDOS", "BUENOS", "DIAS", "TARDES", "NOCHES", "HEY", "HI",
+    "SI", "SÍ", "SÍP", "SIP", "OK", "OKEY", "VA", "CLARO", "EN", "PDF", "MANDAMELA", "MANDAME",
     "COMPARTELA", "COMPARTEME", "COMPARTEMELA", "FICHA", "TECNICA", "PRECIO",
     "QUIERO", "NECESITO", "PASAME", "PASAMELA", "LISTO", "PERFECTO", "SALE",
     "SERVICIO", "PUBLICO", "TRANSPORTE", "LINEA", "IMAGEN", "IMAGENES", "FOTO", "FOTOS",
@@ -454,24 +455,39 @@ def _parece_nombre_solo(texto: str) -> bool:
 
 
 def _extraer_nombre_basico(profile_name: str, texto: str) -> str:
-    pn = (profile_name or "").strip()
-    if pn and not _es_email(pn) and _parece_nombre_solo(pn):
-        return _limpiar_nombre_candidato(pn)
+    """
+    Extrae únicamente nombres que el cliente escribió explícitamente.
+
+    El profile_name de WhatsApp NO se considera un nombre confirmado.
+    Más adelante se usa solo como candidato para preguntarle al cliente
+    si desea ser registrado con ese nombre.
+    """
     texto = (texto or "").strip()
     for patron in [
         r"\bmi nombre es\s+([a-zA-ZáéíóúÁÉÍÓÚüÜñÑ ]{2,80})",
         r"\bme llamo\s+([a-zA-ZáéíóúÁÉÍÓÚüÜñÑ ]{2,80})",
         r"\bsoy\s+([a-zA-ZáéíóúÁÉÍÓÚüÜñÑ ]{2,80})",
     ]:
-        m = re.search(patron, texto, flags=re.IGNORECASE)
+        m = re.search(
+            patron,
+            texto,
+            flags=re.IGNORECASE,
+        )
+
         if m:
-            nombre = _limpiar_nombre_candidato(re.sub(r"\s+", " ", m.group(1)).strip(" .,-"))
+            nombre = _limpiar_nombre_candidato(
+                re.sub(
+                    r"\s+",
+                    " ",
+                    m.group(1),
+                ).strip(" .,-")
+            )
+
             if nombre and not _es_email(nombre):
                 return nombre
     if _parece_nombre_solo(texto):
         return _limpiar_nombre_candidato(texto)
     return ""
-
 
 def _json_seguro(texto: str) -> dict[str, Any]:
     """Parsea JSON robusto: maneja prefijos, markdown, trailing commas y JSON truncado."""
@@ -826,6 +842,8 @@ def _get_gemini_client():
 PREGUNTAS_PERFIL_VALIDAS = {
     "nombre",
     "vehiculo_interes",
+    "anio_auto",
+    "correo",
     "forma_pago",
     "enganche",
     "presupuesto_mensual",
@@ -855,6 +873,9 @@ CAMPOS_CORREGIBLES_IA = {
     "ciudad",
     "correo",
     "horario_contacto",
+    "vehiculo_interes",
+    "anio_auto",
+    "comentarios",
 }
 
 GEMINI_DECISION_SCHEMA = {
@@ -883,6 +904,14 @@ GEMINI_DECISION_SCHEMA = {
         "detected_profile": {
             "type": "OBJECT",
             "properties": {
+                "anio_auto": {
+                    "anyOf": [
+                        {"type": "INTEGER"},
+                        {"type": "NULL"},
+                    ]
+                },
+                "comentarios": {"type": "STRING"},
+                "vehiculo_interes": {"type": "STRING"},
                 "nombre_detectado": {"type": "STRING"},
                 "enganche_monto": {
                     "anyOf": [
@@ -941,6 +970,9 @@ GEMINI_DECISION_SCHEMA = {
                 "ciudad": {"type": "BOOLEAN"},
                 "correo": {"type": "BOOLEAN"},
                 "horario_contacto": {"type": "BOOLEAN"},
+                "vehiculo_interes": {"type": "BOOLEAN"},
+                "anio_auto": {"type": "BOOLEAN"},
+                "comentarios": {"type": "BOOLEAN"},
             },
         },
         "reasoning_tags": {
@@ -978,6 +1010,19 @@ No existe identidad de respaldo. Si falta información de identidad, no la
 inventes.
 
 CONTINUIDAD DE CONVERSACIÓN
+
+NOMBRE DEL PROSPECTO
+
+- `prospecto.nombre_confirmado` es el único nombre que debe considerarse confirmado.
+- `prospecto.nombre_perfil_whatsapp_candidato` es únicamente el nombre visible en WhatsApp y puede ser un apodo, alias o nombre incompleto.
+- Si `nombre_confirmado` está vacío y existe `nombre_perfil_whatsapp_candidato`, pregunta de forma natural si desea ser registrado con ese nombre.
+- Cuando preguntes si desea ser registrado con el nombre candidato, usa `question_key="nombre"`.
+- Ejemplo: "Veo que apareces como Manolo, ¿te registro así?"
+- Si el cliente confirma con respuestas como "sí", "sí está bien", "así está bien" o equivalentes, registra ese candidato en `detected_profile.nombre_detectado`.
+- Si el cliente corrige el nombre, por ejemplo "No, me llamo José Manuel", registra el nombre corregido en `detected_profile.nombre_detectado`.
+- Cuando se detecte o confirme un nombre, marca `correcciones_explicitas.nombre_detectado=true` únicamente si el cliente está corrigiendo un nombre previamente guardado.
+- No vuelvas a preguntar el nombre si `nombre_confirmado` ya contiene un valor.
+- No asumas que el nombre visible de WhatsApp es correcto sin confirmación del cliente.
 
 - La conversación es continua, aunque hayan pasado horas o días.
 - Revisa el expediente, el resumen y el historial antes de responder.
@@ -1022,9 +1067,26 @@ FINANCIAMIENTO
 - Una mensualidad objetivo proporcionada por el cliente debe guardarse como perfil,
   no debe responderse preguntando nuevamente cuál mensualidad busca.
 
+CANALIZACIÓN A ASESOR
+
+- El horario de atención de asesores humanos es de 09:00 a 18:00.
+- La IA puede continuar atendiendo fuera de ese horario; este horario aplica únicamente al contacto del asesor humano.
+- Cuando uses `requiere_asesor=true`, informa al cliente que un asesor dará seguimiento dentro del horario de atención de 09:00 a 18:00.
+- No prometas que el asesor responderá inmediatamente, en ciertos minutos ni a una hora exacta.
+- Si el contacto ocurre fuera del horario de 09:00 a 18:00, indica que el asesor dará seguimiento a partir del siguiente horario de atención.
+- Si el contacto ocurre dentro del horario de 09:00 a 18:00, indica únicamente que un asesor continuará el seguimiento dentro del horario de atención.
+- No digas que la IA deja de funcionar fuera de ese horario.
+
 CATÁLOGO Y MULTIMEDIA
 
 - `selected_version` debe coincidir exactamente con una clave del catálogo activo.
+- `detected_profile.vehiculo_interes` puede contener el modelo general mencionado por el cliente, por ejemplo "Jetta".
+- `detected_profile.anio_auto` debe contener el año mencionado por el cliente cuando exista.
+- Si el cliente menciona solo modelo o modelo + año, no inventes una versión y deja `selected_version` en null.
+- Si existen varias versiones compatibles en `catalogo`, pregunta cuál le interesa y menciona únicamente las opciones reales encontradas.
+- Ejemplo: si dice "Jetta 2026" y existen Comfortline, Sportline y Trendline, pregunta cuál de esas versiones le interesa.
+- Cuando el cliente elija una versión exacta, devuelve en `selected_version` la clave exacta que aparece en `catalogo`.
+- No inventes modelos, años, versiones, precios, disponibilidad ni características.
 - Si solicita imágenes, usa `send_images=true`.
 - Si solicita videos, usa `send_videos=true`.
 - Si solicita ficha técnica o PDF, usa `send_pdf=true`.
@@ -1098,6 +1160,7 @@ def _decision_conversacional_ia(
     numero_asesor: str,
     telefono: str,
     nombre_cliente: str,
+    profile_name: str,
     texto_usuario: str,
     auto_interes_actual: Optional[str],
     ultimo_mensaje_saliente: str,
@@ -1137,6 +1200,73 @@ def _decision_conversacional_ia(
         nombre_cliente=nombre_cliente,
     )
 
+    nombre_perfil_whatsapp = ""
+    if (
+        profile_name
+        and not _es_email(profile_name)
+        and _parece_nombre_solo(profile_name)
+    ):
+        nombre_perfil_whatsapp = _limpiar_nombre_candidato(
+            profile_name
+        )
+
+    nombre_explicito_usuario = _extraer_nombre_basico(
+        "",
+        texto_usuario,
+    )
+
+    if (
+        not (nombre_cliente or "").strip()
+        and nombre_perfil_whatsapp
+        and not nombre_explicito_usuario
+        and conversacion.pregunta_pendiente != "nombre"
+    ):
+        return {
+            "reply_text": (
+                f"Veo que apareces como {nombre_perfil_whatsapp}. "
+                "¿Te registro con ese nombre?"
+            ),
+            "intent": "confirmar_nombre",
+            "question_key": "nombre",
+            "selected_version": None,
+            "send_pdf": False,
+            "send_images": False,
+            "send_videos": False,
+            "requiere_asesor": False,
+            "accion_ofrecida": "ninguna",
+            "nueva_etapa_perfilado": etapa_perfilado,
+            "detected_profile": {},
+            "correcciones_explicitas": {},
+            "reasoning_tags": [
+                "confirmacion_nombre_whatsapp",
+            ],
+        }
+
+    if (
+        not (nombre_cliente or "").strip()
+        and not nombre_perfil_whatsapp
+        and not nombre_explicito_usuario
+        and conversacion.pregunta_pendiente != "nombre"
+    ):
+        return {
+            "reply_text": (
+                "Antes de continuar, ¿me compartes tu nombre?"
+            ),
+            "intent": "pedir_nombre",
+            "question_key": "nombre",
+            "selected_version": None,
+            "send_pdf": False,
+            "send_images": False,
+            "send_videos": False,
+            "requiere_asesor": False,
+            "accion_ofrecida": "ninguna",
+            "nueva_etapa_perfilado": etapa_perfilado,
+            "detected_profile": {},
+            "correcciones_explicitas": {},
+            "reasoning_tags": [
+                "solicitud_nombre_sin_candidato",
+            ],
+        }
     preguntas_bloqueadas = _preguntas_bloqueadas_para_ia(
         perfil=perfil_confirmado,
         conversacion=conversacion,
@@ -1170,13 +1300,24 @@ def _decision_conversacional_ia(
         and not expediente.resumen
     )
 
+    ahora_local = timezone.localtime(
+        timezone.now()
+    )
+
+    en_horario_asesor = (
+        9 <= ahora_local.hour < 18
+    )
+
     contexto = {
         "numero_linea": numero_asesor,
         "mensaje_actual": texto_usuario,
         "prospecto": {
-            "nombre": nombre_cliente or None,
-            "telefono": telefono,
-        },
+        "nombre_confirmado": nombre_cliente or None,
+        "nombre_perfil_whatsapp_candidato": (
+            nombre_perfil_whatsapp or None
+        ),
+        "telefono": telefono,
+    },
         "es_primer_contacto_real": es_primer_contacto_real,
         "perfil_confirmado": perfil_confirmado,
         "estado_conversacion": {
@@ -1219,6 +1360,14 @@ def _decision_conversacional_ia(
             ),
         },
         "catalogo": _catalogo_para_prompt(),
+        "horario_asesor_humano": {
+            "inicio": "09:00",
+            "fin": "18:00",
+            "hora_local_actual": ahora_local.strftime(
+                "%Y-%m-%d %H:%M"
+            ),
+            "en_horario": en_horario_asesor,
+        },
         "pauta_origen_interna": expediente.pauta or None,
         "reglas_de_contexto": {
             "la_pauta_es_interna": True,
@@ -1448,7 +1597,12 @@ def _perfil_confirmado_para_ia(
 
     return {
         "nombre_completo": str(nombre_cliente or "").strip() or None,
-        "vehiculo_interes": expediente.auto_interes or None,
+        "vehiculo_interes": (
+            expediente.auto_interes
+            or perfil_extra.get("vehiculo_interes")
+            or None
+        ),
+        "anio_auto": expediente.anio_auto,
         "enganche_monto": expediente.enganche_monto,
         "presupuesto_mensual": expediente.presupuesto_mensual,
         "presupuesto_mensual_min": perfil_extra.get(
@@ -1470,8 +1624,11 @@ def _perfil_confirmado_para_ia(
         "auto_cuenta": perfil_extra.get("auto_cuenta"),
         "plazo_compra": expediente.plazo_compra or None,
         "ciudad": perfil_extra.get("ciudad"),
-        "correo": perfil_extra.get("correo"),
+        "correo": (
+            expediente.cliente.correo or None
+        ),
         "horario_contacto": perfil_extra.get("horario_contacto"),
+        "comentarios": expediente.comentarios or None,
     }
 
 
@@ -1851,6 +2008,7 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
     cliente: ClienteComercial,
     expediente: ExpedienteDigital,
     profile_name: str,
+    texto_usuario: str,
     detected_profile: dict[str, Any],
     version_detectada: Optional[str],
     nueva_etapa_perfilado: int,
@@ -1905,14 +2063,37 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
         160,
     )
 
-    if not nombre_detectado and not (cliente.nombre or "").strip():
-        nombre_detectado = _extraer_nombre_basico(
-            profile_name,
-            "",
-        )
+    nombre_explicito_usuario = _extraer_nombre_basico(
+        "",
+        texto_usuario,
+    )
+
+    esperando_confirmacion_nombre = (
+        (conversacion.pregunta_pendiente or "").strip()
+        == "nombre"
+    )
+
+    correccion_nombre_explicita = correcciones.get(
+        "nombre_detectado",
+        False,
+    )
+
+    nombre_escrito_explicitamente = bool(
+        nombre_explicito_usuario
+    )
+
+    puede_guardar_nombre_ia = (
+        esperando_confirmacion_nombre
+        or correccion_nombre_explicita
+        or nombre_escrito_explicitamente
+    )
+
+    if nombre_escrito_explicitamente:
+        nombre_detectado = nombre_explicito_usuario
 
     if (
         nombre_detectado
+        and puede_guardar_nombre_ia
         and permite_actualizar(
             "nombre_detectado",
             cliente.nombre,
@@ -1925,13 +2106,72 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
             "actualizado_en",
         ])
 
+# ---------------------------------------------------------
+# Correo
+# ---------------------------------------------------------
+    correo_detectado = _texto_detectado(
+        detected_profile.get("correo"),
+        254,
+    )
+
+    if (
+        correo_detectado
+        and _es_email(correo_detectado)
+        and permite_actualizar(
+            "correo",
+            cliente.correo,
+        )
+        and cliente.correo != correo_detectado
+    ):
+        cliente.correo = correo_detectado
+        cambios_cliente.extend([
+            "correo",
+            "actualizado_en",
+        ])
     # ---------------------------------------------------------
     # Vehículo
     # ---------------------------------------------------------
+
     version_detectada = _normalizar_version_catalogo(
         version_detectada
     )
 
+# ---------------------------------------------------------
+# Año del vehículo
+# ---------------------------------------------------------
+    anio_auto = _int_detectado(
+        detected_profile.get("anio_auto")
+    )
+
+    if (
+        anio_auto is not None
+        and 1900 <= anio_auto <= 2100
+        and permite_actualizar(
+            "anio_auto",
+            expediente.anio_auto,
+        )
+        and expediente.anio_auto != anio_auto
+    ):
+        expediente.anio_auto = anio_auto
+        cambios_expediente.append("anio_auto")
+# ---------------------------------------------------------
+# Comentarios
+# ---------------------------------------------------------
+    comentarios = _texto_detectado(
+        detected_profile.get("comentarios"),
+        2000,
+    )
+
+    if (
+        comentarios
+        and permite_actualizar(
+            "comentarios",
+            expediente.comentarios,
+        )
+        and expediente.comentarios != comentarios
+    ):
+        expediente.comentarios = comentarios
+        cambios_expediente.append("comentarios")
     # El interés sí puede cambiar cuando el cliente menciona otro modelo.
     if (
         version_detectada
@@ -2134,8 +2374,8 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
         "personalidad_juridica": 120,
         "auto_cuenta": 200,
         "ciudad": 120,
-        "correo": 160,
         "horario_contacto": 120,
+        "vehiculo_interes": 255,
     }
 
     for campo, longitud in campos_extra.items():
@@ -2333,7 +2573,8 @@ def construir_respuesta_informativa(
             expediente=expediente,
             numero_asesor=numero_asesor,
             telefono=telefono,
-            nombre_cliente=nombre_cliente or profile_name,
+            nombre_cliente=nombre_cliente,
+            profile_name=profile_name,
             texto_usuario=texto_usuario,
             auto_interes_actual=auto_interes_actual,
             ultimo_mensaje_saliente=ultimo_mensaje_saliente,
@@ -3102,6 +3343,7 @@ def responder_mensaje_automatico(
         cliente=cliente,
         expediente=expediente,
         profile_name=profile_name,
+        texto_usuario=texto_usuario,
         detected_profile=detected_profile,
         version_detectada=version_contexto,
         nueva_etapa_perfilado=nueva_etapa_perfilado,

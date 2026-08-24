@@ -461,24 +461,10 @@ def _get_or_create_cliente_y_expediente(
         .get_or_create(
             telefono=tel,
             defaults={
-                "nombre": (
-                    profile_name or ""
-                ).strip(),
+                "nombre": "",
             },
         )
     )
-
-    if (
-        profile_name
-        and not (cliente.nombre or "").strip()
-    ):
-        cliente.nombre = profile_name.strip()
-        cliente.save(
-            update_fields=[
-                "nombre",
-                "actualizado_en",
-            ]
-        )
 
     cfg_linea = WHATSAPP_LINES.get(
         numero_asesor,
