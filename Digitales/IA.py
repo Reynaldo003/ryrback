@@ -704,18 +704,30 @@ def _int_detectado(valor) -> Optional[int]:
 
 def _texto_detectado(valor, max_len: int = 120) -> str:
     """Limpia texto detectado para guardarlo en campos formales del expediente."""
-    return str(valor or "").strip()[:max_len]
+    texto = str(valor or "").strip()
 
+    if not texto:
+        return ""
 
-def _get_or_create_conversacion_ia(expediente: ExpedienteDigital, numero_asesor: str) -> ConversacionIA:
-    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    valores_vacios = {
+        "desconocido",
+        "desconocida",
+        "no especificado",
+        "no especificada",
+        "no definido",
+        "no definida",
+        "sin especificar",
+        "sin definir",
+        "null",
+        "none",
+        "n/a",
+        "na",
+    }
 
-    conversacion, _ = ConversacionIA.objects.get_or_create(
-        expediente=expediente,
-        numero_asesor=numero_asesor,
-    )
+    if texto.lower() in valores_vacios:
+        return ""
 
-    return conversacion
+    return texto[:max_len]
 
 
 def _leer_dato_conversacion(
@@ -845,7 +857,6 @@ PREGUNTAS_PERFIL_VALIDAS = {
     "nombre",
     "vehiculo_interes",
     "anio_auto",
-    "correo",
     "forma_pago",
     "enganche",
     "presupuesto_mensual",
