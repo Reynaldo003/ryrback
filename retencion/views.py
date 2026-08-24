@@ -17,7 +17,6 @@ from .serializers import (
 
 DB_ALIAS = "sqlserver_inv"
 
-
 def es_filtro_vacio(valor):
     return valor in (None, "", "Todos", "Todas", "all", "null", "undefined")
 
@@ -97,6 +96,14 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         agencia = params.get("agencia")
         condicion = params.get("condicion")
         search = params.get("search")
+        sin_venta = str(params.get("sin_venta", "")).strip().lower()
+
+        # Vehículos que llegaron a servicio pero NO tienen venta registrada.
+        if sin_venta in ("1", "true", "si", "sí", "yes"):
+            qs = qs.filter(
+                fecha_ultima_os__isnull=False,
+                fecha_venta__isnull=True,
+            )
 
         if not es_filtro_vacio(anio):
             try:
@@ -218,19 +225,26 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], url_path="opciones")
     def opciones(self, request):
         limite = 100000
-        qs = (
-            OrdenServicioVentaVW.objects.using(DB_ALIAS)
-            .all()
-            .values(
-                "fecha_ultima_os",
-                "estado_actividad",
-                "segmento",
-                "marca",
-                "modelo_nombre",
-                "agencia",
-                "condicion_vehiculo",
-            )[:limite]
-        )
+
+        qs = OrdenServicioVentaVW.objects.using(DB_ALIAS).all()
+
+        sin_venta = str(request.query_params.get("sin_venta", "")).strip().lower()
+
+        if sin_venta in ("1", "true", "si", "sí", "yes"):
+            qs = qs.filter(
+                fecha_ultima_os__isnull=False,
+                fecha_venta__isnull=True,
+            )
+
+        qs = qs.values(
+            "fecha_ultima_os",
+            "estado_actividad",
+            "segmento",
+            "marca",
+            "modelo_nombre",
+            "agencia",
+            "condicion_vehiculo",
+        )[:limite]
 
         anios = set()
         anio_mes_set = set()
@@ -243,6 +257,7 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
 
         for item in qs:
             fecha = item.get("fecha_ultima_os")
+
             if fecha:
                 anios.add(fecha.year)
                 anio_mes_set.add((fecha.year, fecha.month))
@@ -261,29 +276,33 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
 
         anio_mes = [
             {"anio": anio, "mes": mes}
-            for anio, mes in sorted(anio_mes_set, key=lambda v: (v[0], v[1]), reverse=True)
+            for anio, mes in sorted(
+                anio_mes_set,
+                key=lambda v: (v[0], v[1]),
+                reverse=True,
+            )
         ]
 
         meses_por_anio = {}
+
         for item in anio_mes:
             anio = str(item["anio"])
             meses_por_anio.setdefault(anio, []).append(item["mes"])
+
         for anio in meses_por_anio:
             meses_por_anio[anio] = sorted(set(meses_por_anio[anio]))
 
-        return Response(
-            {
-                "anios": sorted(anios, reverse=True),
-                "anio_mes": anio_mes,
-                "meses_por_anio": meses_por_anio,
-                "estados": sorted(estados, key=str.lower),
-                "segmentos": sorted(segmentos, key=str.lower),
-                "marcas": sorted(marcas, key=str.lower),
-                "modelos": sorted(modelos, key=str.lower),
-                "agencias": sorted(agencias, key=str.lower),
-                "condiciones": sorted(condiciones, key=str.lower),
-            }
-        )
+        return Response({
+            "anios": sorted(anios, reverse=True),
+            "anio_mes": anio_mes,
+            "meses_por_anio": meses_por_anio,
+            "estados": sorted(estados, key=str.lower),
+            "segmentos": sorted(segmentos, key=str.lower),
+            "marcas": sorted(marcas, key=str.lower),
+            "modelos": sorted(modelos, key=str.lower),
+            "agencias": sorted(agencias, key=str.lower),
+            "condiciones": sorted(condiciones, key=str.lower),
+        })
 
     @action(detail=True, methods=["get"], url_path="historial")
     def historial(self, request, vin=None):
