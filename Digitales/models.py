@@ -515,4 +515,32 @@ class ControlRepartoWhatsApp(models.Model):
 
     def __str__(self):
         return (f"{self.numero_asesor} | "f"siguiente={self.siguiente_indice}")
+
+
+class RespuestaRapidaAsesor(models.Model):
+    usuario = models.ForeignKey(
+        "CrmConformidad.Usuario",
+        on_delete=models.CASCADE,
+        related_name="respuestas_rapidas",
+    )
+    titulo = models.CharField(max_length=120, blank=True, default="")
+    texto = models.TextField()
+    creado = models.DateTimeField(auto_now_add=True, db_index=True)
+    actualizado = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "respuestas_rapidas_asesor"
+        ordering = ["-creado", "-id"]
+        indexes = [
+            models.Index(fields=["usuario", "-creado"]),
+        ]
+
+    def save(self, *args, **kwargs):
+        self.titulo = str(self.titulo or "").strip()[:120]
+        self.texto = str(self.texto or "").strip()
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.usuario_id} | {self.titulo or self.texto[:40]}"
     

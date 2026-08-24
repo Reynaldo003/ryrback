@@ -51,6 +51,11 @@ from .ia_config import (
     ia_lineas_whatsapp,
 )
 
+from .respuestas_rapidas import (
+    respuestas_rapidas_view,
+    respuesta_rapida_detail_view,
+)
+
 from .ia_catalogo import (
     catalogo_vehiculos_list,
     catalogo_vehiculo_detail,
@@ -90,6 +95,9 @@ urlpatterns = [
     path("mensajes/plantillas/admin/<str:template_id>/", plantilla_whatsapp_admin_detail_view,),
 
     path("mensajes/editar/", editar_mensaje_view),
+
+    path("respuestas-rapidas/", respuestas_rapidas_view, name="respuestas-rapidas-list"),
+    path("respuestas-rapidas/<int:respuesta_id>/", respuesta_rapida_detail_view, name="respuestas-rapidas-detail"),
 
     path("analitica/asesores/", analitica_asesores_view, name="digitales-analitica-asesores"),
     path("analitica/asesores/cliente/<int:expediente_id>/", analitica_cliente_view, name="digitales-analitica-cliente",),
