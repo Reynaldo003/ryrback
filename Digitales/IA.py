@@ -704,18 +704,30 @@ def _int_detectado(valor) -> Optional[int]:
 
 def _texto_detectado(valor, max_len: int = 120) -> str:
     """Limpia texto detectado para guardarlo en campos formales del expediente."""
-    return str(valor or "").strip()[:max_len]
+    texto = str(valor or "").strip()
 
+    if not texto:
+        return ""
 
-def _get_or_create_conversacion_ia(expediente: ExpedienteDigital, numero_asesor: str) -> ConversacionIA:
-    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+    valores_vacios = {
+        "desconocido",
+        "desconocida",
+        "no especificado",
+        "no especificada",
+        "no definido",
+        "no definida",
+        "sin especificar",
+        "sin definir",
+        "null",
+        "none",
+        "n/a",
+        "na",
+    }
 
-    conversacion, _ = ConversacionIA.objects.get_or_create(
-        expediente=expediente,
-        numero_asesor=numero_asesor,
-    )
+    if texto.lower() in valores_vacios:
+        return ""
 
-    return conversacion
+    return texto[:max_len]
 
 
 def _leer_dato_conversacion(
@@ -845,7 +857,6 @@ PREGUNTAS_PERFIL_VALIDAS = {
     "nombre",
     "vehiculo_interes",
     "anio_auto",
-    "correo",
     "forma_pago",
     "enganche",
     "presupuesto_mensual",
@@ -1398,6 +1409,18 @@ def _decision_conversacional_ia(
             salida,
             etapa_perfilado=etapa_perfilado,
         )
+
+        if not decision.get("question_key"):
+            respuesta_lower = str(
+                decision.get("reply_text") or ""
+            ).lower()
+
+            if (
+                "historial crediticio" in respuesta_lower
+                or "buró" in respuesta_lower
+                or "buro" in respuesta_lower
+            ):
+                decision["question_key"] = "buro"
 
         respuesta = decision.get("reply_text") or ""
 
@@ -2137,6 +2160,18 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
     version_detectada = _normalizar_version_catalogo(
         version_detectada
     )
+    anio_desde_version = None
+
+    if version_detectada:
+        match_anio = re.search(
+            r"\b(20\d{2})\b",
+            version_detectada,
+        )
+
+        if match_anio:
+            anio_desde_version = int(
+                match_anio.group(1)
+            )
 
 # ---------------------------------------------------------
 # Año del vehículo
@@ -2144,6 +2179,9 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
     anio_auto = _int_detectado(
         detected_profile.get("anio_auto")
     )
+
+    if anio_auto is None:
+        anio_auto = anio_desde_version
 
     if (
         anio_auto is not None
@@ -2623,6 +2661,41 @@ def construir_respuesta_informativa(
     version_contexto = _normalizar_version_catalogo(
         decision.get("selected_version")
     )
+
+    if not version_contexto:
+        texto_version = str(texto_usuario or "").strip().upper()
+
+        datos_extra = _ia_dict(
+            ConversacionIA.objects.filter(
+                expediente=expediente,
+                numero_asesor=normaliza_tel_mx(numero_asesor),
+            )
+            .values_list("datos_extra", flat=True)
+            .first()
+        )
+
+        perfil_extra = _ia_dict(
+            datos_extra.get("perfil_extra")
+        )
+
+        modelo_general = str(
+            perfil_extra.get("vehiculo_interes") or ""
+        ).strip().upper()
+
+        anio_general = expediente.anio_auto
+
+        if modelo_general and anio_general and texto_version:
+            candidatos = [
+                clave
+                for clave in _obtener_catalogo_dict().keys()
+                if modelo_general in clave
+                and str(anio_general) in clave
+                and texto_version in clave
+            ]
+
+            if len(candidatos) == 1:
+                version_contexto = candidatos[0]
+                decision["selected_version"] = version_contexto
 
     enviar_pdf = bool(
         decision.get("send_pdf")
