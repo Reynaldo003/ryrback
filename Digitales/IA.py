@@ -1534,7 +1534,6 @@ def _decision_conversacional_ia(
             ]
 
         respuesta = decision.get("reply_text") or ""
-
         if respuesta and _respuesta_ia_es_repetida(
             nueva_respuesta=respuesta,
             historial=historial_reciente,
@@ -1550,9 +1549,8 @@ def _decision_conversacional_ia(
                         "repitas la misma pregunta."
                     ),
                 },
-                        }
-            segunda_decision = {}
-            segunda_respuesta = ""
+            }
+
             segunda_salida = _llamar_gemini_decision(
                 client=client,
                 modelo=modelo,
@@ -1574,44 +1572,45 @@ def _decision_conversacional_ia(
                 historial=historial_reciente,
             ):
                 decision = segunda_decision
-        else:
-            perfil_reintento = _ia_dict(
-                segunda_decision.get("detected_profile")
-            )
-
-            perfil_original = _ia_dict(
-                decision.get("detected_profile")
-            )
-
-            reintento_tiene_datos = any(
-                _texto_detectado(valor)
-                for valor in perfil_reintento.values()
-            )
-
-            original_tiene_datos = any(
-                _texto_detectado(valor)
-                for valor in perfil_original.values()
-            )
-
-            if reintento_tiene_datos and segunda_respuesta:
-                decision = segunda_decision
-
-            elif original_tiene_datos and respuesta:
-                # Aunque el texto sea parecido, no descartamos un turno
-                # que contiene información nueva del perfil.
-                pass
 
             else:
-                logger.warning(
-                    "IA OMITIDA POR REDUNDANCIA | linea=%s expediente=%s",
-                    numero_asesor,
-                    expediente.pk,
+                perfil_reintento = _ia_dict(
+                    segunda_decision.get("detected_profile")
                 )
 
-                return {
-                    "skip_send": True,
-                    "skip_reason": "respuesta_repetida",
-                }
+                perfil_original = _ia_dict(
+                    decision.get("detected_profile")
+                )
+
+                reintento_tiene_datos = any(
+                    _texto_detectado(valor)
+                    for valor in perfil_reintento.values()
+                )
+
+                original_tiene_datos = any(
+                    _texto_detectado(valor)
+                    for valor in perfil_original.values()
+                )
+
+                if reintento_tiene_datos and segunda_respuesta:
+                    decision = segunda_decision
+
+                elif original_tiene_datos and respuesta:
+                    # Aunque el texto sea parecido, no descartamos un turno
+                    # que contiene información nueva del perfil.
+                    pass
+
+                else:
+                    logger.warning(
+                        "IA OMITIDA POR REDUNDANCIA | linea=%s expediente=%s",
+                        numero_asesor,
+                        expediente.pk,
+                    )
+
+                    return {
+                        "skip_send": True,
+                        "skip_reason": "respuesta_repetida",
+                    }
 
         if not str(
             decision.get("reply_text") or ""
