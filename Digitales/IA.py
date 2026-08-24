@@ -729,6 +729,20 @@ def _texto_detectado(valor, max_len: int = 120) -> str:
 
     return texto[:max_len]
 
+def _get_or_create_conversacion_ia(
+    expediente: ExpedienteDigital,
+    numero_asesor: str,
+) -> ConversacionIA:
+    numero_asesor = normaliza_tel_mx(
+        numero_asesor or ""
+    )
+
+    conversacion, _ = ConversacionIA.objects.get_or_create(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    )
+
+    return conversacion
 
 def _leer_dato_conversacion(
     expediente: ExpedienteDigital,
@@ -1638,16 +1652,35 @@ def _perfil_confirmado_para_ia(
         ),
         "buro_estado": expediente.buro_estado or None,
         "forma_pago": expediente.forma_pago or None,
-        "tipo_cliente": expediente.tipo_cliente or None,
-        "personalidad_juridica": perfil_extra.get(
-            "personalidad_juridica"
+       "tipo_cliente": (
+            _texto_detectado(expediente.tipo_cliente) or None
+        ),
+        "personalidad_juridica": (
+            _texto_detectado(
+                perfil_extra.get("personalidad_juridica")
+            )
+            or None
         ),
         "comprobacion_ingresos": (
-            expediente.comprobacion_ingresos or None
+            _texto_detectado(
+                expediente.comprobacion_ingresos
+            )
+            or None
         ),
-        "uso_vehiculo": expediente.uso_vehiculo or None,
-        "auto_cuenta": perfil_extra.get("auto_cuenta"),
-        "plazo_compra": expediente.plazo_compra or None,
+        "uso_vehiculo": (
+            _texto_detectado(expediente.uso_vehiculo)
+            or None
+        ),
+        "auto_cuenta": (
+            _texto_detectado(
+                perfil_extra.get("auto_cuenta")
+            )
+            or None
+        ),
+        "plazo_compra": (
+            _texto_detectado(expediente.plazo_compra)
+            or None
+        ),
         "ciudad": perfil_extra.get("ciudad"),
         "correo": (
             expediente.cliente.correo or None
