@@ -2624,6 +2624,41 @@ def construir_respuesta_informativa(
         decision.get("selected_version")
     )
 
+    if not version_contexto:
+        texto_version = str(texto_usuario or "").strip().upper()
+
+        datos_extra = _ia_dict(
+            ConversacionIA.objects.filter(
+                expediente=expediente,
+                numero_asesor=normaliza_tel_mx(numero_asesor),
+            )
+            .values_list("datos_extra", flat=True)
+            .first()
+        )
+
+        perfil_extra = _ia_dict(
+            datos_extra.get("perfil_extra")
+        )
+
+        modelo_general = str(
+            perfil_extra.get("vehiculo_interes") or ""
+        ).strip().upper()
+
+        anio_general = expediente.anio_auto
+
+        if modelo_general and anio_general and texto_version:
+            candidatos = [
+                clave
+                for clave in _obtener_catalogo_dict().keys()
+                if modelo_general in clave
+                and str(anio_general) in clave
+                and texto_version in clave
+            ]
+
+            if len(candidatos) == 1:
+                version_contexto = candidatos[0]
+                decision["selected_version"] = version_contexto
+
     enviar_pdf = bool(
         decision.get("send_pdf")
     ) and bool(version_contexto)
