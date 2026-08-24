@@ -1550,8 +1550,9 @@ def _decision_conversacional_ia(
                         "repitas la misma pregunta."
                     ),
                 },
-            }
-
+                        }
+            segunda_decision = {}
+            segunda_respuesta = ""
             segunda_salida = _llamar_gemini_decision(
                 client=client,
                 modelo=modelo,
