@@ -1424,6 +1424,31 @@ def _decision_conversacional_ia(
             etapa_perfilado=etapa_perfilado,
         )
 
+        perfil_detectado = _ia_dict(
+            decision.get("detected_profile")
+        )
+
+        tipo_cliente_detectado = _texto_detectado(
+            perfil_detectado.get("tipo_cliente")
+        )
+
+        personalidad_detectada = _texto_detectado(
+            perfil_detectado.get("personalidad_juridica")
+        )
+
+        if (
+            not tipo_cliente_detectado
+            and personalidad_detectada.lower()
+            in {
+                "particular",
+                "empresa",
+                "persona física",
+                "persona fisica",
+                "persona moral",
+            }
+        ):
+            perfil_detectado["tipo_cliente"] = personalidad_detectada
+            decision["detected_profile"] = perfil_detectado
         if not decision.get("question_key"):
             respuesta_lower = str(
                 decision.get("reply_text") or ""
