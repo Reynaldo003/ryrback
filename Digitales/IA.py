@@ -7,6 +7,8 @@ import re
 import time
 import unicodedata
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from difflib import SequenceMatcher
 from functools import lru_cache
 from typing import Any, Optional
@@ -1300,8 +1302,8 @@ def _decision_conversacional_ia(
         and not expediente.resumen
     )
 
-    ahora_local = timezone.localtime(
-        timezone.now()
+    ahora_local = datetime.now(
+        ZoneInfo("America/Mexico_City")
     )
 
     en_horario_asesor = (
