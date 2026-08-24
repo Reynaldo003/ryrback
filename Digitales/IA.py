@@ -729,6 +729,20 @@ def _texto_detectado(valor, max_len: int = 120) -> str:
 
     return texto[:max_len]
 
+def _get_or_create_conversacion_ia(
+    expediente: ExpedienteDigital,
+    numero_asesor: str,
+) -> ConversacionIA:
+    numero_asesor = normaliza_tel_mx(
+        numero_asesor or ""
+    )
+
+    conversacion, _ = ConversacionIA.objects.get_or_create(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    )
+
+    return conversacion
 
 def _leer_dato_conversacion(
     expediente: ExpedienteDigital,
