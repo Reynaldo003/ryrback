@@ -1573,6 +1573,33 @@ def _decision_conversacional_ia(
                 historial=historial_reciente,
             ):
                 decision = segunda_decision
+        else:
+            perfil_reintento = _ia_dict(
+                segunda_decision.get("detected_profile")
+            )
+
+            perfil_original = _ia_dict(
+                decision.get("detected_profile")
+            )
+
+            reintento_tiene_datos = any(
+                _texto_detectado(valor)
+                for valor in perfil_reintento.values()
+            )
+
+            original_tiene_datos = any(
+                _texto_detectado(valor)
+                for valor in perfil_original.values()
+            )
+
+            if reintento_tiene_datos and segunda_respuesta:
+                decision = segunda_decision
+
+            elif original_tiene_datos and respuesta:
+                # Aunque el texto sea parecido, no descartamos un turno
+                # que contiene información nueva del perfil.
+                pass
+
             else:
                 logger.warning(
                     "IA OMITIDA POR REDUNDANCIA | linea=%s expediente=%s",
