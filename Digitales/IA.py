@@ -2137,6 +2137,18 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
     version_detectada = _normalizar_version_catalogo(
         version_detectada
     )
+    anio_desde_version = None
+
+    if version_detectada:
+        match_anio = re.search(
+            r"\b(20\d{2})\b",
+            version_detectada,
+        )
+
+        if match_anio:
+            anio_desde_version = int(
+                match_anio.group(1)
+            )
 
 # ---------------------------------------------------------
 # Año del vehículo
@@ -2144,6 +2156,9 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
     anio_auto = _int_detectado(
         detected_profile.get("anio_auto")
     )
+
+    if anio_auto is None:
+        anio_auto = anio_desde_version
 
     if (
         anio_auto is not None
