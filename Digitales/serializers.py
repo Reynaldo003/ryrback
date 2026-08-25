@@ -719,6 +719,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
     tiempo_respuesta_asesor_min = serializers.SerializerMethodField()
     tiempo_respuesta_asesor_label = serializers.SerializerMethodField()
+    sin_contactar = serializers.SerializerMethodField()
 
     evidencias = EvidenciaProspectoDigitalSerializer(many=True, read_only=True)
 
@@ -820,6 +821,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             # Calculados para frontend.
             "tiempo_respuesta_asesor_min",
             "tiempo_respuesta_asesor_label",
+            "sin_contactar",
 
             # Alias temporales para no romper pantallas viejas.
             "primer_contacto_at",
@@ -847,6 +849,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
             "tiempo_respuesta_asesor_min",
             "tiempo_respuesta_asesor_label",
+            "sin_contactar",
             "primer_contacto_at",
             "ultimo_contacto_at",
             "creado",
@@ -953,6 +956,16 @@ class ProspectoSerializer(serializers.ModelSerializer):
     def get_tiempo_respuesta_asesor_label(self, obj):
         minutes = self.get_tiempo_respuesta_asesor_min(obj)
         return format_duration_minutes(minutes)
+
+    def get_sin_contactar(self, obj):
+        from .models import MensajeWhatsApp
+
+        return not MensajeWhatsApp.objects.filter(
+            cliente_id=obj.cliente_id,
+            direction="out",
+        ).exclude(
+            raw__icontains='"ia_provider"'
+        ).exists()
 
     def to_representation(self, instance):
         data = super().to_representation(instance)

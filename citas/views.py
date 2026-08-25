@@ -602,7 +602,29 @@ class CitasViewSet(ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
         params = self.request.query_params
-        queryset = _filtrar_por_mes(queryset, "fecha_hora_cita", params.get("mes"))
+
+        fecha_inicio = str(params.get("fecha_inicio") or "").strip()
+        fecha_fin = str(params.get("fecha_fin") or "").strip()
+
+        if fecha_inicio or fecha_fin:
+            if fecha_inicio:
+                try:
+                    inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d")
+                    if settings.USE_TZ:
+                        inicio = timezone.make_aware(inicio, timezone.get_current_timezone())
+                    queryset = queryset.filter(creado_en__gte=inicio)
+                except ValueError:
+                    pass
+            if fecha_fin:
+                try:
+                    fin = datetime.strptime(fecha_fin, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                    if settings.USE_TZ:
+                        fin = timezone.make_aware(fin, timezone.get_current_timezone())
+                    queryset = queryset.filter(creado_en__lte=fin)
+                except ValueError:
+                    pass
+        else:
+            queryset = _filtrar_por_mes(queryset, "creado_en", params.get("mes"))
 
         # Estado real de pruebas de manejo del cliente, según el módulo de Pruebas de Manejo.
         prueba_asistida = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=True)
