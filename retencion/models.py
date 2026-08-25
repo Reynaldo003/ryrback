@@ -48,7 +48,7 @@ class OrdenServicioVentaVW(models.Model):
 
     class Meta:
         managed = False
-        db_table = "Ordenes_Servicio_Ventas_VW_v2"
+        db_table = "Ordenes_Servicio_Ventas_VW"
         verbose_name = "Orden Venta Retención"
         verbose_name_plural = "Órdenes Venta Retención"
 
