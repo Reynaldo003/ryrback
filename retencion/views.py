@@ -96,14 +96,15 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         agencia = params.get("agencia")
         condicion = params.get("condicion")
         search = params.get("search")
-        sin_venta = str(params.get("sin_venta", "")).strip().lower()
 
-        # Vehículos que llegaron a servicio pero NO tienen venta registrada.
-        if sin_venta in ("1", "true", "si", "sí", "yes"):
-            qs = qs.filter(
-                fecha_ultima_os__isnull=False,
-                fecha_venta__isnull=True,
-            )
+        sin_venta = str(params.get("sin_venta", "")).strip().lower()
+        es_sin_venta = sin_venta in ("1", "true", "si", "sí", "yes")
+
+        # Separamos completamente ambos universos.
+        if es_sin_venta:
+            qs = qs.filter(fecha_venta__isnull=True, fecha_ultima_os__isnull=False)
+        else:
+            qs = qs.filter(fecha_venta__isnull=False)
 
         if not es_filtro_vacio(anio):
             try:
@@ -129,8 +130,14 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         if not es_filtro_vacio(modelo):
             qs = qs.filter(modelo_nombre__iexact=modelo)
 
+        # CRÍTICO:
+        # Retención normal -> dealer de venta.
+        # Retención No Ventas -> dealer de servicio.
         if not es_filtro_vacio(agencia):
-            qs = qs.filter(agencia__iexact=agencia)
+            if es_sin_venta:
+                qs = qs.filter(agencia_servicio__iexact=agencia)
+            else:
+                qs = qs.filter(agencia_venta__iexact=agencia)
 
         if not es_filtro_vacio(condicion):
             qs = qs.filter(condicion_vehiculo__iexact=condicion)
@@ -145,6 +152,8 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
                 | Q(placa_vehiculo__icontains=texto)
                 | Q(numero_nota__icontains=texto)
                 | Q(ultima_orden_servicio__icontains=texto)
+                | Q(agencia_venta__icontains=texto)
+                | Q(agencia_servicio__icontains=texto)
             )
 
         return qs
@@ -157,15 +166,21 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], url_path="ligero")
     def ligero(self, request):
         limite = request.query_params.get("limit", "10000")
+
         try:
             limite = int(limite)
         except ValueError:
             limite = 10000
+
         limite = max(100, min(limite, 100000))
+
+        sin_venta = str(request.query_params.get("sin_venta", "")).strip().lower()
+        es_sin_venta = sin_venta in ("1", "true", "si", "sí", "yes")
 
         campos = (
             "vin",
-            "agencia",
+            "agencia_venta",
+            "agencia_servicio",
             "fecha_venta",
             "fecha_salida",
             "numero_nota",
@@ -176,10 +191,9 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             "condicion_vehiculo",
             "nombre_cliente",
             "telefono_cliente",
-            "telefono_cliente2",
-            "telefono_cliente3",
             "correo_cliente",
-            "correo_cliente",
+            "cumpleaños",
+            "rfc",
             "ultima_orden_servicio",
             "tipo_orden",
             "subtipo_orden",
@@ -193,32 +207,40 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             "estado_actividad",
             "meses_desde_venta",
             "segmento",
-            "cumpleaños",
         )
 
         qs = self.get_queryset().values(*campos)[:limite]
 
         data = []
+
         for item in qs:
-            data.append(
-                {
-                    **{k: (item.get(k) or "") for k in campos if k not in (
-                        "fecha_venta", "fecha_salida", "fecha_ultima_os", "cumpleaños",
-                          "total_nota", "total_ultimo_servicio","meses_desde_venta",
-                    )},
-                    "fecha_venta": fecha_iso(item.get("fecha_venta")),
-                    "fecha_salida": fecha_iso(item.get("fecha_salida")),
-                    "fecha_ultima_os": fecha_iso(item.get("fecha_ultima_os")),
-                    "cumpleaños": fecha_iso(item.get("cumpleaños")),
-                    "total_nota": item.get("total_nota") or "",
-                    "total_nota_numero": decimal_desde_texto(item.get("total_nota")),
-                    "total_ultimo_servicio": item.get("total_ultimo_servicio") or "",
-                    "total_ultimo_servicio_numero": decimal_desde_texto(
-                        item.get("total_ultimo_servicio")
-                    ),
-                    "meses_desde_venta": item.get("meses_desde_venta") or 0,
-                }
-            )
+            agencia_actual = item.get("agencia_servicio") if es_sin_venta else item.get("agencia_venta")
+
+            data.append({
+                **{
+                    k: (item.get(k) or "")
+                    for k in campos
+                    if k not in (
+                        "fecha_venta",
+                        "fecha_salida",
+                        "fecha_ultima_os",
+                        "cumpleaños",
+                        "total_nota",
+                        "total_ultimo_servicio",
+                        "meses_desde_venta",
+                    )
+                },
+                "agencia": agencia_actual or "",
+                "fecha_venta": fecha_iso(item.get("fecha_venta")),
+                "fecha_salida": fecha_iso(item.get("fecha_salida")),
+                "fecha_ultima_os": fecha_iso(item.get("fecha_ultima_os")),
+                "cumpleaños": fecha_iso(item.get("cumpleaños")),
+                "total_nota": item.get("total_nota") or "",
+                "total_nota_numero": decimal_desde_texto(item.get("total_nota")),
+                "total_ultimo_servicio": item.get("total_ultimo_servicio") or "",
+                "total_ultimo_servicio_numero": decimal_desde_texto(item.get("total_ultimo_servicio")),
+                "meses_desde_venta": item.get("meses_desde_venta"),
+            })
 
         return Response(data)
 
@@ -226,15 +248,17 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
     def opciones(self, request):
         limite = 100000
 
+        sin_venta = str(request.query_params.get("sin_venta", "")).strip().lower()
+        es_sin_venta = sin_venta in ("1", "true", "si", "sí", "yes")
+
         qs = OrdenServicioVentaVW.objects.using(DB_ALIAS).all()
 
-        sin_venta = str(request.query_params.get("sin_venta", "")).strip().lower()
-
-        if sin_venta in ("1", "true", "si", "sí", "yes"):
-            qs = qs.filter(
-                fecha_ultima_os__isnull=False,
-                fecha_venta__isnull=True,
-            )
+        if es_sin_venta:
+            qs = qs.filter(fecha_venta__isnull=True, fecha_ultima_os__isnull=False)
+            campo_agencia = "agencia_servicio"
+        else:
+            qs = qs.filter(fecha_venta__isnull=False)
+            campo_agencia = "agencia_venta"
 
         qs = qs.values(
             "fecha_ultima_os",
@@ -242,7 +266,7 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
             "segmento",
             "marca",
             "modelo_nombre",
-            "agencia",
+            campo_agencia,
             "condicion_vehiculo",
         )[:limite]
 
@@ -267,7 +291,7 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
                 ("segmento", segmentos),
                 ("marca", marcas),
                 ("modelo_nombre", modelos),
-                ("agencia", agencias),
+                (campo_agencia, agencias),
                 ("condicion_vehiculo", condiciones),
             ):
                 valor = str(item.get(campo) or "").strip()
@@ -286,11 +310,11 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         meses_por_anio = {}
 
         for item in anio_mes:
-            anio = str(item["anio"])
-            meses_por_anio.setdefault(anio, []).append(item["mes"])
+            clave_anio = str(item["anio"])
+            meses_por_anio.setdefault(clave_anio, []).append(item["mes"])
 
-        for anio in meses_por_anio:
-            meses_por_anio[anio] = sorted(set(meses_por_anio[anio]))
+        for clave_anio in meses_por_anio:
+            meses_por_anio[clave_anio] = sorted(set(meses_por_anio[clave_anio]))
 
         return Response({
             "anios": sorted(anios, reverse=True),

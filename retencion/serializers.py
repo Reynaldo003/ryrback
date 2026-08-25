@@ -37,11 +37,15 @@ class TareaClienteSerializer(serializers.ModelSerializer):
         return limpio
 
 class OrdenServicioVentaVWSerializer(serializers.ModelSerializer):
+    agencia = serializers.SerializerMethodField()
+
     class Meta:
         model = OrdenServicioVentaVW
         fields = (
             "vin",
             "agencia",
+            "agencia_venta",
+            "agencia_servicio",
             "fecha_venta",
             "fecha_salida",
             "numero_nota",
@@ -53,6 +57,8 @@ class OrdenServicioVentaVWSerializer(serializers.ModelSerializer):
             "nombre_cliente",
             "telefono_cliente",
             "correo_cliente",
+            "cumpleaños",
+            "rfc",
             "ultima_orden_servicio",
             "tipo_orden",
             "subtipo_orden",
@@ -66,9 +72,13 @@ class OrdenServicioVentaVWSerializer(serializers.ModelSerializer):
             "estado_actividad",
             "meses_desde_venta",
             "segmento",
-            "cumpleaños",
         )
         read_only_fields = fields
+
+    def get_agencia(self, obj):
+        if obj.fecha_venta is None:
+            return obj.agencia_servicio
+        return obj.agencia_venta
 
 class OrdenServicioCompletaVWSerializer(serializers.ModelSerializer):
     class Meta:
