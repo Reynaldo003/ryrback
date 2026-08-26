@@ -191,6 +191,11 @@ def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expedie
         if conversacion.ia_pausada:
             bloqueos.append("conversacion_ia_pausada")
 
+    datos_extra = (
+        conversacion.datos_extra
+        if conversacion and isinstance(conversacion.datos_extra, dict)
+        else {}
+    )
     return {
         "numero_asesor": numero_asesor,
         "telefono": tel or (expediente.cliente.telefono if expediente and expediente.cliente_id else ""),
@@ -218,6 +223,15 @@ def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expedie
             "motivo_requiere_asesor": expediente.motivo_requiere_asesor if expediente else "",
             "cotizacion_pendiente": bool(expediente.cotizacion_pendiente) if expediente else False,
             "cotizacion_solicitada_at": expediente.cotizacion_solicitada_at.isoformat() if expediente and expediente.cotizacion_solicitada_at else None,
+        },
+        "cita": {
+            "estado": str(datos_extra.get("estado_cita") or ""),
+            "vehiculo": str(datos_extra.get("vehiculo_cita") or ""),
+            "fecha_hora": (
+                expediente.ultima_cita_agendada.isoformat()
+                if expediente and expediente.ultima_cita_agendada
+                else None
+            ),
         },
         "conversacion": {
             "existe": bool(conversacion),

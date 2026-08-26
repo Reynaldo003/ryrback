@@ -49,16 +49,16 @@ META_ADS_ACCESS_TOKEN = ""
 GRAPH_VERSION = "v22.0"
 WHATSAPP_WABA_ID_DEFAULT = "TU_WHATSAPP_BUSINESS_ACCOUNT_ID"
 
-whatsapp_url = 'https://graph.facebook.com/v22.0/836147029587691/messages'
-whatsapp_url_liz = 'https://graph.facebook.com/v22.0/1002516582953413/messages'
-whatsapp_url_eren = 'https://graph.facebook.com/v22.0/970758852797236/messages'
-whatsapp_url_bianca = 'https://graph.facebook.com/v22.0/1118159131375259/messages'
-whatsapp_url_denisse = 'https://graph.facebook.com/v22.0/1134322799754327/messages'
-whatsapp_url_marelly = 'https://graph.facebook.com/v22.0/1113085168553604/messages'
-whatsapp_url_edgar = 'https://graph.facebook.com/v22.0/1208561865665780/messages'
-whatsapp_url_dulce = 'https://graph.facebook.com/v22.0/1285910144598050/messages'
-whatsapp_url_ryr = 'https://graph.facebook.com/v22.0/674631769071379/messages'
-whatsapp_url_servicio_cba = 'https://graph.facebook.com/v22.0/1166025403270294/messages'
+whatsapp_url = 'https://graph.facebook.com/v26.0/836147029587691/messages'
+whatsapp_url_liz = 'https://graph.facebook.com/v26.0/1002516582953413/messages'
+whatsapp_url_eren = 'https://graph.facebook.com/v26.0/970758852797236/messages'
+whatsapp_url_bianca = 'https://graph.facebook.com/v26.0/1118159131375259/messages'
+whatsapp_url_denisse = 'https://graph.facebook.com/v26.0/1134322799754327/messages'
+whatsapp_url_marelly = 'https://graph.facebook.com/v26.0/1113085168553604/messages'
+whatsapp_url_edgar = 'https://graph.facebook.com/v26.0/1208561865665780/messages'
+whatsapp_url_dulce = 'https://graph.facebook.com/v26.0/1285910144598050/messages'
+whatsapp_url_ryr = 'https://graph.facebook.com/v26.0/674631769071379/messages'
+whatsapp_url_servicio_cba = 'https://graph.facebook.com/v26.0/1166025403270294/messages'
 
 whatsapp_numero_default = "522712638803"
 whatsapp_numero_liz = "522721111244"
@@ -121,7 +121,7 @@ WHATSAPP_LINES = {
         "phone_number_id": "1118159131375259",
         "waba_id": "1674154250377394",
         "access_token": whatsapp_token,
-        "asesor_digital": "Bianca Chavez Alarcon",
+        "asesor_digital": "Bianca Isabel Chavez Alarcon",
         "messages_url": whatsapp_url_bianca,
         "agencia": "VW Cordoba Usados",
         "business": "Usados",

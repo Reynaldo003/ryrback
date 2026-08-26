@@ -13,12 +13,13 @@ import re
 from django.conf import settings
 from django.db import close_old_connections
 from django.core.files.storage import default_storage
-from django.db.models import Count, OuterRef, Q, Subquery
+from django.db.models import Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
+from requests import request
 from rest_framework import status, viewsets
 from rest_framework.decorators import api_view, permission_classes, parser_classes, authentication_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -1969,12 +1970,19 @@ def chats_list(request):
     scope = str(request.query_params.get("scope", "recientes") or "recientes").strip().casefold()
     dias = _int_param(request, "dias", 3, 1, 30)
     before = _parse_dt_param(request.query_params.get("before", ""))
+
     try:
         before_id = int(request.query_params.get("before_id", "") or 0)
     except (TypeError, ValueError):
         before_id = 0
 
-    limite_recientes = timezone.now() - timedelta(days=dias)
+    try:
+        before_prioridad = int(request.query_params.get("before_prioridad", "") or 0)
+    except (TypeError, ValueError):
+        before_prioridad = 0
+    ahora = timezone.now()
+    limite_recientes = ahora - timedelta(days=dias)
+    limite_cita_prioritaria = ahora + timedelta(days=5)
     last_msg_qs = (
         MensajeWhatsApp.objects
         .filter(telefono=OuterRef("cliente__telefono"), numero_asesor=numero_asesor)
@@ -2000,18 +2008,63 @@ def chats_list(request):
         scope = "busqueda"
     elif paginado:
         if scope == "historico":
-            qs = qs.filter(last_time__lt=limite_recientes)
+            qs = qs.filter(
+                last_time__lt=limite_recientes,
+            ).filter(
+                Q(ultima_cita_agendada__isnull=True)
+                | Q(ultima_cita_agendada__lt=ahora)
+                | Q(ultima_cita_agendada__gt=limite_cita_prioritaria)
+            )
         else:
             scope = "recientes"
-            qs = qs.filter(last_time__gte=limite_recientes)
+            qs = qs.filter(
+                Q(last_time__gte=limite_recientes)
+                | Q(
+                    ultima_cita_agendada__gte=ahora,
+                    ultima_cita_agendada__lte=limite_cita_prioritaria,
+                )
+            )
+    qs = qs.annotate(
+        tiene_cita_futura=Case(
+            When(
+                ultima_cita_agendada__isnull=False,
+                ultima_cita_agendada__gte=ahora,
+                ultima_cita_agendada__lte=limite_cita_prioritaria,
+                then=Value(1),
+            ),
+            default=Value(0),
+            output_field=IntegerField(),
+        )
+    )
 
     if paginado and before:
         if before_id:
-            qs = qs.filter(Q(last_time__lt=before) | Q(last_time=before, id__lt=before_id))
+            qs = qs.filter(
+                Q(tiene_cita_futura__lt=before_prioridad)
+                | Q(
+                    tiene_cita_futura=before_prioridad,
+                    last_time__lt=before,
+                )
+                | Q(
+                    tiene_cita_futura=before_prioridad,
+                    last_time=before,
+                    id__lt=before_id,
+                )
+            )
         else:
-            qs = qs.filter(last_time__lt=before)
+            qs = qs.filter(
+                Q(tiene_cita_futura__lt=before_prioridad)
+                | Q(
+                    tiene_cita_futura=before_prioridad,
+                    last_time__lt=before,
+                )
+            )
 
-    consulta = qs.order_by("-last_time", "-id")
+    consulta = qs.order_by(
+        "-tiene_cita_futura",
+        "-last_time",
+        "-id",
+    )
     if paginado:
         pagina = list(consulta[:limit + 1])
         has_more = len(pagina) > limit
@@ -2028,7 +2081,10 @@ def chats_list(request):
         if dt_ui and settings.USE_TZ and timezone.is_aware(dt_ui):
             dt_ui = timezone.localtime(dt_ui)
         telefono = normaliza_tel_mx(exp.cliente.telefono)
-        estado_ia = None if paginado else obtener_estado_ia_conversacion(numero_asesor=numero_asesor, expediente=exp)
+        estado_ia = obtener_estado_ia_conversacion(
+            numero_asesor=numero_asesor,
+            expediente=exp,
+        )
         data.append({
             "id": exp.id, "telefono": telefono, "nombre": exp.cliente.nombre or "Prospecto",
             "agencia": exp.agencia or "", "linea": exp.business or "", "estado": exp.estado or "",
@@ -2055,7 +2111,10 @@ def chats_list(request):
         "paginacion": {
             "limit": limit, "has_more": has_more, "scope": scope, "next_scope": next_scope,
             "before": ultimo.last_time.isoformat() if ultimo and ultimo.last_time else "",
-            "before_id": ultimo.id if ultimo else 0, "dias_recientes": dias, "query": busqueda,
+            "before_id": ultimo.id if ultimo else 0,
+            "before_prioridad": ultimo.tiene_cita_futura if ultimo else 0,
+            "dias_recientes": dias,
+            "query": busqueda,
         },
     }, status=status.HTTP_200_OK)
 

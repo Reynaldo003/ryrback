@@ -22,7 +22,7 @@ from google import genai
 from google.genai import types
 
 from .sett import WHATSAPP_LINES
-from citas.models import ClienteComercial, normaliza_tel_mx
+from citas.models import Cita, ClienteComercial, normaliza_tel_mx
 from .models import ExpedienteDigital, MensajeWhatsApp, ConfiguracionIAWhatsApp, ConversacionIA
 from .contacto import (
     enviar_texto_whatsapp,
@@ -291,6 +291,140 @@ def _enganche_referencial(version: str) -> Optional[str]:
 
     return f"${enganche:,} MXN aprox. (20% referencial)"
 
+def _evaluar_enganche_version(
+    version: str,
+    enganche_cliente: Optional[int],
+) -> dict[str, Any]:
+    version_normalizada = _normalizar_version_catalogo(version)
+
+    if not version_normalizada:
+        return {
+            "ok": False,
+            "motivo": "version_no_valida",
+        }
+
+    item = _obtener_catalogo_dict().get(version_normalizada)
+
+    if not item:
+        return {
+            "ok": False,
+            "motivo": "vehiculo_no_encontrado",
+        }
+
+    precio_lista = _int_detectado(
+        item.get("precio_lista")
+    )
+
+    if not precio_lista:
+        return {
+            "ok": False,
+            "motivo": "precio_no_disponible",
+        }
+
+    enganche_minimo = round(
+        precio_lista * 0.20
+    )
+
+    enganche_cliente = _int_detectado(
+        enganche_cliente
+    )
+
+    cumple = bool(
+        enganche_cliente is not None
+        and enganche_cliente >= enganche_minimo
+    )
+
+    faltante = (
+        max(enganche_minimo - enganche_cliente, 0)
+        if enganche_cliente is not None
+        else None
+    )
+
+    return {
+        "ok": True,
+        "version": version_normalizada,
+        "precio_lista": precio_lista,
+        "enganche_minimo": enganche_minimo,
+        "enganche_cliente": enganche_cliente,
+        "cumple": cumple,
+        "faltante": faltante,
+    }
+
+def _buscar_alternativas_por_enganche(
+    enganche_cliente: Optional[int],
+    *,
+    excluir_version: str = "",
+    limite: int = 4,
+) -> list[dict[str, Any]]:
+    enganche_cliente = _int_detectado(enganche_cliente)
+
+    if not enganche_cliente or enganche_cliente <= 0:
+        return []
+
+    excluir_version = str(excluir_version or "").strip().upper()
+
+    alternativas = []
+
+    for clave, item in _obtener_catalogo_dict().items():
+        if excluir_version and clave == excluir_version:
+            continue
+
+        precio_lista = _int_detectado(item.get("precio_lista"))
+
+        if not precio_lista:
+            continue
+
+        enganche_minimo = round(precio_lista * 0.20)
+
+        if enganche_cliente < enganche_minimo:
+            continue
+
+        alternativas.append({
+            "version": clave,
+            "modelo": item.get("modelo"),
+            "ano": item.get("ano"),
+            "precio_lista": precio_lista,
+            "enganche_minimo": enganche_minimo,
+            "margen_enganche": enganche_cliente - enganche_minimo,
+        })
+
+    alternativas.sort(
+        key=lambda x: (
+            x["margen_enganche"],
+            -x["precio_lista"],
+        )
+    )
+
+    return alternativas[:limite]
+
+def _contexto_negociacion_enganche(
+    version: str,
+    enganche_cliente: Optional[int],
+) -> dict[str, Any]:
+    evaluacion = _evaluar_enganche_version(
+        version,
+        enganche_cliente,
+    )
+
+    if not evaluacion.get("ok"):
+        return {
+            "evaluacion": evaluacion,
+            "alternativas": [],
+        }
+
+    alternativas = []
+
+    if not evaluacion.get("cumple"):
+        alternativas = _buscar_alternativas_por_enganche(
+            enganche_cliente,
+            excluir_version=evaluacion.get("version", ""),
+        )
+
+    return {
+        "evaluacion": evaluacion,
+        "alternativas": alternativas,
+    }
+
 COMPARACION_DESEMPENO: dict[str, dict] = {
     "GTI 2026":                      {"hp": 261, "nm": 370, "motor": "2.0L TSI", "transmision": "DSG 7"},
     "GLI 2026":                      {"hp": 230, "nm": 350, "motor": "2.0L TSI", "transmision": "Automatica"},
@@ -347,7 +481,7 @@ ACCIONES_OFRECIDAS_VALIDAS = {
     "saludo_inicial", "pedir_nombre", "pedir_necesidad", "compartir_precio",
     "compartir_pdf", "confirmar_canalizacion", "preguntar_tipo_cliente",
     "preguntar_forma_pago", "continuar_contexto", "pedir_enganche",
-    "pedir_buro", "lead_calificado", "ninguna",
+    "pedir_buro", "lead_calificado", "invitar_cita", "descalificar", "ninguna",
 }
 
 PALABRAS_CATALOGO_ANTERIOR = {
@@ -801,6 +935,92 @@ def _actualizar_datos_conversacion(
 
     conversacion.save(update_fields=list(dict.fromkeys(campos_update)))
 
+def _crear_cita_desde_ia(
+    *,
+    cliente: ClienteComercial,
+    expediente: ExpedienteDigital,
+    numero_asesor: str,
+    fecha_cita: str,
+    hora_cita: str,
+) -> Optional[Cita]:
+    estado_cita = _leer_dato_conversacion(
+        expediente,
+        numero_asesor,
+        "estado_cita",
+        default="",
+    )
+
+    if estado_cita != "pendiente_seleccion":
+        return None
+
+    vehiculo_cita = str(
+        _leer_dato_conversacion(
+            expediente,
+            numero_asesor,
+            "vehiculo_cita",
+            default="",
+        )
+        or expediente.auto_interes
+        or ""
+    ).strip()
+
+    try:
+        fecha_hora = datetime.strptime(
+            f"{fecha_cita} {hora_cita}",
+            "%Y-%m-%d %H:%M",
+        )
+    except (TypeError, ValueError):
+        return None
+
+    ahora = timezone.now()
+    zona_horaria = timezone.get_current_timezone()
+
+    if timezone.is_aware(ahora) and timezone.is_naive(fecha_hora):
+        fecha_hora = timezone.make_aware(
+            fecha_hora,
+            zona_horaria,
+        )
+
+    elif timezone.is_naive(ahora) and timezone.is_aware(fecha_hora):
+        fecha_hora = timezone.make_naive(
+            fecha_hora,
+            zona_horaria,
+        )
+
+    if fecha_hora <= ahora:
+        return None
+
+    with transaction.atomic():
+        cita = Cita.objects.create(
+            cliente=cliente,
+            agencia=expediente.agencia or "",
+            auto_interes=vehiculo_cita,
+            fecha_hora_cita=fecha_hora,
+            asistencia=False,
+            tipo_cita="Digital",
+            asesor_digital="IA Vagen",
+            comentarios="Cita generada automáticamente por IA Vagen.",
+        )
+        if expediente.estado != "Cita Programada":
+            expediente.estado = "Cita Programada"
+            expediente.save(
+                update_fields=["estado", "actualizado"]
+            )
+        _actualizar_datos_conversacion(
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+            datos={
+                "estado_cita": "agendada",
+                "vehiculo_cita": vehiculo_cita,
+                "cita_id": cita.id,
+                "fecha_cita": fecha_cita,
+                "hora_cita": hora_cita,
+            },
+            estado_conversacion="cita_agendada",
+            pregunta_pendiente="",
+        )
+
+    return cita
 
 def _obtener_etapa_perfilado(expediente: ExpedienteDigital, numero_asesor: str = "") -> int:
     """
@@ -928,6 +1148,18 @@ GEMINI_DECISION_SCHEMA = {
         "requiere_asesor": {"type": "BOOLEAN"},
         "accion_ofrecida": {"type": "STRING"},
         "nueva_etapa_perfilado": {"type": "INTEGER"},
+                "fecha_cita": {
+            "anyOf": [
+                {"type": "STRING"},
+                {"type": "NULL"},
+            ]
+        },
+        "hora_cita": {
+            "anyOf": [
+                {"type": "STRING"},
+                {"type": "NULL"},
+            ]
+        },
         "detected_profile": {
             "type": "OBJECT",
             "properties": {
@@ -1018,6 +1250,8 @@ GEMINI_DECISION_SCHEMA = {
         "requiere_asesor",
         "accion_ofrecida",
         "nueva_etapa_perfilado",
+        "fecha_cita",
+        "hora_cita",
         "detected_profile",
         "correcciones_explicitas",
         "reasoning_tags",
@@ -1093,6 +1327,47 @@ FINANCIAMIENTO
   disponibilidad o aprobación, usa `requiere_asesor=true`.
 - Una mensualidad objetivo proporcionada por el cliente debe guardarse como perfil,
   no debe responderse preguntando nuevamente cuál mensualidad busca.
+
+NEGOCIACIÓN DE ENGANCHE
+
+- `negociacion_enganche` contiene cálculos comerciales realizados por el sistema y debe considerarse la fuente autoritativa para validar el enganche.
+- Nunca menciones al cliente que el enganche mínimo corresponde a un porcentaje ni menciones "20%".
+- Comunica únicamente el monto exacto en MXN contenido en `enganche_minimo`.
+- Nunca recalcules, redondees, alteres ni inventes el enganche mínimo, el precio del vehículo o el faltante.
+- Si `evaluacion.cumple=true`, informa de forma comercial que el enganche del cliente sí cubre el mínimo requerido para esa versión.
+- Si `evaluacion.cumple=false`, informa cuál es el enganche mínimo exacto requerido para el vehículo de interés.
+- Puedes mencionar el `faltante` para explicar cuánto necesitaría incrementar su enganche.
+- Si el cliente no alcanza el enganche mínimo y existen elementos en `alternativas`, no lo descalifiques ni lo canalices automáticamente.
+- En ese caso, negocia ofreciendo únicamente vehículos incluidos en `alternativas`.
+- Para cada alternativa utiliza exclusivamente el modelo, versión, precio y enganche mínimo recibidos en el contexto.
+- Prioriza primero las alternativas que aparecen al inicio de la lista porque son las que mejor se ajustan al enganche proporcionado.
+- Presenta pocas opciones a la vez, preferentemente una o dos, y explica brevemente por qué pueden ajustarse mejor al presupuesto del cliente.
+- El objetivo es buscar un acuerdo comercial respetando siempre los precios y enganches reales.
+- Si no existen alternativas viables, no inventes otra opción. Continúa la negociación preguntando si el cliente puede ajustar su enganche antes de considerar una descalificación.
+- Usa `accion_ofrecida="descalificar"` únicamente en uno de estos dos casos:
+  1. No existen alternativas viables y el cliente confirma explícitamente que no puede o no desea aumentar o ajustar su enganche.
+  2. Sí existen alternativas viables, pero el cliente confirma explícitamente que no desea continuar con ninguna de ellas.
+- Nunca uses `accion_ofrecida="descalificar"` en el primer rechazo por enganche insuficiente.
+- Si existen alternativas viables, continúa ofreciéndolas y está prohibido descalificar mientras el cliente no haya rechazado explícitamente continuar con todas ellas.
+- Si el cliente aún no ha respondido si puede ajustar el enganche o si desea alguna alternativa disponible, continúa la negociación y no descalifiques.
+- Cuando uses `accion_ofrecida="descalificar"`, responde de forma amable y coherente con el motivo real: si no hubo alternativas viables, explica que por el momento no se encontró una opción acorde al enganche; si el cliente rechazó las alternativas disponibles, indica simplemente que por el momento esas opciones no son de su interés.
+- Si `evaluacion.cumple=true`, además de informar que el enganche cubre el mínimo requerido, invita al cliente a agendar una cita cuando sea comercialmente apropiado.
+- Al invitar a una cita, toma en cuenta `perfil_confirmado.plazo_compra` para plantear la cita de forma coherente con el tiempo en que el cliente desea comprar.
+- Cuando invites al cliente a agendar una cita, usa `accion_ofrecida="invitar_cita"`.
+- `accion_ofrecida="invitar_cita"` no modifica ni sustituye `requiere_asesor`; ambos campos son independientes.
+- No inventes una fecha ni una hora. Invita al cliente a elegir un día y horario disponible.
+- Cuando `accion_ofrecida="invitar_cita"`, no inventes la fecha ni la hora: pregunta al cliente qué día y a qué hora desea asistir.
+- Si el cliente responde con una fecha y hora para la cita, interpreta esa respuesta y llena `fecha_cita` y `hora_cita`.
+- `fecha_cita` debe devolverse únicamente en formato `YYYY-MM-DD`.
+- `hora_cita` debe devolverse únicamente en formato `HH:MM` de 24 horas.
+- Para interpretar cualquier fecha relativa utiliza EXCLUSIVAMENTE `tiempo_actual.fecha` y `tiempo_actual.dia_semana` como referencia.
+- Si el cliente menciona un día de la semana, calcula la próxima fecha calendario que realmente corresponda a ese día. Verifica que el día de la semana y la fecha resultante sean coherentes antes de devolver `fecha_cita`.
+- Nunca afirmes que una fecha corresponde a lunes, martes, miércoles, jueves, viernes, sábado o domingo sin verificarlo contra el calendario.
+- "hoy" corresponde exactamente a `tiempo_actual.fecha`; "mañana" es el día calendario siguiente y "pasado mañana" son dos días calendario después.
+- Si dice "a las 4 de la tarde", devuelve `16:00`; si dice "a las 10 de la mañana", devuelve `10:00`.
+- Solo llena `fecha_cita` y `hora_cita` cuando el cliente esté respondiendo a una invitación de cita o esté claramente solicitando agendar una cita.
+- Si falta la fecha o falta la hora, deja en `null` el dato faltante y pregunta únicamente por la información que falta.
+- No confirmes que la cita quedó registrada solo por haber detectado fecha y hora; la confirmación final depende del sistema.
 
 CANALIZACIÓN A ASESOR
 
@@ -1335,9 +1610,86 @@ def _decision_conversacional_ia(
         9 <= ahora_local.hour < 18
     )
 
+    version_negociacion = _normalizar_version_catalogo(
+        auto_interes_actual
+        or conversacion.ultimo_modelo_mencionado
+    )
+
+    texto_monto_actual = _normalizar_texto(
+        texto_usuario
+    )
+
+    mensaje_es_enganche = (
+        conversacion.pregunta_pendiente == "enganche"
+        or any(
+            frase in texto_monto_actual
+            for frase in (
+                "ENGANCHE",
+                "PUEDO DAR",
+                "PUEDO PONER",
+                "DAR DE INICIAL",
+                "PONER DE INICIAL",
+                "DE INICIAL",
+            )
+        )
+    )
+
+    menciona_mensualidad = any(
+        frase in texto_monto_actual
+        for frase in (
+            "MENSUAL",
+            "MENSUALIDAD",
+            "AL MES",
+            "POR MES",
+        )
+    )
+
+    enganche_turno_actual = (
+        _extraer_monto_pesos(texto_usuario)
+        if mensaje_es_enganche and not menciona_mensualidad
+        else None
+    )
+
+    enganche_negociacion = (
+        enganche_turno_actual
+        or expediente.enganche_monto
+        or enganche_registrado
+    )
+
+    negociacion_enganche = {
+        "disponible": False,
+    }
+
+    if version_negociacion and enganche_negociacion:
+        negociacion_enganche = {
+            "disponible": True,
+            **_contexto_negociacion_enganche(
+                version_negociacion,
+                enganche_negociacion,
+            ),
+        }
+
+    dias_semana_es = (
+        "lunes",
+        "martes",
+        "miércoles",
+        "jueves",
+        "viernes",
+        "sábado",
+        "domingo",
+    )
+
+    dia_semana_actual = dias_semana_es[ahora_local.weekday()]
+
     contexto = {
         "numero_linea": numero_asesor,
         "mensaje_actual": texto_usuario,
+        "tiempo_actual": {
+            "fecha": ahora_local.strftime("%Y-%m-%d"),
+            "hora": ahora_local.strftime("%H:%M"),
+            "dia_semana": dia_semana_actual,
+            "timezone": "America/Mexico_City",
+        },
         "prospecto": {
         "nombre_confirmado": nombre_cliente or None,
         "nombre_perfil_whatsapp_candidato": (
@@ -1386,6 +1738,7 @@ def _decision_conversacional_ia(
                 or None
             ),
         },
+        "negociacion_enganche": negociacion_enganche,
         "catalogo": _catalogo_para_prompt(),
         "horario_asesor_humano": {
             "inicio": "09:00",
@@ -1611,6 +1964,98 @@ def _decision_conversacional_ia(
                         "skip_send": True,
                         "skip_reason": "respuesta_repetida",
                     }
+        # ---------------------------------------------------------
+        # Protección determinística de descalificación por enganche
+        # ---------------------------------------------------------
+        evaluacion_enganche = _ia_dict(
+            negociacion_enganche.get("evaluacion")
+        )
+
+        alternativas_enganche = negociacion_enganche.get(
+            "alternativas"
+        )
+
+        if not isinstance(alternativas_enganche, list):
+            alternativas_enganche = []
+
+        texto_enganche = _normalizar_texto(
+            texto_usuario
+        )
+
+        cliente_rechaza_ajuste_enganche = any(
+            frase in texto_enganche
+            for frase in (
+                "NO PUEDO AUMENTAR",
+                "NO PUEDO PONER MAS",
+                "NO TENGO MAS",
+                "ES TODO LO QUE TENGO",
+                "NO PUEDO AJUSTAR",
+                "NO QUIERO AUMENTAR",
+                "NO QUIERO PONER MAS",
+            )
+        )
+
+        cliente_rechaza_todas_alternativas = any(
+            frase in texto_enganche
+            for frase in (
+                "NO ME INTERESA NINGUNA",
+                "NO QUIERO NINGUNA",
+                "NINGUNA ME INTERESA",
+                "NINGUNA DE ESAS",
+                "NO ME SIRVE NINGUNA",
+                "NO QUIERO ESAS OPCIONES",
+                "NO ME INTERESAN ESAS OPCIONES",
+                "NO QUIERO NINGUNA DE LAS OPCIONES",
+            )
+        )
+
+        sin_alternativas_viables = (
+            bool(evaluacion_enganche)
+            and evaluacion_enganche.get("cumple") is False
+            and not alternativas_enganche
+        )
+
+        hay_alternativas_viables = (
+            bool(evaluacion_enganche)
+            and evaluacion_enganche.get("cumple") is False
+            and bool(alternativas_enganche)
+        )
+
+        if (
+            sin_alternativas_viables
+            and cliente_rechaza_ajuste_enganche
+        ):
+            decision["accion_ofrecida"] = "descalificar"
+            decision["requiere_asesor"] = False
+            decision["intent"] = "descalificacion_comercial"
+            decision["question_key"] = None
+            decision["motivo_descalificacion"] = (
+                "Enganche insuficiente sin alternativa viable"
+            )
+            decision["reply_text"] = (
+                "Entiendo. Por el momento no encontramos una opción "
+                "del catálogo que se ajuste al enganche disponible. "
+                "Si más adelante cambia tu presupuesto, con gusto "
+                "podemos revisar nuevamente las opciones disponibles."
+            )
+
+        elif (
+            hay_alternativas_viables
+            and cliente_rechaza_todas_alternativas
+        ):
+            decision["accion_ofrecida"] = "descalificar"
+            decision["requiere_asesor"] = False
+            decision["intent"] = "descalificacion_comercial"
+            decision["question_key"] = None
+            decision["motivo_descalificacion"] = (
+                "Cliente rechazó las alternativas viables"
+            )
+            decision["reply_text"] = (
+                "Entiendo. Por el momento las alternativas disponibles "
+                "no son de tu interés. Si más adelante deseas revisar "
+                "otras opciones, con gusto podemos ayudarte."
+            )
+
 
         if not str(
             decision.get("reply_text") or ""
@@ -1978,9 +2423,33 @@ def _sanitizar_decision_ia(
     salida.setdefault("requiere_asesor", False)
     salida.setdefault("accion_ofrecida", "ninguna")
     salida.setdefault("nueva_etapa_perfilado", etapa_perfilado)
+    salida.setdefault("fecha_cita", None)
+    salida.setdefault("hora_cita", None)
     salida.setdefault("detected_profile", {})
     salida.setdefault("correcciones_explicitas", {})
     salida.setdefault("reasoning_tags", [])
+
+    fecha_cita = str(salida.get("fecha_cita") or "").strip()
+    hora_cita = str(salida.get("hora_cita") or "").strip()
+
+    try:
+        if fecha_cita:
+            datetime.strptime(fecha_cita, "%Y-%m-%d")
+        else:
+            fecha_cita = None
+    except ValueError:
+        fecha_cita = None
+
+    try:
+        if hora_cita:
+            datetime.strptime(hora_cita, "%H:%M")
+        else:
+            hora_cita = None
+    except ValueError:
+        hora_cita = None
+
+    salida["fecha_cita"] = fecha_cita
+    salida["hora_cita"] = hora_cita
 
     salida["reply_text"] = _limitar_texto(
         str(salida.get("reply_text") or ""),
@@ -2896,6 +3365,143 @@ def construir_respuesta_informativa(
         decision.get("accion_ofrecida") or "ninguna"
     ).strip()
 
+        # Si el cliente acepta una alternativa viable, avanzar a cita.
+    version_anterior = _normalizar_version_catalogo(
+        auto_interes_actual
+    )
+
+    texto_aceptacion = _normalizar_texto(
+        texto_usuario
+    )
+
+    acepta_alternativa = (
+        any(
+            frase in texto_aceptacion
+            for frase in (
+                "SI ME INTERESA",
+                "ME INTERESA",
+                "QUIERO ESA",
+                "QUIERO ESE",
+                "ME QUEDO CON",
+                "VAMOS CON",
+                "PREFIERO ESA",
+                "PREFIERO ESE",
+            )
+        )
+        and not any(
+            frase in texto_aceptacion
+            for frase in (
+                "NO ME INTERESA",
+                "NO QUIERO",
+                "MEJOR NO",
+            )
+        )
+    )
+
+    es_alternativa_nueva = bool(
+        version_contexto
+        and version_anterior
+        and version_contexto != version_anterior
+    )
+
+    if es_alternativa_nueva and acepta_alternativa:
+        enganche_actual = (
+            expediente.enganche_monto
+            or enganche_registrado
+        )
+
+        contexto_alternativa = _contexto_negociacion_enganche(
+            version_contexto,
+            enganche_actual,
+        )
+
+        evaluacion_alternativa = _ia_dict(
+            contexto_alternativa.get("evaluacion")
+        )
+
+        if evaluacion_alternativa.get("cumple") is True:
+            accion_ofrecida = "invitar_cita"
+
+            respuesta_texto = (
+                f"Perfecto, seguimos con {version_contexto.title()}. "
+                "¿Qué día y a qué hora te gustaría agendar tu cita?"
+            )
+
+            decision["accion_ofrecida"] = "invitar_cita"
+            decision["reply_text"] = respuesta_texto
+            decision["selected_version"] = version_contexto
+
+    # Si el cliente acaba de dar un enganche suficiente,
+    # priorizar la invitación a cita.
+    texto_enganche_cita = _normalizar_texto(
+        texto_usuario
+    )
+
+    mensaje_aporta_enganche = (
+        accion_ofrecida_previa == "pedir_enganche"
+        or any(
+            frase in texto_enganche_cita
+            for frase in (
+                "PUEDO DAR",
+                "PUEDO PONER",
+                "DE ENGANCHE",
+                "DAR DE INICIAL",
+                "PONER DE INICIAL",
+                "DE INICIAL",
+            )
+        )
+    )
+
+    menciona_mensualidad_cita = any(
+        frase in texto_enganche_cita
+        for frase in (
+            "MENSUAL",
+            "MENSUALIDAD",
+            "AL MES",
+            "POR MES",
+        )
+    )
+
+    enganche_para_cita = (
+        _extraer_monto_pesos(texto_usuario)
+        if mensaje_aporta_enganche
+        and not menciona_mensualidad_cita
+        else None
+    )
+
+    version_para_cita = (
+        version_contexto
+        or _normalizar_version_catalogo(
+            auto_interes_actual or expediente.auto_interes
+        )
+    )
+
+    if version_para_cita and enganche_para_cita:
+        contexto_cita = _contexto_negociacion_enganche(
+            version_para_cita,
+            enganche_para_cita,
+        )
+
+        evaluacion_cita = _ia_dict(
+            contexto_cita.get("evaluacion")
+        )
+
+        if evaluacion_cita.get("cumple") is True:
+            accion_ofrecida = "invitar_cita"
+            version_contexto = version_para_cita
+
+            respuesta_texto = (
+                f"Perfecto, con ese enganche sí cubres el mínimo "
+                f"requerido para {version_para_cita.title()}. "
+                "¿Qué día y a qué hora te gustaría agendar tu cita?"
+            )
+
+            decision["accion_ofrecida"] = "invitar_cita"
+            decision["reply_text"] = respuesta_texto
+            decision["question_key"] = None
+            decision["intent"] = "invitar_cita"
+            decision["selected_version"] = version_para_cita
+
     try:
         nueva_etapa = int(
             decision.get(
@@ -3589,6 +4195,36 @@ def responder_mensaje_automatico(
         nombre_cliente=nombre_contexto,
     )
 
+    estado_cita_previo = _leer_dato_conversacion(
+        expediente,
+        numero_asesor,
+        "estado_cita",
+        default="",
+    )
+
+    vehiculo_cita_previo = str(
+        _leer_dato_conversacion(
+            expediente,
+            numero_asesor,
+            "vehiculo_cita",
+            default="",
+        )
+        or ""
+    ).strip()
+
+    if estado_cita_previo == "pendiente_seleccion" and vehiculo_cita_previo:
+        version_cita = _normalizar_version_catalogo(
+            vehiculo_cita_previo
+        )
+
+        if version_cita:
+            version_contexto = version_cita
+            raw_decision["selected_version"] = version_cita
+
+    requiere_asesor_previo = bool(
+        expediente.requiere_asesor
+    )
+
     _guardar_datos_detectados_en_cliente_y_expediente(
         cliente=cliente,
         expediente=expediente,
@@ -3607,6 +4243,86 @@ def responder_mensaje_automatico(
         requiere_asesor=requiere_asesor,
         accion_ofrecida=accion_ofrecida,
     )
+
+    cita_creada = None
+    fecha_cita = raw_decision.get("fecha_cita")
+    hora_cita = raw_decision.get("hora_cita")
+
+    if fecha_cita and hora_cita:
+        cita_creada = _crear_cita_desde_ia(
+            cliente=cliente,
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+            fecha_cita=fecha_cita,
+            hora_cita=hora_cita,
+        )
+
+        if cita_creada:
+            if (
+                not requiere_asesor_previo
+                and expediente.requiere_asesor
+            ):
+                expediente.requiere_asesor = False
+                expediente.motivo_requiere_asesor = ""
+                expediente.save(
+                    update_fields=[
+                        "requiere_asesor",
+                        "motivo_requiere_asesor",
+                        "actualizado",
+                    ]
+                )
+            fecha_hora_cita = cita_creada.fecha_hora_cita
+            fecha_hora_local = (
+                timezone.localtime(fecha_hora_cita)
+                if timezone.is_aware(fecha_hora_cita)
+                else fecha_hora_cita
+            )
+
+            fecha_legible = fecha_hora_local.strftime("%d/%m/%Y")
+            hora_legible = fecha_hora_local.strftime("%H:%M")
+            agencia_cita = (
+                cita_creada.agencia
+                or expediente.agencia
+                or "la agencia"
+            )
+
+            respuesta_texto = (
+                f"Listo, tu cita quedó agendada para el "
+                f"{fecha_legible} a las {hora_legible} "
+                f"en {agencia_cita}. Te esperamos."
+            )
+
+            requiere_asesor = False
+            accion_ofrecida = "ninguna"
+
+            raw_decision["reply_text"] = respuesta_texto
+            raw_decision["requiere_asesor"] = False
+            raw_decision["accion_ofrecida"] = "ninguna"
+
+        else:
+            respuesta_texto = (
+                "Esa fecha u hora no es válida o ya pasó. "
+                "¿Qué otra fecha y hora te funcionan para agendar tu cita?"
+            )
+
+            requiere_asesor = False
+            accion_ofrecida = "invitar_cita"
+
+            raw_decision["reply_text"] = respuesta_texto
+            raw_decision["requiere_asesor"] = False
+            raw_decision["accion_ofrecida"] = "invitar_cita"
+
+    if cita_creada is None and accion_ofrecida == "invitar_cita":
+        _actualizar_datos_conversacion(
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+            datos={
+                "estado_cita": "pendiente_seleccion",
+                "vehiculo_cita": version_contexto or "",
+            },
+            estado_conversacion="pendiente_cita",
+            pregunta_pendiente="",
+        )
 
     if (
         raw_decision.get("skip_send")
@@ -3866,6 +4582,28 @@ def responder_mensaje_automatico(
     if version_contexto and expediente.auto_interes != version_contexto:
         expediente.auto_interes = version_contexto
         cambios.append("auto_interes")
+
+    if accion_ofrecida == "descalificar":
+        if expediente.estado != "Descalificado":
+            expediente.estado = "Descalificado"
+            cambios.append("estado")
+
+        motivo_descalificacion = str(
+            raw_decision.get("motivo_descalificacion")
+            or "Enganche insuficiente sin alternativa viable"
+        ).strip()[:255]
+
+        if expediente.motivo_descalificacion != motivo_descalificacion:
+            expediente.motivo_descalificacion = motivo_descalificacion
+            cambios.append("motivo_descalificacion")
+
+        expediente.requiere_asesor = False
+        expediente.motivo_requiere_asesor = ""
+
+        cambios.extend([
+            "requiere_asesor",
+            "motivo_requiere_asesor",
+        ])
 
     if requiere_asesor:
         texto_normalizado = _normalizar_texto(texto_usuario)
