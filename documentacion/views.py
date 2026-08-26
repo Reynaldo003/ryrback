@@ -5,7 +5,7 @@ from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 
 from rest_framework import mixins, status, viewsets
-from rest_framework.exceptions import PermissionDenied, ValidationError
+from rest_framework.exceptions import PermissionDenied
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -16,6 +16,7 @@ from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from .models import Expediente, DocumentoExpediente
 from .serializers import ExpedienteSerializer, DocumentoExpedienteSerializer, DocumentoUploadSerializer
 from .requisitos import obtener_requisitos, obtener_requisito
+
 
 def normalizar(valor):
     valor = unicodedata.normalize("NFD", str(valor or "").strip().lower())
@@ -28,6 +29,7 @@ def obtener_rol(usuario): return normalizar(getattr(usuario, "rol", ""))
 def obtener_agencias_usuario(usuario):
     return [agencia.strip() for agencia in str(getattr(usuario, "agencia", "") or "").split("|") if agencia.strip()]
 
+
 def nombre_usuario_crm(usuario):
     return str(
         getattr(usuario, "nombre_completo", "")
@@ -38,6 +40,7 @@ def nombre_usuario_crm(usuario):
         or usuario
         or ""
     ).strip()
+
 
 def es_admin(usuario):
     if getattr(usuario, "is_superuser", False): return True
@@ -50,25 +53,35 @@ def es_gerente_servicios_financieros(usuario):
 
 
 def queryset_expedientes_usuario(usuario):
-    queryset = (
-        Expediente.objects
-        .select_related("asesor")
-        .prefetch_related("documentos")
-        .all()
-    )
+    """
+    Actualmente los asesores de piso NO tienen cuentas en el CRM.
+
+    Por lo tanto:
+    - Administrador: ve todos los expedientes.
+    - Resto de usuarios: ve expedientes de las agencias que tenga asignadas.
+    - El asesor responsable se guarda como texto en asesor_nombre.
+    """
+    queryset = Expediente.objects.prefetch_related("documentos").all()
 
     if es_admin(usuario): return queryset
 
-    if es_gerente_servicios_financieros(usuario):
-        agencias = obtener_agencias_usuario(usuario)
-        return queryset.filter(agencia__in=agencias) if agencias else queryset.none()
-
-    return queryset.filter(asesor=usuario)
+    agencias = obtener_agencias_usuario(usuario)
+    return queryset.filter(agencia__in=agencias) if agencias else queryset.none()
 
 
 def puede_editar_expediente(usuario, expediente):
+    """
+    Mientras los asesores no tengan cuentas:
+    - Administrador puede editar cualquier expediente.
+    - Usuarios internos pueden editar expedientes de sus Dealers asignados.
+
+    Más adelante, cuando cada asesor tenga Login, aquí podremos restringir
+    nuevamente por usuario/asesor.
+    """
     if es_admin(usuario): return True
-    return expediente.asesor_id == usuario.pk
+
+    agencias = obtener_agencias_usuario(usuario)
+    return expediente.agencia in agencias
 
 
 class ExpedienteViewSet(
@@ -106,9 +119,7 @@ class ExpedienteViewSet(
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        expediente = serializer.save(
-            creado_por=nombre_usuario_crm(request.user),
-        )
+        expediente = serializer.save(creado_por=nombre_usuario_crm(request.user))
 
         expediente = (
             Expediente.objects
@@ -136,10 +147,16 @@ class RequisitosView(APIView):
         financiamiento = str(request.query_params.get("financiamiento", "") or "").strip()
 
         if not tipo_persona:
-            return Response({"tipo_persona": ["Este parámetro es obligatorio."]}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"tipo_persona": ["Este parámetro es obligatorio."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not financiamiento:
-            return Response({"financiamiento": ["Este parámetro es obligatorio."]}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"financiamiento": ["Este parámetro es obligatorio."]},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         requisitos = obtener_requisitos(tipo_persona, financiamiento)
 
@@ -162,7 +179,7 @@ class DocumentoUploadView(APIView):
         )
 
         if not puede_editar_expediente(request.user, expediente):
-            raise PermissionDenied("Este expediente pertenece a otro asesor.")
+            raise PermissionDenied("No tienes permisos para modificar este expediente.")
 
         requisito_id = str(request.data.get("requisito_id", "") or "").strip()
 
@@ -186,7 +203,11 @@ class DocumentoUploadView(APIView):
 
         if expediente.documentos.filter(requisito_id=requisito_id).exists():
             return Response(
-                {"archivo": ["Este requisito ya tiene un documento. Elimínalo antes de cargar uno nuevo."]},
+                {
+                    "archivo": [
+                        "Este requisito ya tiene un documento. Elimínalo antes de cargar uno nuevo."
+                    ]
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -211,7 +232,10 @@ class DocumentoUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        salida = DocumentoExpedienteSerializer(documento, context={"request": request})
+        salida = DocumentoExpedienteSerializer(
+            documento,
+            context={"request": request},
+        )
 
         return Response(
             {
@@ -229,7 +253,7 @@ class DocumentoDeleteView(APIView):
     @transaction.atomic
     def delete(self, request, pk):
         documento = get_object_or_404(
-            DocumentoExpediente.objects.select_related("expediente", "expediente__asesor"),
+            DocumentoExpediente.objects.select_related("expediente"),
             pk=pk,
         )
 
@@ -239,7 +263,7 @@ class DocumentoDeleteView(APIView):
             raise PermissionDenied("No tienes acceso a este expediente.")
 
         if not puede_editar_expediente(request.user, expediente):
-            raise PermissionDenied("No puedes eliminar documentos de otro asesor.")
+            raise PermissionDenied("No tienes permisos para eliminar documentos de este expediente.")
 
         documento.delete()
 
