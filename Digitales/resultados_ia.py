@@ -659,7 +659,7 @@ def _modelo_gemini() -> str:
         getattr(settings, "GEMINI_RESULTS_MODEL", "")
         or getattr(settings, "GEMINI_SUMMARY_MODEL", "")
         or getattr(settings, "GEMINI_MODEL", "")
-        or "gemini-2.5-flash"
+        or "gemini-3.0-flash"
     )
 
 
