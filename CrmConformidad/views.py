@@ -68,7 +68,7 @@ def permisos_por_rol(nombre_rol: str):
     if r == "contacto":
         return ["CRM_CALL_CENTER"]
 
-    if r == "asesor_piso":
+    if r == "asesor piso":
         return ["CRM_ASESOR_PISO"]
     
     return []
