@@ -66,10 +66,7 @@ class DocumentoUploadSerializer(serializers.ModelSerializer):
 
         return archivo
 
-
 class ExpedienteSerializer(serializers.ModelSerializer):
-    asesor_id = serializers.SerializerMethodField()
-    asesor_nombre = serializers.SerializerMethodField()
     documentos = serializers.SerializerMethodField()
     requisitos = serializers.SerializerMethodField()
     avance = serializers.SerializerMethodField()
@@ -81,31 +78,27 @@ class ExpedienteSerializer(serializers.ModelSerializer):
             "folio",
             "cliente",
             "agencia",
+            "asesor_nombre",
+            "creado_por",
             "tipo_persona",
             "financiamiento",
-            "asesor_id",
-            "asesor_nombre",
             "documentos",
             "requisitos",
             "avance",
             "creado",
             "actualizado",
         ]
+
         read_only_fields = [
             "id_expediente",
             "folio",
-            "asesor_id",
-            "asesor_nombre",
+            "creado_por",
             "documentos",
             "requisitos",
             "avance",
             "creado",
             "actualizado",
         ]
-
-    def get_asesor_id(self, obj): return obj.asesor.pk
-
-    def get_asesor_nombre(self, obj): return obtener_nombre_usuario(obj.asesor)
 
     def get_requisitos(self, obj): return obtener_requisitos(obj.tipo_persona, obj.financiamiento) or []
 
@@ -117,7 +110,6 @@ class ExpedienteSerializer(serializers.ModelSerializer):
         requisitos = obtener_requisitos(obj.tipo_persona, obj.financiamiento) or []
         obligatorios = [item for item in requisitos if item.get("obligatorio")]
         cargados = set(obj.documentos.values_list("requisito_id", flat=True))
-
         completados = sum(1 for item in obligatorios if item["id"] in cargados)
         total = len(obligatorios)
 
@@ -129,12 +121,13 @@ class ExpedienteSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
-        for campo in ["cliente", "agencia"]:
+        for campo in ["cliente", "agencia", "asesor_nombre"]:
             valor = attrs.get(campo)
             if isinstance(valor, str): attrs[campo] = valor.strip()
 
         if not attrs.get("cliente"): raise serializers.ValidationError({"cliente": "Este campo es obligatorio."})
         if not attrs.get("agencia"): raise serializers.ValidationError({"agencia": "Este campo es obligatorio."})
+        if not attrs.get("asesor_nombre"): raise serializers.ValidationError({"asesor_nombre": "Selecciona un asesor."})
 
         tipo_persona = attrs.get("tipo_persona")
         financiamiento = attrs.get("financiamiento")

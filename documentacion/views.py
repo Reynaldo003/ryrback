@@ -17,7 +17,6 @@ from .models import Expediente, DocumentoExpediente
 from .serializers import ExpedienteSerializer, DocumentoExpedienteSerializer, DocumentoUploadSerializer
 from .requisitos import obtener_requisitos, obtener_requisito
 
-
 def normalizar(valor):
     valor = unicodedata.normalize("NFD", str(valor or "").strip().lower())
     return "".join(caracter for caracter in valor if unicodedata.category(caracter) != "Mn")
@@ -29,6 +28,16 @@ def obtener_rol(usuario): return normalizar(getattr(usuario, "rol", ""))
 def obtener_agencias_usuario(usuario):
     return [agencia.strip() for agencia in str(getattr(usuario, "agencia", "") or "").split("|") if agencia.strip()]
 
+def nombre_usuario_crm(usuario):
+    return str(
+        getattr(usuario, "nombre_completo", "")
+        or getattr(usuario, "nombre", "")
+        or getattr(usuario, "username", "")
+        or getattr(usuario, "usuario", "")
+        or getattr(usuario, "email", "")
+        or usuario
+        or ""
+    ).strip()
 
 def es_admin(usuario):
     if getattr(usuario, "is_superuser", False): return True
@@ -97,11 +106,12 @@ class ExpedienteViewSet(
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
-        expediente = serializer.save(asesor=request.user)
+        expediente = serializer.save(
+            creado_por=nombre_usuario_crm(request.user),
+        )
 
         expediente = (
             Expediente.objects
-            .select_related("asesor")
             .prefetch_related("documentos")
             .get(pk=expediente.pk)
         )

@@ -1,7 +1,6 @@
 # documentacion/models.py
 import uuid
 
-from django.conf import settings
 from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator
 from django.db import models
@@ -42,15 +41,10 @@ class Expediente(models.Model):
     folio = models.CharField(max_length=30, unique=True, default=generar_folio, editable=False)
     cliente = models.CharField(max_length=250)
     agencia = models.CharField(max_length=150, db_index=True)
+    asesor_nombre = models.CharField(max_length=200, db_index=True, default="")
+    creado_por = models.CharField(max_length=200, blank=True, default="")
     tipo_persona = models.CharField(max_length=30, choices=TIPO_PERSONA_CHOICES)
     financiamiento = models.CharField(max_length=20, choices=FINANCIAMIENTO_CHOICES)
-
-    asesor = models.ForeignKey(
-        settings.AUTH_USER_MODEL,
-        on_delete=models.PROTECT,
-        related_name="expedientes_documentacion",
-    )
-
     creado = models.DateTimeField(auto_now_add=True)
     actualizado = models.DateTimeField(auto_now=True)
 
@@ -59,16 +53,15 @@ class Expediente(models.Model):
         managed = True
         ordering = ["-creado", "-id_expediente"]
         indexes = [
-            models.Index(fields=["asesor", "creado"], name="doc_exp_asesor_idx"),
+            models.Index(fields=["asesor_nombre", "creado"], name="doc_exp_asesor_idx"),
             models.Index(fields=["agencia", "creado"], name="doc_exp_agencia_idx"),
         ]
 
-    def __str__(self): return f"{self.folio} - {self.cliente}"
+    def __str__(self): return f"{self.folio} - {self.cliente} - {self.asesor_nombre}"
 
 
 class DocumentoExpediente(models.Model):
     id_documento = models.AutoField(primary_key=True)
-
     expediente = models.ForeignKey(
         Expediente,
         on_delete=models.CASCADE,
