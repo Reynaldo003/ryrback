@@ -368,8 +368,8 @@ class AdminPermisosCatalogView(APIView):
                 "descripcion": "Coordinacion de asesores digitales.",
             },
             {
-                "clave": "CRM_ASESOR_DIGITAL",
-                "descripcion": "Sin descripcion",
+                "clave": "CRM_ASESOR_PISO",
+                "descripcion": "CRM ASESOR PISO",
             },
         ]
 
