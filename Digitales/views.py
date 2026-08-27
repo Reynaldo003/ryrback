@@ -289,6 +289,34 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             request=self.request,
         )
 
+    def _auto_estado_por_evidencia(self, expediente):
+        """Recalcula el estado automático después de cambiar evidencias.
+        Usa la lógica centralizada del serializador."""
+        from .serializers import ProspectoSerializer
+
+        serializer = ProspectoSerializer()
+        estado_auto = serializer._resolver_estado_automatico(expediente, {})
+
+        if estado_auto and str(expediente.estado or "").strip() != estado_auto:
+            expediente.estado = estado_auto
+            expediente.save(update_fields=["estado", "actualizado"])
+        elif not estado_auto:
+            # Si no se detectó un estado automático y estaba en
+            # Recopilación de Documentos sin PDFs, revertir
+            total_pdfs = expediente.evidencias.filter(
+                mime_type="application/pdf"
+            ).count()
+            estado_actual = str(expediente.estado or "").strip().lower()
+            if (
+                total_pdfs == 0
+                and estado_actual in {
+                    "recopilación de documentos",
+                    "recopilacion de documentos",
+                }
+            ):
+                expediente.estado = "Financiamiento"
+                expediente.save(update_fields=["estado", "actualizado"])
+
     @action(detail=True, methods=["get", "post"], url_path="evidencias", parser_classes=[MultiPartParser, FormParser])
     def evidencias(self, request, pk=None):
         expediente = self.get_object()
@@ -316,6 +344,12 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             evidencias_creadas.append(evidencia)
 
         serializer = EvidenciaProspectoDigitalSerializer(evidencias_creadas, many=True, context={"request": request})
+
+        # ── Transición automática a "Recopilación de Documentos" ─────────
+        # Si el prospecto fue contactado, tiene al menos un PDF y no tiene
+        # folio de solicitud, se mueve a "Recopilación de Documentos".
+        self._auto_estado_por_evidencia(expediente)
+
         return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     @action(detail=True, methods=["delete"], url_path=r"evidencias/(?P<evidencia_id>\d+)")
@@ -330,6 +364,10 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             evidencia.archivo.delete(save=False)
 
         evidencia.delete()
+
+        # ── Recalcular estado después de eliminar evidencia ─────────────
+        self._auto_estado_por_evidencia(expediente)
+
         return Response(status=status.HTTP_204_NO_CONTENT)
         
 # ── Vistas simples ────────────────────────────────────────────────────────────

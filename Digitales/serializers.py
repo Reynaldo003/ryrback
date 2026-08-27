@@ -6,7 +6,7 @@ from django.conf import settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework import serializers
-from citas.models import ClienteComercial, normaliza_tel_mx
+from citas.models import ClienteComercial, Cita, normaliza_tel_mx
 from .models import ExpedienteDigital, MensajeWhatsApp, EvidenciaProspectoDigital
 
 EDIT_WINDOW_MINUTES = 15
@@ -976,6 +976,103 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
         return data
 
+    def _resolver_estado_automatico(self, instance, data):
+        """Determina el estado correcto del expediente basándose en sus campos.
+        Prioridad de mayor a menor:
+          1. Entregado  – vin_facturado + vin_estatus_entrega == 'entregado'
+          2. Facturado  – vin_facturado
+          3. Solicitud de Crédito – folio_solicitud_credito
+          4. Recopilación de Documentos – contactado + PDFs + sin folio
+          5. Seguimiento – plazo_compra indica 3-6+ meses
+        Los estados finales (facturado, entregado) nunca se revierten a
+        estados intermedios.
+
+        IMPORTANTE: cuando el frontend envía un campo como string vacío (""),
+        se ignora y se usa el valor del instance (el valor ya persistido)."""
+        from .views import _usuario_login
+
+        def _campo_efectivo(campo_data, campo_instance):
+            """Si el valor enviado es string vacío, usar el del instance."""
+            val = data.get(campo_data, None)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                return getattr(instance, campo_instance, "") or ""
+            return val
+
+        vin = str(_campo_efectivo("vin_facturado", "vin_facturado") or "").strip().upper()
+
+        estatus_entrega = str(
+            _campo_efectivo("vin_estatus_entrega", "vin_estatus_entrega") or ""
+        ).strip().lower()
+
+        folio = str(
+            _campo_efectivo("folio_solicitud_credito", "folio_solicitud_credito") or ""
+        ).strip()
+
+        plazo = str(
+            _campo_efectivo("plazo_compra", "plazo_compra") or ""
+        ).strip().lower()
+
+        estado_actual = str(
+            data.get("estado", getattr(instance, "estado", ""))
+            or ""
+        ).strip()
+
+        # El frontend siempre envía "estado" del dropdown.
+        # Solo el resolver puede cambiarlo si detecta condiciones automáticas.
+        # Si el usuario eligió "Descalificado", no lo tocamos.
+        if estado_actual.lower() == "descalificado":
+            return None
+
+        tiene_contacto = bool(
+            getattr(instance, "primer_mensaje_cliente", None)
+            or getattr(instance, "primer_contacto_asesor", None)
+        )
+
+        total_pdfs = instance.evidencias.filter(
+            mime_type="application/pdf"
+        ).count()
+
+        ESTADOS_FINALES = {"facturado", "entregado"}
+
+        # 1. Entregado
+        if vin and estatus_entrega == "entregado":
+            return "Entregado"
+
+        # 2. Facturado
+        if vin and estado_actual.lower() not in ESTADOS_FINALES:
+            return "Facturado"
+
+        # 3. Solicitud de Crédito
+        if folio and estado_actual.lower() not in ESTADOS_FINALES:
+            return "Solicitud de Crédito"
+
+        # 4. Recopilación de Documentos
+        if (
+            tiene_contacto
+            and total_pdfs > 0
+            and not folio
+            and estado_actual.lower() not in ESTADOS_FINALES
+            and estado_actual.lower() not in {
+                "solicitud de crédito",
+                "solicitud de credito",
+                "facturado",
+                "entregado",
+            }
+        ):
+            return "Recopilación de Documentos"
+
+        # 5. Seguimiento – plazo de compra 3 meses o más
+        if any(
+            kw in plazo
+            for kw in ("3-6", "3 a 6", "6+", "mas de 3", "más de 3",
+                        "mas de 6", "más de 6", "3 meses", "6 meses",
+                        "un año", "1 año", "mas de un")
+        ):
+            if estado_actual.lower() not in ESTADOS_FINALES:
+                return "Seguimiento"
+
+        return None  # No cambiar
+
     def _get_or_create_cliente(self, tel, nombre="", correo=""):
         tel = normaliza_tel_mx(tel)
 
@@ -1024,7 +1121,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
                 
         validated_data["vin_facturado"] = vin_facturado
 
-        if vin_facturado:
+        if vin_facturado and not validated_data.get("facturado_at"):
             validated_data["facturado_at"] = timezone.now()
 
         cli = self._get_or_create_cliente(telefono, nombre, correo)
@@ -1051,6 +1148,12 @@ class ProspectoSerializer(serializers.ModelSerializer):
             if cambios:
                 cambios.append("actualizado")
                 exp.save(update_fields=list(dict.fromkeys(cambios)))
+
+        # ── Transición automática de estado ──────────────────────────────
+        estado_auto = self._resolver_estado_automatico(exp, validated_data)
+        if estado_auto and str(exp.estado or "").strip() != estado_auto:
+            exp.estado = estado_auto
+            exp.save(update_fields=["estado", "actualizado"])
 
         self._guardar_evidencias(exp, evidencias_nuevas)
 
@@ -1128,6 +1231,48 @@ class ProspectoSerializer(serializers.ModelSerializer):
                 instance.facturado_at = None
                 cambios.append("facturado_at")
 
+        # ── Transición automática de estado (centralizada) ───────────────
+        vin_nuevo = str(validated_data.get("vin_facturado") or "").strip().upper()
+        vin_anterior_str = str(vin_anterior or "").strip().upper()
+
+        # Detectar si el frontend envió el campo explícitamente
+        vin_fue_enviado = "vin_facturado" in validated_data
+        folio_fue_enviado = "folio_solicitud_credito" in validated_data
+
+        # Si se eliminó explícitamente el VIN y el estado era "Facturado" o
+        # "Entregado", se revierte a "Autorizado No Formalizado".
+        vin_nuevo_val = str(validated_data.get("vin_facturado") or "").strip().upper()
+        if vin_fue_enviado and not vin_nuevo_val and vin_anterior_str:
+            estado_tmp = str(
+                validated_data.get("estado", instance.estado) or ""
+            ).strip()
+            if estado_tmp.lower() in {"facturado", "entregado"}:
+                validated_data["estado"] = "Autorizado No Formalizado"
+
+        # Si se eliminó explícitamente el folio y el estado era
+        # "Solicitud de Crédito", se revierte a "Financiamiento".
+        folio_nuevo_val = str(
+            validated_data.get("folio_solicitud_credito") or ""
+        ).strip()
+        folio_anterior_str = str(
+            getattr(instance, "folio_solicitud_credito", "") or ""
+        ).strip()
+
+        if folio_fue_enviado and not folio_nuevo_val and folio_anterior_str:
+            estado_tmp = str(
+                validated_data.get("estado", instance.estado) or ""
+            ).strip()
+            if estado_tmp.lower() in {
+                "solicitud de crédito",
+                "solicitud de credito",
+            }:
+                validated_data["estado"] = "Financiamiento"
+
+        # Resolver el estado final con la lógica centralizada
+        estado_auto = self._resolver_estado_automatico(instance, validated_data)
+        if estado_auto:
+            validated_data["estado"] = estado_auto
+
         for campo, valor in validated_data.items():
             if campo == "vin_facturado" and isinstance(valor, str):
                 valor = valor.strip().upper()
@@ -1141,12 +1286,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
             instance.save(
                 update_fields=list(dict.fromkeys(cambios))
             )
-        else:
-            instance.save()
-
-        if cambios:
-            cambios.append("actualizado")
-            instance.save(update_fields=list(dict.fromkeys(cambios)))
         else:
             instance.save()
 
