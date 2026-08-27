@@ -706,6 +706,49 @@ def _buscar_version_en_texto(texto: str) -> Optional[str]:
                 return version
     return None
 
+def _buscar_version_exacta_catalogo_en_texto(
+    texto: str,
+) -> Optional[str]:
+    texto_normalizado = _normalizar_texto(texto)
+
+    if not texto_normalizado:
+        return None
+
+    candidatos = []
+
+    for clave, item in _obtener_catalogo_dict().items():
+        modelo = _normalizar_texto(
+            item.get("modelo") or ""
+        )
+        version = _normalizar_texto(
+            item.get("version") or ""
+        )
+        ano = str(
+            item.get("ano") or ""
+        ).strip()
+
+        if modelo and modelo not in texto_normalizado:
+            continue
+
+        if version and version not in texto_normalizado:
+            continue
+
+        if ano and ano not in texto_normalizado:
+            continue
+
+        candidatos.append(
+            (
+                len(version.split()),
+                len(_normalizar_texto(clave)),
+                clave,
+            )
+        )
+
+    if not candidatos:
+        return None
+
+    return max(candidatos)[2]
+
 def _respuesta_precio_version(version: str) -> str:
     return _limitar_texto(
         f"Precios de {version.title()}:\n\n{_texto_precios_version(version)}\n\n"
@@ -3342,19 +3385,59 @@ def construir_respuesta_informativa(
                 decision["selected_version"] = version_contexto
 
     # Respaldo determinístico para solicitudes de multimedia.
-    # Si Gemini reconoce la intención pero omite selected_version,
-    # conservar el vehículo exacto que ya está en negociación.
-    if not version_contexto:
+    intenciones_minimas = _detectar_intencion_minima(
+        texto_usuario
+    )
+
+    solicita_multimedia = any(
+        (
+            intenciones_minimas.get("pregunta_pdf"),
+            intenciones_minimas.get("pregunta_imagenes"),
+            intenciones_minimas.get("pregunta_videos"),
+        )
+    )
+
+    if solicita_multimedia and not version_contexto:
+        # 1. Intentar recuperar el vehículo persistido.
         version_contexto = _normalizar_version_catalogo(
             auto_interes_actual or expediente.auto_interes
         )
 
+        # 2. Si está vacío, buscar la versión exacta en el historial.
+        if not version_contexto:
+            textos_contexto = []
+
+            if ultimo_mensaje_saliente:
+                textos_contexto.append(
+                    ultimo_mensaje_saliente
+                )
+
+            for item in reversed(historial_reciente):
+                contenido = str(
+                    item.get("content") or ""
+                ).strip()
+
+                if contenido:
+                    textos_contexto.append(contenido)
+
+            if respuesta_texto:
+                textos_contexto.append(
+                    respuesta_texto
+                )
+
+            for texto_contexto in textos_contexto:
+                version_encontrada = (
+                    _buscar_version_exacta_catalogo_en_texto(
+                        texto_contexto
+                    )
+                )
+
+                if version_encontrada:
+                    version_contexto = version_encontrada
+                    break
+
         if version_contexto:
             decision["selected_version"] = version_contexto
-
-    intenciones_minimas = _detectar_intencion_minima(
-        texto_usuario
-    )
 
     if version_contexto:
         if intenciones_minimas.get("pregunta_pdf"):
