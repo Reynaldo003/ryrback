@@ -129,6 +129,7 @@ INSTALLED_APPS = [
     'inventario',
     'flujo',
     "BitacoraMantenimiento",
+    "documentacion",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -303,7 +304,7 @@ DEFAULT_FROM_EMAIL = "no-reply@crm.local"
 PUBLIC_API_BASE_URL = "https://crm.grupoautomotrizryr.com"
 OPENAI_API_KEY = ""
 GEMINI_API_KEY = ""
-GEMINI_MULTIMODAL_MODEL = "gemini-2.5-flash"
+GEMINI_MULTIMODAL_MODEL = "gemini-3.0-flash"
 GEMINI_MAX_INLINE_MEDIA_BYTES = 18 * 1024 * 1024
 GEMINI_RESULTS_TIMEOUT_MS = 45000
 
