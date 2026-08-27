@@ -1804,7 +1804,7 @@ def _decision_conversacional_ia(
     modelo = getattr(
         settings,
         "GEMINI_MODEL",
-        "gemini-3.7-flash",
+        "gemini-3.5-flash-lite",
     )
 
     try:
@@ -3755,7 +3755,7 @@ Devuelve máximo 8 líneas.
             model=getattr(
                 settings,
                 "GEMINI_MEDIA_MODEL",
-                getattr(settings, "GEMINI_MODEL", "gemini-3.7-flash"),
+                getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash-lite"),
             ),
             contents=[
                 prompt,
@@ -3987,7 +3987,7 @@ def _analizar_media_con_gemini(
     modelo_multimodal = getattr(
         settings,
         "GEMINI_MULTIMODAL_MODEL",
-        getattr(settings, "GEMINI_MODEL", "gemini-3.7-flash"),
+        getattr(settings, "GEMINI_MODEL", "gemini-3.5-flash-lite"),
     )
 
     respuesta = client.models.generate_content(
@@ -4602,7 +4602,7 @@ def responder_mensaje_automatico(
                 "ia_model": getattr(
                     settings,
                     "GEMINI_MODEL",
-                    "gemini-3.7-flash",
+                    "gemini-3.5-flash-lite",
                 ),
                 "numero_asesor": numero_asesor,
                 "version_contexto": version_contexto,
