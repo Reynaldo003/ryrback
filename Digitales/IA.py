@@ -3610,6 +3610,80 @@ def construir_respuesta_informativa(
             decision["intent"] = "invitar_cita"
             decision["selected_version"] = version_para_cita
 
+    # Si el enganche suficiente ya quedó guardado en un turno anterior,
+    # la cita también debe tener prioridad sobre la canalización a asesor.
+    texto_actual_cita = _normalizar_texto(
+        texto_usuario
+    )
+
+    cliente_pide_asesor_explicito = any(
+        frase in texto_actual_cita
+        for frase in (
+            "QUIERO HABLAR CON UN ASESOR",
+            "QUIERO UN ASESOR",
+            "ASESOR HUMANO",
+            "QUE ME CONTACTE UN ASESOR",
+            "QUE ME LLAME UN ASESOR",
+            "HABLAR CON UNA PERSONA",
+            "HABLAR CON ALGUIEN",
+        )
+    )
+
+    estado_cita_actual = str(
+        _leer_dato_conversacion(
+            expediente,
+            numero_asesor,
+            "estado_cita",
+            default="",
+        )
+        or ""
+    ).strip()
+
+    version_guardada_para_cita = (
+        version_contexto
+        or _normalizar_version_catalogo(
+            auto_interes_actual
+            or expediente.auto_interes
+        )
+    )
+
+    enganche_guardado_para_cita = (
+        expediente.enganche_monto
+        or enganche_registrado
+    )
+
+    if (
+        not cliente_pide_asesor_explicito
+        and estado_cita_actual != "agendada"
+        and version_guardada_para_cita
+        and enganche_guardado_para_cita
+    ):
+        evaluacion_guardada_cita = _evaluar_enganche_version(
+            version_guardada_para_cita,
+            enganche_guardado_para_cita,
+        )
+
+        if evaluacion_guardada_cita.get("cumple") is True:
+            version_contexto = version_guardada_para_cita
+            accion_ofrecida = "invitar_cita"
+            requiere_asesor = False
+
+            respuesta_texto = (
+                f"Perfecto, con el enganche que tienes contemplado "
+                f"sí cubres el mínimo requerido para "
+                f"{version_guardada_para_cita.title()}. "
+                "¿Qué día y a qué hora te gustaría agendar tu cita?"
+            )
+
+            decision["reply_text"] = respuesta_texto
+            decision["accion_ofrecida"] = "invitar_cita"
+            decision["requiere_asesor"] = False
+            decision["question_key"] = None
+            decision["intent"] = "invitar_cita"
+            decision["selected_version"] = (
+                version_guardada_para_cita
+            )
+
     try:
         nueva_etapa = int(
             decision.get(
