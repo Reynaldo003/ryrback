@@ -3341,6 +3341,31 @@ def construir_respuesta_informativa(
                 version_contexto = candidatos[0]
                 decision["selected_version"] = version_contexto
 
+    # Respaldo determinístico para solicitudes de multimedia.
+    # Si Gemini reconoce la intención pero omite selected_version,
+    # conservar el vehículo exacto que ya está en negociación.
+    if not version_contexto:
+        version_contexto = _normalizar_version_catalogo(
+            auto_interes_actual or expediente.auto_interes
+        )
+
+        if version_contexto:
+            decision["selected_version"] = version_contexto
+
+    intenciones_minimas = _detectar_intencion_minima(
+        texto_usuario
+    )
+
+    if version_contexto:
+        if intenciones_minimas.get("pregunta_pdf"):
+            decision["send_pdf"] = True
+
+        if intenciones_minimas.get("pregunta_imagenes"):
+            decision["send_images"] = True
+
+        if intenciones_minimas.get("pregunta_videos"):
+            decision["send_videos"] = True
+
     enviar_pdf = bool(
         decision.get("send_pdf")
     ) and bool(version_contexto)
