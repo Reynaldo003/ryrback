@@ -719,7 +719,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
     tiempo_respuesta_asesor_min = serializers.SerializerMethodField()
     tiempo_respuesta_asesor_label = serializers.SerializerMethodField()
-    sin_contactar = serializers.SerializerMethodField()
 
     evidencias = EvidenciaProspectoDigitalSerializer(many=True, read_only=True)
 
@@ -821,7 +820,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
             # Calculados para frontend.
             "tiempo_respuesta_asesor_min",
             "tiempo_respuesta_asesor_label",
-            "sin_contactar",
 
             # Alias temporales para no romper pantallas viejas.
             "primer_contacto_at",
@@ -849,7 +847,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
 
             "tiempo_respuesta_asesor_min",
             "tiempo_respuesta_asesor_label",
-            "sin_contactar",
             "primer_contacto_at",
             "ultimo_contacto_at",
             "creado",
@@ -957,16 +954,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
         minutes = self.get_tiempo_respuesta_asesor_min(obj)
         return format_duration_minutes(minutes)
 
-    def get_sin_contactar(self, obj):
-        from .models import MensajeWhatsApp
-
-        return not MensajeWhatsApp.objects.filter(
-            cliente_id=obj.cliente_id,
-            direction="out",
-        ).exclude(
-            raw__icontains='"ia_provider"'
-        ).exists()
-
     def to_representation(self, instance):
         data = super().to_representation(instance)
 
@@ -977,18 +964,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
         return data
 
     def _resolver_estado_automatico(self, instance, data):
-        """Determina el estado correcto del expediente basándose en sus campos.
-        Prioridad de mayor a menor:
-          1. Entregado  – vin_facturado + vin_estatus_entrega == 'entregado'
-          2. Facturado  – vin_facturado
-          3. Solicitud de Crédito – folio_solicitud_credito
-          4. Recopilación de Documentos – contactado + PDFs + sin folio
-          5. Seguimiento – plazo_compra indica 3-6+ meses
-        Los estados finales (facturado, entregado) nunca se revierten a
-        estados intermedios.
-
-        IMPORTANTE: cuando el frontend envía un campo como string vacío (""),
-        se ignora y se usa el valor del instance (el valor ya persistido)."""
         from .views import _usuario_login
 
         def _campo_efectivo(campo_data, campo_instance):
@@ -1017,9 +992,6 @@ class ProspectoSerializer(serializers.ModelSerializer):
             or ""
         ).strip()
 
-        # El frontend siempre envía "estado" del dropdown.
-        # Solo el resolver puede cambiarlo si detecta condiciones automáticas.
-        # Si el usuario eligió "Descalificado", no lo tocamos.
         if estado_actual.lower() == "descalificado":
             return None
 
