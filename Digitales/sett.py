@@ -59,6 +59,7 @@ whatsapp_url_edgar = 'https://graph.facebook.com/v26.0/1208561865665780/messages
 whatsapp_url_dulce = 'https://graph.facebook.com/v26.0/1285910144598050/messages'
 whatsapp_url_ryr = 'https://graph.facebook.com/v26.0/674631769071379/messages'
 whatsapp_url_servicio_cba = 'https://graph.facebook.com/v26.0/1166025403270294/messages'
+whatsapp_url_servicio_oba = 'https://graph.facebook.com/v26.0/1231519683384951/messages'
 
 whatsapp_numero_default = "522712638803"
 whatsapp_numero_liz = "522721111244"
@@ -70,6 +71,7 @@ whatsapp_numero_edgar = "527831263814"
 whatsapp_numero_dulce = "527821820706"
 whatsapp_numero_ryr = "528009992443"
 whatsapp_numero_servicio_cba = "522711076834"
+whatsapp_numero_servicio_oba = "522721831635"
 
 whatsapp_numero_marelly = whatsapp_numero_tuxtepec
 whatsapp_numero_julio = whatsapp_numero_tuxtepec
@@ -216,6 +218,18 @@ WHATSAPP_LINES = {
         "asesor_digital": "Asesor de Servicio CBA",
         "messages_url": whatsapp_url_servicio_cba,
         "agencia": "VW Cordoba",
+        "business": "Postventa",
+        "responder_ia": False,
+        "template_names": [],
+    },
+    whatsapp_numero_servicio_oba: {
+        "key": "servicio_oba",
+        "phone_number_id": "1231519683384951",
+        "waba_id": "4373261259651212",
+        "access_token": whatsapp_token,
+        "asesor_digital": "Asesor de Servicio OBA",
+        "messages_url": whatsapp_url_servicio_oba,
+        "agencia": "VW Orizaba",
         "business": "Postventa",
         "responder_ia": False,
         "template_names": [],
