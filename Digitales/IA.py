@@ -588,8 +588,6 @@ def _parece_nombre_solo(texto: str) -> bool:
     if any(len(p) < 2 for p in palabras):
         return False
     return True
-
-
 def _extraer_nombre_basico(profile_name: str, texto: str) -> str:
     """
     Extrae únicamente nombres que el cliente escribió explícitamente.
@@ -598,32 +596,113 @@ def _extraer_nombre_basico(profile_name: str, texto: str) -> str:
     Más adelante se usa solo como candidato para preguntarle al cliente
     si desea ser registrado con ese nombre.
     """
-    texto = (texto or "").strip()
-    for patron in [
-        r"\bmi nombre es\s+([a-zA-ZáéíóúÁÉÍÓÚüÜñÑ ]{2,80})",
-        r"\bme llamo\s+([a-zA-ZáéíóúÁÉÍÓÚüÜñÑ ]{2,80})",
-        r"\bsoy\s+([a-zA-ZáéíóúÁÉÍÓÚüÜñÑ ]{2,80})",
-    ]:
+    texto = re.sub(
+        r"\s+",
+        " ",
+        (texto or "").strip(),
+    )
+
+    if not texto:
+        return ""
+    palabras_no_nombre = {
+        "ASALARIADO",
+        "ASALARIADA",
+        "PARTICULAR",
+        "EMPRESA",
+        "EMPRESARIAL",
+        "EMPLEADO",
+        "EMPLEADA",
+        "INDEPENDIENTE",
+        "PROFESIONISTA",
+        "FISICA",
+        "FISICO",
+        "MORAL",
+        "CREDITO",
+        "CONTADO",
+        "ARRENDAMIENTO",
+        "FAMILIAR",
+        "PERSONAL",
+        "TRABAJO",
+        "MIXTO",
+        "BUENO",
+        "BUENA",
+        "REGULAR",
+    }
+
+    def validar_nombre(candidato: str) -> str:
+        nombre = _limpiar_nombre_candidato(candidato)
+
+        if not nombre or _es_email(nombre):
+            return ""
+
+        if not _parece_nombre_solo(nombre):
+            return ""
+
+        palabras = set(
+            _normalizar_texto(nombre).split()
+        )
+
+        if palabras.intersection(palabras_no_nombre):
+            return ""
+
+        return nombre
+
+    # Frases explícitas con las que el cliente indica o corrige su nombre.
+    patrones = [
+        r"\bmi nombre es\s+(.{2,80})",
+        r"\bme llamo\s+(.{2,80})",
+        r"\bmejor\s+ll[aá]mame\s+(.{2,80})",
+        r"\bll[aá]mame\s+(.{2,80})",
+        r"\bpuedes\s+llamarme\s+(.{2,80})",
+        r"\bpuede\s+llamarme\s+(.{2,80})",
+        r"\bprefiero\s+que\s+me\s+llames\s+(.{2,80})",
+        r"\bprefiero\s+que\s+me\s+llamen\s+(.{2,80})",
+        r"\bquiero\s+que\s+me\s+llames\s+(.{2,80})",
+        r"\bquiero\s+que\s+me\s+llamen\s+(.{2,80})",
+        r"\bme\s+dicen\s+(.{2,80})",
+        r"\bdime\s+(.{2,80})",
+        r"\bsoy\s+(.{2,80})",
+    ]
+
+    for patron in patrones:
         m = re.search(
             patron,
             texto,
             flags=re.IGNORECASE,
         )
 
-        if m:
-            nombre = _limpiar_nombre_candidato(
-                re.sub(
-                    r"\s+",
-                    " ",
-                    m.group(1),
-                ).strip(" .,-")
-            )
+        if not m:
+            continue
 
-            if nombre and not _es_email(nombre):
-                return nombre
-    if _parece_nombre_solo(texto):
-        return _limpiar_nombre_candidato(texto)
-    return ""
+        candidato = re.sub(
+            r"\s+",
+            " ",
+            m.group(1),
+        ).strip(" .,-")
+
+        # Evita guardar también el resto de una oración.
+        candidato = re.split(
+            r"[,.!?;:]",
+            candidato,
+            maxsplit=1,
+        )[0].strip()
+
+        candidato = re.split(
+            (
+                r"\s+(?:y|pero|porque|aunque|quiero|quisiera|"
+                r"busco|necesito|tengo|me\s+interesa)\b"
+            ),
+            candidato,
+            maxsplit=1,
+            flags=re.IGNORECASE,
+        )[0].strip()
+
+        nombre = validar_nombre(candidato)
+
+        if nombre:
+            return nombre
+
+    return validar_nombre(texto)
 
 def _json_seguro(texto: str) -> dict[str, Any]:
     """Parsea JSON robusto: maneja prefijos, markdown, trailing commas y JSON truncado."""
@@ -3212,7 +3291,13 @@ def _guardar_datos_detectados_en_cliente_y_expediente(
             version_detectada[:120]
         )
 
-    if requiere_asesor:
+    estado_cita_guardada = str(
+        datos_extra.get("estado_cita") or ""
+    ).strip()
+
+    if estado_cita_guardada == "agendada":
+        conversacion.estado_conversacion = "cita_agendada"
+    elif requiere_asesor:
         conversacion.estado_conversacion = (
             "pendiente_cotizacion"
         )
@@ -4407,6 +4492,48 @@ def responder_mensaje_automatico(
         expediente.requiere_asesor
     )
 
+    cita_creada = None
+    fecha_cita = raw_decision.get("fecha_cita")
+    hora_cita = raw_decision.get("hora_cita")
+
+    texto_post_cita = _normalizar_texto(texto_usuario)
+
+    cierres_post_cita = {
+        "PERFECTO",
+        "PERFECTO GRACIAS",
+        "GRACIAS",
+        "MUCHAS GRACIAS",
+        "OK",
+        "OKEY",
+        "OKEY MUCHAS GRACIAS",
+        "LISTO",
+        "EXCELENTE",
+        "DE ACUERDO",
+        "NOS VEMOS",
+    }
+
+    if (
+        estado_cita_previo == "agendada"
+        and texto_post_cita in cierres_post_cita
+    ):
+        respuesta_texto = (
+            "¡Con gusto! Tu cita ya quedó registrada en "
+            "Volkswagen Córdoba. Si necesitas algo más, aquí estoy."
+        )
+
+        requiere_asesor = False
+        accion_ofrecida = "ninguna"
+        fecha_cita = None
+        hora_cita = None
+
+        raw_decision["reply_text"] = respuesta_texto
+        raw_decision["requiere_asesor"] = False
+        raw_decision["accion_ofrecida"] = "ninguna"
+        raw_decision["fecha_cita"] = None
+        raw_decision["hora_cita"] = None
+        raw_decision["intent"] = "agradecimiento"
+        raw_decision["question_key"] = None
+
     _guardar_datos_detectados_en_cliente_y_expediente(
         cliente=cliente,
         expediente=expediente,
@@ -4426,11 +4553,31 @@ def responder_mensaje_automatico(
         accion_ofrecida=accion_ofrecida,
     )
 
-    cita_creada = None
-    fecha_cita = raw_decision.get("fecha_cita")
-    hora_cita = raw_decision.get("hora_cita")
+    if (
+        estado_cita_previo == "agendada"
+        and texto_post_cita in cierres_post_cita
+    ):
+        respuesta_texto = (
+            "¡Con gusto! Tu cita ya quedó registrada en "
+            "Volkswagen Córdoba. Si necesitas algo más, aquí estoy."
+        )
 
-    if fecha_cita and hora_cita:
+        requiere_asesor = False
+        accion_ofrecida = "ninguna"
+        fecha_cita = None
+        hora_cita = None
+
+        raw_decision["reply_text"] = respuesta_texto
+        raw_decision["requiere_asesor"] = False
+        raw_decision["accion_ofrecida"] = "ninguna"
+        raw_decision["fecha_cita"] = None
+        raw_decision["hora_cita"] = None
+
+    if (
+        fecha_cita
+        and hora_cita
+        and estado_cita_previo != "agendada"
+    ):
         cita_creada = _crear_cita_desde_ia(
             cliente=cliente,
             expediente=expediente,
@@ -4494,7 +4641,11 @@ def responder_mensaje_automatico(
             raw_decision["requiere_asesor"] = False
             raw_decision["accion_ofrecida"] = "invitar_cita"
 
-    if cita_creada is None and accion_ofrecida == "invitar_cita":
+    if (
+        cita_creada is None
+        and accion_ofrecida == "invitar_cita"
+        and estado_cita_previo != "agendada"
+    ):
         _actualizar_datos_conversacion(
             expediente=expediente,
             numero_asesor=numero_asesor,
