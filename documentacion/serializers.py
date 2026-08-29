@@ -2,8 +2,7 @@
 from rest_framework import serializers
 
 from .models import Expediente, DocumentoExpediente
-from .requisitos import obtener_requisitos
-
+from .requisitos import obtener_requisitos, obtener_plantilla_solicitud
 
 def obtener_nombre_usuario(usuario):
     if hasattr(usuario, "get_full_name"):
@@ -70,6 +69,7 @@ class ExpedienteSerializer(serializers.ModelSerializer):
     documentos = serializers.SerializerMethodField()
     requisitos = serializers.SerializerMethodField()
     avance = serializers.SerializerMethodField()
+    solicitud_pdf_url = serializers.SerializerMethodField()
 
     class Meta:
         model = Expediente
@@ -82,6 +82,10 @@ class ExpedienteSerializer(serializers.ModelSerializer):
             "creado_por",
             "tipo_persona",
             "financiamiento",
+            "solicitud_pdf_plantilla",
+            "solicitud_pdf_url",
+            "solicitud_pdf_campos",
+            "solicitud_pdf_actualizado",
             "documentos",
             "requisitos",
             "avance",
@@ -93,6 +97,10 @@ class ExpedienteSerializer(serializers.ModelSerializer):
             "id_expediente",
             "folio",
             "creado_por",
+            "solicitud_pdf_plantilla",
+            "solicitud_pdf_url",
+            "solicitud_pdf_campos",
+            "solicitud_pdf_actualizado",
             "documentos",
             "requisitos",
             "avance",
@@ -106,6 +114,19 @@ class ExpedienteSerializer(serializers.ModelSerializer):
         serializer = DocumentoExpedienteSerializer(obj.documentos.all(), many=True, context=self.context)
         return {str(documento["requisito_id"]): documento for documento in serializer.data}
 
+    def get_solicitud_pdf_url(self, obj):
+        if not obj.solicitud_pdf:
+            return ""
+
+        request = self.context.get("request")
+
+        if request:
+            return request.build_absolute_uri(
+                obj.solicitud_pdf.url
+            )
+
+        return obj.solicitud_pdf.url
+    
     def get_avance(self, obj):
         requisitos = obtener_requisitos(obj.tipo_persona, obj.financiamiento) or []
         obligatorios = [item for item in requisitos if item.get("obligatorio")]
@@ -121,20 +142,64 @@ class ExpedienteSerializer(serializers.ModelSerializer):
         }
 
     def validate(self, attrs):
-        for campo in ["cliente", "agencia", "asesor_nombre"]:
+        for campo in ["cliente","agencia","asesor_nombre",]:
             valor = attrs.get(campo)
-            if isinstance(valor, str): attrs[campo] = valor.strip()
 
-        if not attrs.get("cliente"): raise serializers.ValidationError({"cliente": "Este campo es obligatorio."})
-        if not attrs.get("agencia"): raise serializers.ValidationError({"agencia": "Este campo es obligatorio."})
-        if not attrs.get("asesor_nombre"): raise serializers.ValidationError({"asesor_nombre": "Selecciona un asesor."})
+            if isinstance(valor, str):
+                attrs[campo] = valor.strip()
 
-        tipo_persona = attrs.get("tipo_persona")
-        financiamiento = attrs.get("financiamiento")
-
-        if obtener_requisitos(tipo_persona, financiamiento) is None:
+        if not attrs.get("cliente"):
             raise serializers.ValidationError({
-                "financiamiento": "Esta combinación de persona y financiamiento todavía no tiene requisitos configurados."
+                "cliente": "Este campo es obligatorio."
+            })
+
+        if not attrs.get("agencia"):
+            raise serializers.ValidationError({
+                "agencia": "Este campo es obligatorio."
+            })
+
+        if not attrs.get("asesor_nombre"):
+            raise serializers.ValidationError({
+                "asesor_nombre": "Selecciona un asesor."
+            })
+
+        tipo_persona = attrs.get(
+            "tipo_persona",
+            getattr(self.instance, "tipo_persona", None),
+        )
+
+        financiamiento = attrs.get(
+            "financiamiento",
+            getattr(self.instance, "financiamiento", None),
+        )
+
+        if (
+            tipo_persona == "fisica_asalariada"
+            and financiamiento != "leasing"
+        ):
+            raise serializers.ValidationError({
+                "financiamiento":
+                    "Persona Física Asalariada únicamente puede utilizar Leasing."
+            })
+
+        if obtener_requisitos(
+            tipo_persona,
+            financiamiento,
+        ) is None:
+            raise serializers.ValidationError({
+                "financiamiento":
+                    "Esta combinación de persona y financiamiento no está permitida."
+            })
+
+        plantilla = obtener_plantilla_solicitud(
+            tipo_persona,
+            financiamiento,
+        )
+
+        if not plantilla:
+            raise serializers.ValidationError({
+                "financiamiento":
+                    "La combinación seleccionada no tiene una plantilla PDF configurada."
             })
 
         return attrs

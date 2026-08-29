@@ -53,6 +53,43 @@ REQUISITOS = {
     },
 }
 
+PLANTILLAS_SOLICITUD = {
+    "fisica_asalariada": {
+        "leasing": {
+            "value": "persona_fisica_asalariada",
+            "archivo": "Solicitud-Persona-Fisica-Asalariada.pdf",
+        },
+    },
+
+    "fisica_profesionista": {
+        "credit": {
+            "value": "credito_personas_fisicas",
+            "archivo": "Solicitud-Credito-Personas-Fisicas.pdf",
+        },
+        "leasing": {
+            "value": "arrendamiento_personas_fisicas",
+            "archivo": "Solicitud-Arrendamiento-Personas-Fisicas.pdf",
+        },
+    },
+
+    "moral": {
+        "credit": {
+            "value": "credito_personas_morales",
+            "archivo": "Solicitud-Credito-Personas-Morales.pdf",
+        },
+        "leasing": {
+            "value": "arrendamiento_personas_morales",
+            "archivo": "Solicitud-Arrendamiento-Personas-Morales.pdf",
+        },
+    },
+}
+
+def obtener_plantilla_solicitud(tipo_persona, financiamiento):
+    return (
+        PLANTILLAS_SOLICITUD
+        .get(tipo_persona, {})
+        .get(financiamiento)
+    )
 
 def obtener_requisitos(tipo_persona, financiamiento): return REQUISITOS.get(tipo_persona, {}).get(financiamiento)
 

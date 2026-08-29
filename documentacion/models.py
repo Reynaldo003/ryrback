@@ -8,7 +8,7 @@ from django.db.models.signals import post_delete
 from django.dispatch import receiver
 from django.utils import timezone
 from django.utils.text import slugify
-
+from .requisitos import obtener_plantilla_solicitud
 
 def generar_folio(): return f"SF-{timezone.now():%y%m%d}-{uuid.uuid4().hex[:6].upper()}"
 
@@ -17,6 +17,16 @@ def ruta_documento(instance, filename):
     agencia = slugify(instance.expediente.agencia) or "dealer"
     return f"documentacion/{agencia}/{instance.expediente.folio}/{instance.requisito_id}-{uuid.uuid4().hex[:8]}.pdf"
 
+def ruta_solicitud_pdf(instance, filename):
+    agencia = slugify(instance.agencia) or "dealer"
+
+    return (
+        f"documentacion/"
+        f"{agencia}/"
+        f"{instance.folio}/"
+        f"solicitud/"
+        f"{filename}"
+    )
 
 def validar_pdf_real(archivo):
     posicion = archivo.tell() if hasattr(archivo, "tell") else 0
@@ -45,8 +55,30 @@ class Expediente(models.Model):
     creado_por = models.CharField(max_length=200, blank=True, default="")
     tipo_persona = models.CharField(max_length=30, choices=TIPO_PERSONA_CHOICES)
     financiamiento = models.CharField(max_length=20, choices=FINANCIAMIENTO_CHOICES)
+
+    solicitud_pdf_plantilla = models.CharField(max_length=100,blank=True,default="",)
+    solicitud_pdf = models.FileField(upload_to=ruta_solicitud_pdf,validators=[FileExtensionValidator(["pdf"]),validar_pdf_real,],null=True,blank=True,)
+    solicitud_pdf_campos = models.JSONField(default=dict,blank=True,)
+    solicitud_pdf_actualizado = models.DateTimeField(null=True,blank=True,)
+
     creado = models.DateTimeField(auto_now_add=True)
     actualizado = models.DateTimeField(auto_now=True)
+
+    def save(self, *args, **kwargs):
+        if self.tipo_persona and self.financiamiento:
+            plantilla = obtener_plantilla_solicitud(
+                self.tipo_persona,
+                self.financiamiento,
+            )
+
+            if not plantilla:
+                raise ValidationError(
+                    "La combinación de tipo de persona y financiamiento no es válida."
+                )
+
+            self.solicitud_pdf_plantilla = plantilla["value"]
+
+        super().save(*args, **kwargs)
 
     class Meta:
         db_table = "documentacion_expedientes"
@@ -106,3 +138,11 @@ def eliminar_archivo_fisico(sender, instance, **kwargs):
     if instance.archivo:
         try: instance.archivo.delete(save=False)
         except Exception: pass
+
+@receiver(post_delete, sender=Expediente)
+def eliminar_solicitud_pdf_fisica(sender, instance, **kwargs):
+    if instance.solicitud_pdf:
+        try:
+            instance.solicitud_pdf.delete(save=False)
+        except Exception:
+            pass
