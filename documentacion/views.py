@@ -143,32 +143,24 @@ class ExpedienteViewSet(
             },
             status=status.HTTP_201_CREATED,
         )
-    @action(detail=True,methods=["post"],url_path="formato-pdf",parser_classes=[MultiPartParser,FormParser,],)
+    @action(detail=True,methods=["post"],url_path="formato-pdf",parser_classes=[MultiPartParser, FormParser],)
     @transaction.atomic
     def guardar_formato_pdf(self, request, pk=None):
         expediente = self.get_object()
 
-        if not puede_editar_expediente(request.user,expediente,):
-            raise PermissionDenied("No tienes permisos para modificar este expediente.")
-        
-        faltantes = requisitos_obligatorios_faltantes(expediente)
-
-        if faltantes:
-            return Response(
-                {
-                    "detail":
-                        "Debes completar todos los documentos obligatorios antes de guardar la solicitud.",
-                    "faltantes": [
-                        {
-                            "id": requisito["id"],
-                            "nombre": requisito["nombre"],
-                        }
-                        for requisito in faltantes
-                    ],
-                },
-                status=status.HTTP_400_BAD_REQUEST,
+        if not puede_editar_expediente(request.user, expediente):
+            raise PermissionDenied(
+                "No tienes permisos para modificar este expediente."
             )
-        plantilla_configurada = obtener_plantilla_solicitud(expediente.tipo_persona, expediente.financiamiento,)
+
+        # Forzamos lectura del multipart completo.
+        data = request.data
+        archivos = request.FILES
+
+        plantilla_configurada = obtener_plantilla_solicitud(
+            expediente.tipo_persona,
+            expediente.financiamiento,
+        )
 
         if not plantilla_configurada:
             return Response(
@@ -179,7 +171,10 @@ class ExpedienteViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        plantilla_enviada = str(request.data.get("plantilla", "") or "").strip()
+        plantilla_enviada = str(
+            data.get("plantilla", "") or ""
+        ).strip()
+
         plantilla_esperada = plantilla_configurada["value"]
 
         if plantilla_enviada != plantilla_esperada:
@@ -192,7 +187,9 @@ class ExpedienteViewSet(
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
-        archivo = request.FILES.get("archivo")
+
+        archivo = archivos.get("archivo")
+
         if not archivo:
             return Response(
                 {
@@ -203,8 +200,13 @@ class ExpedienteViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        nombre = str(getattr(archivo, "name", "") or "").lower()
-        mime = str(getattr(archivo, "content_type", "") or "").lower()
+        nombre = str(
+            getattr(archivo, "name", "") or ""
+        ).lower()
+
+        mime = str(
+            getattr(archivo, "content_type", "") or ""
+        ).lower()
 
         if not nombre.endswith(".pdf"):
             return Response(
@@ -240,11 +242,7 @@ class ExpedienteViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ---------------------------------------------------------
-        # CAMPOS ACROFORM
-        # ---------------------------------------------------------
-
-        campos_raw = request.data.get("campos","{}",)
+        campos_raw = data.get("campos", "{}")
 
         try:
             campos = (
@@ -272,15 +270,9 @@ class ExpedienteViewSet(
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ---------------------------------------------------------
-        # NOMBRE DEL PDF GENERADO
-        # ---------------------------------------------------------
-
-        nombre_plantilla = plantilla_configurada["archivo"]
-
         nombre_final = (
             f"{expediente.folio}-"
-            f"{nombre_plantilla}"
+            f"{plantilla_configurada['archivo']}"
         )
 
         archivo_anterior = (
@@ -289,14 +281,15 @@ class ExpedienteViewSet(
             else ""
         )
 
-        # ---------------------------------------------------------
-        # GUARDAR NUEVA COPIA
-        # ---------------------------------------------------------
+        expediente.solicitud_pdf.save(
+            nombre_final,
+            archivo,
+            save=False,
+        )
 
-        expediente.solicitud_pdf.save(nombre_final,archivo,save=False,)
-        expediente.solicitud_pdf_plantilla = (plantilla_esperada)
+        expediente.solicitud_pdf_plantilla = plantilla_esperada
         expediente.solicitud_pdf_campos = campos
-        expediente.solicitud_pdf_actualizado = (timezone.now())
+        expediente.solicitud_pdf_actualizado = timezone.now()
 
         expediente.save(
             update_fields=[
@@ -308,9 +301,10 @@ class ExpedienteViewSet(
             ]
         )
 
-        # Eliminamos la versión anterior después
-        # de haber guardado correctamente la nueva.
-        if (archivo_anterior and archivo_anterior != expediente.solicitud_pdf.name):
+        if (
+            archivo_anterior
+            and archivo_anterior != expediente.solicitud_pdf.name
+        ):
             try:
                 default_storage.delete(archivo_anterior)
             except Exception:
