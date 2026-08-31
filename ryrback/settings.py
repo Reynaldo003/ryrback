@@ -130,6 +130,7 @@ INSTALLED_APPS = [
     'flujo',
     "BitacoraMantenimiento",
     "documentacion",
+    "gestion_inversion",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
