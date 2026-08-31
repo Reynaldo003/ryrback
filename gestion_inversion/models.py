@@ -1,6 +1,5 @@
 #gestion_inversion/models.py
 import uuid
-
 from django.core.exceptions import ValidationError
 from django.core.validators import FileExtensionValidator
 from django.db import models
@@ -60,12 +59,7 @@ def validar_pdf_real(archivo):
 def ruta_factura(instance, filename):
     ahora = timezone.now()
 
-    return (
-        f"analisis_facturas/"
-        f"{ahora:%Y}/"
-        f"{ahora:%m}/"
-        f"{uuid.uuid4().hex}.pdf"
-    )
+    return (f"gestion-inversion/" f"{ahora:%Y}/" f"{ahora:%m}/" f"{uuid.uuid4().hex}.pdf")
 
 
 class FacturaMarketing(models.Model):
@@ -77,73 +71,22 @@ class FacturaMarketing(models.Model):
 
     id_factura = models.AutoField(primary_key=True)
 
-    archivo = models.FileField(
-        upload_to=ruta_factura,
-        validators=[
-            FileExtensionValidator(["pdf"]),
-            validar_pdf_real,
-        ],
-    )
-
-    nombre_original = models.CharField(
-        max_length=255,
-    )
-
-    tipo_mime = models.CharField(
-        max_length=150,
-        default="application/pdf",
-    )
-
-    tamano_bytes = models.PositiveBigIntegerField(
-        default=0,
-    )
-
-    estado = models.CharField(
-        max_length=20,
-        choices=Estado.choices,
-        default=Estado.PENDIENTE,
-        db_index=True,
-    )
-
-    error_analisis = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    creado_por = models.CharField(
-        max_length=200,
-        blank=True,
-        default="",
-        db_index=True,
-    )
+    archivo = models.FileField(upload_to=ruta_factura, validators=[FileExtensionValidator(["pdf"]), validar_pdf_real,],)
+    nombre_original = models.CharField(max_length=255,)
+    tipo_mime = models.CharField(max_length=150, default="application/pdf",)
+    tamano_bytes = models.PositiveBigIntegerField(default=0,)
+    estado = models.CharField(max_length=20, choices=Estado.choices, default=Estado.PENDIENTE, db_index=True,)
+    error_analisis = models.TextField(blank=True, default="",)
+    creado_por = models.CharField(max_length=200, blank=True, default="", db_index=True,)
 
     # =========================================================
     # EMISOR
     # =========================================================
 
-    emisor_razon_social = models.CharField(
-        max_length=300,
-        blank=True,
-        default="",
-    )
-
-    emisor_rfc = models.CharField(
-        max_length=30,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    emisor_regimen_fiscal = models.CharField(
-        max_length=300,
-        blank=True,
-        default="",
-    )
-
-    emisor_domicilio = models.TextField(
-        blank=True,
-        default="",
-    )
+    emisor_razon_social = models.CharField(max_length=300,blank=True,default="",)
+    emisor_rfc = models.CharField(max_length=30,blank=True,default="",db_index=True,)
+    emisor_regimen_fiscal = models.CharField(max_length=300,blank=True,default="",)
+    emisor_domicilio = models.TextField(blank=True,default="",)
 
     # =========================================================
     # RECEPTOR

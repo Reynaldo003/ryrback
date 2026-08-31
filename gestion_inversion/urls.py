@@ -1,38 +1,12 @@
-from django.urls import (
-    include,
-    path,
-)
-
-from rest_framework.routers import (
-    DefaultRouter,
-)
-
-from .views import (
-    FacturaMarketingViewSet,
-    ConceptoFacturaViewSet,
-)
-
+from django.urls import include, path
+from rest_framework.routers import DefaultRouter
+from .views import FacturaMarketingViewSet,ConceptoFacturaViewSet
 
 router = DefaultRouter()
 
-router.register(
-    r"facturas",
-    FacturaMarketingViewSet,
-    basename="analisis-facturas",
-)
-
-router.register(
-    r"conceptos",
-    ConceptoFacturaViewSet,
-    basename="analisis-facturas-conceptos",
-)
-
+router.register(r"facturas", FacturaMarketingViewSet, basename="gestion_inversion",)
+router.register(r"conceptos", ConceptoFacturaViewSet, basename="gestion_inversion_conceptos",)
 
 urlpatterns = [
-    path(
-        "api/",
-        include(
-            router.urls
-        ),
-    ),
+    path("api/",include(router.urls),),
 ]

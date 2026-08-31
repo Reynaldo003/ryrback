@@ -28,6 +28,7 @@ urlpatterns = [
     path("api/notificaciones/", include("notificaciones.urls")),
     path("api/BitacoraMantenimiento/", include("BitacoraMantenimiento.urls")),
     path("documentacion/", include("documentacion.urls")),
+    path("gestion_inversion/", include("gestion_inversion.urls"),),
 ]
 
 if settings.DEBUG:
