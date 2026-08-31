@@ -61,7 +61,7 @@ class FacturaUploadSerializer(serializers.Serializer):
         max_bytes = int(
             getattr(
                 settings,
-                "GEMINI_MAX_INLINE_MEDIA_BYTES",
+                "OPENAI_MAX_PDF_BYTES",
                 18 * 1024 * 1024,
             )
         )
