@@ -14,6 +14,7 @@ from django.conf import settings
 from django.db import close_old_connections
 from django.core.files.storage import default_storage
 from django.db.models import Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When
+from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
@@ -2026,14 +2027,32 @@ def chats_list(request):
         .filter(telefono=OuterRef("cliente__telefono"), numero_asesor=numero_asesor)
         .order_by("-created_at", "-id")
     )
+    cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
+    agencia_linea = str(cfg_linea.get("agencia") or "").strip()
+    asesor_linea = str(cfg_linea.get("asesor_digital") or "").strip()
+
+    filtro_linea = Q(cliente__mensajes_whatsapp__numero_asesor=numero_asesor)
+
+    if agencia_linea:
+        filtro_manual = (
+            Q(cliente__mensajes_whatsapp__isnull=True)
+            & Q(agencia__iexact=agencia_linea)
+        )
+        if not linea_tiene_reparto(numero_asesor) and asesor_linea:
+            filtro_manual &= Q(asesor_digital__iexact=asesor_linea)
+        filtro_linea |= filtro_manual
+
     qs = (
         ExpedienteDigital.objects.select_related("cliente")
-        .filter(cliente__mensajes_whatsapp__numero_asesor=numero_asesor)
+        .filter(filtro_linea)
+        .distinct()
     )
     qs = _filtrar_expedientes_por_asignacion(request=request, queryset=qs, numero_asesor=numero_asesor)
     qs = qs.annotate(
         last_text=Subquery(last_msg_qs.values("body")[:1]),
         last_time=Subquery(last_msg_qs.values("created_at")[:1]),
+    ).annotate(
+        last_time_eff=Coalesce("last_time", "creado"),
     ).distinct()
 
     if busqueda:
@@ -2047,7 +2066,7 @@ def chats_list(request):
     elif paginado:
         if scope == "historico":
             qs = qs.filter(
-                last_time__lt=limite_recientes,
+                last_time_eff__lt=limite_recientes,
             ).filter(
                 Q(ultima_cita_agendada__isnull=True)
                 | Q(ultima_cita_agendada__lt=ahora)
@@ -2056,7 +2075,7 @@ def chats_list(request):
         else:
             scope = "recientes"
             qs = qs.filter(
-                Q(last_time__gte=limite_recientes)
+                Q(last_time_eff__gte=limite_recientes)
                 | Q(
                     ultima_cita_agendada__gte=ahora,
                     ultima_cita_agendada__lte=limite_cita_prioritaria,
@@ -2081,11 +2100,11 @@ def chats_list(request):
                 Q(tiene_cita_futura__lt=before_prioridad)
                 | Q(
                     tiene_cita_futura=before_prioridad,
-                    last_time__lt=before,
+                    last_time_eff__lt=before,
                 )
                 | Q(
                     tiene_cita_futura=before_prioridad,
-                    last_time=before,
+                    last_time_eff=before,
                     id__lt=before_id,
                 )
             )
@@ -2094,13 +2113,13 @@ def chats_list(request):
                 Q(tiene_cita_futura__lt=before_prioridad)
                 | Q(
                     tiene_cita_futura=before_prioridad,
-                    last_time__lt=before,
+                    last_time_eff__lt=before,
                 )
             )
 
     consulta = qs.order_by(
         "-tiene_cita_futura",
-        "-last_time",
+        "-last_time_eff",
         "-id",
     )
     if paginado:
@@ -2148,7 +2167,7 @@ def chats_list(request):
         "ok": True, "results": data,
         "paginacion": {
             "limit": limit, "has_more": has_more, "scope": scope, "next_scope": next_scope,
-            "before": ultimo.last_time.isoformat() if ultimo and ultimo.last_time else "",
+            "before": ultimo.last_time_eff.isoformat() if ultimo and ultimo.last_time_eff else "",
             "before_id": ultimo.id if ultimo else 0,
             "before_prioridad": ultimo.tiene_cita_futura if ultimo else 0,
             "dias_recientes": dias,

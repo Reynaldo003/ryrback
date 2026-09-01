@@ -6,10 +6,7 @@ from Digitales.models import ExpedienteDigital
 
 
 def _recalcular_ultima_cita(cliente_id: int):
-    exp = ExpedienteDigital.objects.filter(cliente_id=cliente_id).first()
-
-    if not exp:
-        return
+    exp, _ = ExpedienteDigital.objects.get_or_create(cliente_id=cliente_id)
 
     latest = (
         Cita.objects
@@ -28,7 +25,19 @@ def _recalcular_ultima_cita(cliente_id: int):
     exp.ultima_cita_id = latest.id
     exp.ultima_cita_agendada = latest.fecha_hora_cita
     exp.asistencia = bool(latest.asistencia)
-    exp.save(update_fields=["ultima_cita", "ultima_cita_agendada", "asistencia", "actualizado"])
+
+    campos = ["ultima_cita", "ultima_cita_agendada", "asistencia"]
+
+    if not str(exp.agencia or "").strip() and str(latest.agencia or "").strip():
+        exp.agencia = latest.agencia
+        campos.append("agencia")
+
+    if not str(exp.asesor_digital or "").strip() and str(latest.asesor_digital or "").strip():
+        exp.asesor_digital = latest.asesor_digital
+        campos.append("asesor_digital")
+
+    campos.append("actualizado")
+    exp.save(update_fields=campos)
 
 
 @receiver(post_save, sender=Cita)
