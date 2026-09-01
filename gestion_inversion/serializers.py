@@ -7,8 +7,8 @@ from .models import FacturaMarketing, ConceptoFactura, SITIOS_POR_CLASIFICACION,
 
 class FacturaUploadSerializer(serializers.Serializer):
     archivo = serializers.FileField()
-    dealer = serializers.ChoiceField(choices=DEALERS)
-    departamento = serializers.ChoiceField(choices=DEPARTAMENTOS)
+    dealer = serializers.ChoiceField(choices=DEALERS, required=False, allow_blank=True, default="")
+    departamento = serializers.ChoiceField(choices=DEPARTAMENTOS, required=False, allow_blank=True, default="")
 
     def validate_archivo(self, archivo):
         nombre = str(getattr(archivo, "name", "") or "").lower()
@@ -36,7 +36,7 @@ class FacturaUploadSerializer(serializers.Serializer):
             raise serializers.ValidationError(f"El PDF supera el límite de {limite_mb} MB para análisis.")
 
         return archivo
-
+    
 class ConceptoFacturaSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(
         source="id_concepto",
@@ -234,3 +234,11 @@ class FacturaMarketingSerializer(serializers.ModelSerializer):
             "impuestos": float(obj.impuestos or 0),
             "total": float(obj.total or 0),
         }
+
+class FacturaAsignacionSerializer(serializers.ModelSerializer):
+    dealer = serializers.ChoiceField(choices=DEALERS, required=False, allow_blank=True)
+    departamento = serializers.ChoiceField(choices=DEPARTAMENTOS, required=False, allow_blank=True)
+
+    class Meta:
+        model = FacturaMarketing
+        fields = ["dealer", "departamento"]

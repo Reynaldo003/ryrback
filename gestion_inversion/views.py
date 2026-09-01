@@ -42,11 +42,7 @@ from .models import (
     ConceptoFactura,
 )
 
-from .serializers import (
-    FacturaMarketingSerializer,
-    FacturaUploadSerializer,
-    ConceptoFacturaSerializer,
-)
+from .serializers import FacturaMarketingSerializer, FacturaUploadSerializer, ConceptoFacturaSerializer, FacturaAsignacionSerializer
 
 
 logger = logging.getLogger(__name__)
@@ -843,8 +839,8 @@ class FacturaMarketingViewSet(
         serializer.is_valid(raise_exception=True)
 
         archivo = serializer.validated_data["archivo"]
-        dealer = serializer.validated_data["dealer"]
-        departamento = serializer.validated_data["departamento"]
+        dealer = serializer.validated_data.get("dealer", "")
+        departamento = serializer.validated_data.get("departamento", "")
 
         factura = FacturaMarketing.objects.create(
             archivo=archivo,
@@ -890,13 +886,12 @@ class FacturaMarketingViewSet(
 
             marcar_factura_error(factura, exc)
             factura = self.get_queryset().get(pk=factura.pk)
-            salida = self.get_serializer(factura)
 
             return Response(
                 {
                     "detail": "La factura se guardó, pero no pudo analizarse correctamente.",
                     "error": str(exc),
-                    "data": salida.data,
+                    "data": self.get_serializer(factura).data,
                 },
                 status=status.HTTP_502_BAD_GATEWAY,
             )
@@ -1040,7 +1035,29 @@ class FacturaMarketingViewSet(
                     status.HTTP_502_BAD_GATEWAY
                 ),
             )
+        
+    @action(detail=True, methods=["patch"], url_path="asignacion")
+    def actualizar_asignacion(self, request, pk=None):
+        factura = self.get_object()
 
+        serializer = FacturaAsignacionSerializer(
+            factura,
+            data=request.data,
+            partial=True,
+        )
+
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+
+        factura = self.get_queryset().get(pk=factura.pk)
+
+        return Response(
+            {
+                "message": "Asignación actualizada correctamente.",
+                "data": self.get_serializer(factura).data,
+            },
+            status=status.HTTP_200_OK,
+        )
 
 # ============================================================
 # CONCEPTOS
