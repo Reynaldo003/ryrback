@@ -131,6 +131,7 @@ INSTALLED_APPS = [
     "BitacoraMantenimiento",
     "documentacion",
     "gestion_inversion",
+    "Autos",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")

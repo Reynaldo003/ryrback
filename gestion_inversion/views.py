@@ -1,3 +1,4 @@
+#gestion_inversion/views.py
 from __future__ import annotations
 
 import base64
@@ -292,76 +293,34 @@ def _get_openai_client():
     )
 
 
-def analizar_pdf_con_openai(
-    blob: bytes,
-    nombre_archivo: str = "factura.pdf",
-) -> dict[str, Any]:
-
+def analizar_pdf_con_openai(blob: bytes, nombre_archivo: str = "factura.pdf") -> dict[str, Any]:
     if not blob:
-        raise ValueError(
-            "El PDF está vacío."
-        )
+        raise ValueError("El PDF está vacío.")
 
-    max_bytes = int(
-        getattr(
-            settings,
-            "OPENAI_MAX_PDF_BYTES",
-            18 * 1024 * 1024,
-        )
-    )
+    max_bytes = int(getattr(settings, "OPENAI_MAX_PDF_BYTES", 18 * 1024 * 1024))
 
     if len(blob) > max_bytes:
-        limite_mb = round(
-            max_bytes / 1024 / 1024,
-            2,
-        )
+        limite_mb = round(max_bytes / 1024 / 1024, 2)
+        raise ValueError(f"El PDF supera el límite configurado de {limite_mb} MB.")
 
-        raise ValueError(
-            f"El PDF supera el límite configurado de {limite_mb} MB."
-        )
-
-    nombre_archivo = str(
-        nombre_archivo or "factura.pdf"
-    ).strip()
+    nombre_archivo = str(nombre_archivo or "factura.pdf").strip()
 
     if not nombre_archivo.lower().endswith(".pdf"):
-        nombre_archivo = (
-            f"{nombre_archivo}.pdf"
-        )
+        nombre_archivo = f"{nombre_archivo}.pdf"
 
-    pdf_base64 = base64.b64encode(
-        blob
-    ).decode(
-        "utf-8"
-    )
-
+    pdf_base64 = base64.b64encode(blob).decode("utf-8")
     client = _get_openai_client()
 
-    modelo = str(
-        getattr(
-            settings,
-            "OPENAI_API_KEY",
-            "gpt-5.6-luna",
-        )
-        or "gpt-5.6-luna"
-    ).strip()
+    modelo = str(getattr(settings, "OPENAI_MODEL", "gpt-5.6-luna") or "gpt-5.6-luna").strip()
 
-    logger.info(
-        "INICIANDO ANALISIS OPENAI | archivo=%s modelo=%s bytes=%s",
-        nombre_archivo,
-        modelo,
-        len(blob),
-    )
+    logger.info("INICIANDO ANALISIS OPENAI | archivo=%s modelo=%s bytes=%s", nombre_archivo, modelo, len(blob))
 
     response = client.responses.parse(
         model=modelo,
-
         input=[
             {
                 "role": "system",
-                "content": (
-                    PROMPT_ANALISIS_FACTURA
-                ),
+                "content": PROMPT_ANALISIS_FACTURA,
             },
             {
                 "role": "user",
@@ -369,112 +328,47 @@ def analizar_pdf_con_openai(
                     {
                         "type": "input_file",
                         "filename": nombre_archivo,
-                        "file_data": (
-                            "data:application/pdf;base64,"
-                            f"{pdf_base64}"
-                        ),
+                        "file_data": f"data:application/pdf;base64,{pdf_base64}",
                     },
                     {
                         "type": "input_text",
-                        "text": (
-                            "Analiza completamente esta factura. "
-                            "Extrae los datos fiscales, totales y "
-                            "todos los conceptos o partidas del documento."
-                        ),
+                        "text": "Analiza completamente esta factura. Extrae los datos fiscales, totales y todos los conceptos o partidas del documento.",
                     },
                 ],
             },
         ],
-
         text_format=ResultadoFacturaIA,
-
         max_output_tokens=12000,
     )
 
-    resultado = getattr(
-        response,
-        "output_parsed",
-        None,
-    )
+    resultado = getattr(response, "output_parsed", None)
 
     if resultado is None:
-        output_text = str(
-            getattr(
-                response,
-                "output_text",
-                "",
-            )
-            or ""
-        ).strip()
+        output_text = str(getattr(response, "output_text", "") or "").strip()
+        logger.error("OPENAI SIN RESPUESTA ESTRUCTURADA | archivo=%s respuesta=%s", nombre_archivo, output_text[:1000])
+        raise ValueError("OpenAI no devolvió datos estructurados de la factura.")
 
-        logger.error(
-            "OPENAI SIN RESPUESTA ESTRUCTURADA | archivo=%s respuesta=%s",
-            nombre_archivo,
-            output_text[:1000],
-        )
-
-        raise ValueError(
-            "OpenAI no devolvió datos estructurados de la factura."
-        )
-
-    usage = getattr(
-        response,
-        "usage",
-        None,
-    )
+    usage = getattr(response, "usage", None)
 
     if usage:
         logger.info(
-            (
-                "OPENAI FACTURA | "
-                "modelo=%s "
-                "entrada=%s "
-                "salida=%s "
-                "total=%s"
-            ),
+            "OPENAI FACTURA | modelo=%s entrada=%s salida=%s total=%s",
             modelo,
-            getattr(
-                usage,
-                "input_tokens",
-                None,
-            ),
-            getattr(
-                usage,
-                "output_tokens",
-                None,
-            ),
-            getattr(
-                usage,
-                "total_tokens",
-                None,
-            ),
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "total_tokens", None),
         )
 
-    resultado_dict = resultado.model_dump(
-        mode="json",
-    )
+    resultado_dict = resultado.model_dump(mode="json")
 
     logger.info(
-        (
-            "ANALISIS OPENAI COMPLETADO | "
-            "archivo=%s "
-            "es_factura=%s "
-            "conceptos=%s"
-        ),
+        "ANALISIS OPENAI COMPLETADO | archivo=%s es_factura=%s conceptos=%s",
         nombre_archivo,
-        resultado_dict.get(
-            "es_factura"
-        ),
-        len(
-            resultado_dict.get(
-                "conceptos",
-                [],
-            )
-        ),
+        resultado_dict.get("es_factura"),
+        len(resultado_dict.get("conceptos", [])),
     )
 
     return resultado_dict
-
 
 # ============================================================
 # LECTURA DEL ARCHIVO

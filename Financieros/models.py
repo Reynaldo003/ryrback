@@ -1,6 +1,7 @@
-# Financieros/models.py
 from django.db import models
+from django.utils import timezone
 from citas.models import ClienteComercial
+
 
 class SolicitudCredito(models.Model):
     cliente = models.ForeignKey(
@@ -22,7 +23,8 @@ class SolicitudCredito(models.Model):
     estado_compra = models.CharField(max_length=200, default="")
     fecha_respuesta = models.DateTimeField(null=True)
     comentarios = models.TextField(max_length=2000, default="", null=True, blank=True)
-    creado = models.DateTimeField(auto_now_add=True)
+
+    creado = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "solicitud_credito"
@@ -31,6 +33,7 @@ class SolicitudCredito(models.Model):
 
     def __str__(self):
         return f"{self.cliente.nombre or 'Cliente'} - {self.cliente.telefono}"
+
 
 class LongDrive(models.Model):
     cliente = models.ForeignKey(
@@ -45,7 +48,8 @@ class LongDrive(models.Model):
     producto_long_drive = models.CharField(max_length=120, default="")
     tipo_venta = models.CharField(max_length=100, default="")
     fecha_entrega = models.DateTimeField(null=True)
-    creado = models.DateTimeField(auto_now_add=True)
+
+    creado = models.DateTimeField(default=timezone.now)
 
     class Meta:
         db_table = "long_drive"
@@ -54,4 +58,3 @@ class LongDrive(models.Model):
 
     def __str__(self):
         return f"{self.cliente.nombre or 'Cliente'} - {self.producto_long_drive}"
-
