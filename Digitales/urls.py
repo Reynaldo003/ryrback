@@ -63,6 +63,12 @@ from .ia_catalogo import (
     catalogo_vehiculo_eliminar_media,
 )
 
+from .asesores_catalogo import (
+    asesores_list,
+    asesores_admin_list_create,
+    asesor_admin_detail,
+)
+
 router = DefaultRouter()
 router.register(r"prospectos", ProspectosViewSet, basename="prospectos")
 
@@ -125,4 +131,21 @@ urlpatterns = [
     path("catalogo/vehiculos/<int:vehiculo_id>/",catalogo_vehiculo_detail,name="catalogo-vehiculo-detail",),
     path("catalogo/vehiculos/<int:vehiculo_id>/upload/",catalogo_vehiculo_upload_media,name="catalogo-vehiculo-upload",),
     path("catalogo/vehiculos/<int:vehiculo_id>/media/",catalogo_vehiculo_eliminar_media,name="catalogo-vehiculo-eliminar-media",),
+        path(
+        "asesores/",
+        asesores_list,
+        name="asesores-list",
+    ),
+
+    path(
+        "asesores/admin/",
+        asesores_admin_list_create,
+        name="asesores-admin-list-create",
+    ),
+
+    path(
+        "asesores/admin/<int:asesor_id>/",
+        asesor_admin_detail,
+        name="asesor-admin-detail",
+    ),
 ]

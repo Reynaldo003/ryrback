@@ -557,4 +557,84 @@ class RespuestaRapidaAsesor(models.Model):
 
     def __str__(self):
         return f"{self.usuario_id} | {self.titulo or self.texto[:40]}"
-    
+
+class Asesor(models.Model):
+    nombre = models.CharField(
+        max_length=200,
+        db_index=True,
+    )
+
+    telefono = models.CharField(
+        max_length=25,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+
+    tipo_asesor = models.CharField(
+        max_length=80,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+
+    area = models.CharField(
+        max_length=100,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+
+    agencia = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+
+    activo = models.BooleanField(
+        default=True,
+        db_index=True,
+    )
+
+    creado = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    actualizado = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "digitales_catalogo_asesor"
+        ordering = ["nombre", "agencia"]
+
+    def save(self, *args, **kwargs):
+        self.nombre = str(
+            self.nombre or ""
+        ).strip()
+
+        self.telefono = str(
+            self.telefono or ""
+        ).strip()
+
+        self.tipo_asesor = str(
+            self.tipo_asesor or ""
+        ).strip()
+
+        self.area = str(
+            self.area or ""
+        ).strip()
+
+        self.agencia = str(
+            self.agencia or ""
+        ).strip()
+
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"{self.nombre} | "
+            f"{self.tipo_asesor} | "
+            f"{self.agencia}"
+        )
