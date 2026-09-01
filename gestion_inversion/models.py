@@ -15,6 +15,21 @@ CLASIFICACIONES = [
     ("Eventos y Prospección", "Eventos y Prospección"),
 ]
 
+DEALERS = [
+    ("VW Cordoba", "VW Cordoba"),
+    ("VW Orizaba", "VW Orizaba"),
+    ("VW Tuxpan", "VW Tuxpan"),
+    ("VW Poza Rica", "VW Poza Rica"),
+    ("VW Tuxtepec", "VW Tuxtepec"),
+]
+
+DEPARTAMENTOS = [
+    ("Nuevos", "Nuevos"),
+    ("Usados", "Usados"),
+    ("Comerciales", "Comerciales"),
+    ("Servicio", "Servicio"),
+    ("HyP", "HyP"),
+]
 
 SITIOS_POR_CLASIFICACION = {
     "Social Media": [
@@ -78,198 +93,57 @@ class FacturaMarketing(models.Model):
     estado = models.CharField(max_length=20, choices=Estado.choices, default=Estado.PENDIENTE, db_index=True,)
     error_analisis = models.TextField(blank=True, default="",)
     creado_por = models.CharField(max_length=200, blank=True, default="", db_index=True,)
-
-    # =========================================================
-    # EMISOR
-    # =========================================================
+    dealer = models.CharField(max_length=100, choices=DEALERS, blank=True, default="", db_index=True)
+    departamento = models.CharField(max_length=100, choices=DEPARTAMENTOS, blank=True, default="", db_index=True)
 
     emisor_razon_social = models.CharField(max_length=300,blank=True,default="",)
     emisor_rfc = models.CharField(max_length=30,blank=True,default="",db_index=True,)
     emisor_regimen_fiscal = models.CharField(max_length=300,blank=True,default="",)
     emisor_domicilio = models.TextField(blank=True,default="",)
 
-    # =========================================================
-    # RECEPTOR
-    # =========================================================
+    receptor_razon_social = models.CharField(max_length=300,blank=True,default="",)
+    receptor_rfc = models.CharField(max_length=30,blank=True,default="",db_index=True,)
+    receptor_uso_cfdi = models.CharField(max_length=200,blank=True,default="",)
+    
+    uuid_cfdi = models.CharField(max_length=100,blank=True,default="",db_index=True,)
+    folio = models.CharField(max_length=100,blank=True,default="",db_index=True,)
+    fecha_factura = models.DateField(null=True,blank=True,db_index=True,)
+    moneda = models.CharField(max_length=20,blank=True,default="MXN",)
+    metodo_pago = models.CharField(max_length=100,blank=True,default="",)
+    forma_pago = models.CharField(max_length=200,blank=True,default="",)
 
-    receptor_razon_social = models.CharField(
-        max_length=300,
-        blank=True,
-        default="",
-    )
-
-    receptor_rfc = models.CharField(
-        max_length=30,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    receptor_uso_cfdi = models.CharField(
-        max_length=200,
-        blank=True,
-        default="",
-    )
-
-    # =========================================================
-    # COMPROBANTE
-    # =========================================================
-
-    uuid_cfdi = models.CharField(
-        max_length=100,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    folio = models.CharField(
-        max_length=100,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    fecha_factura = models.DateField(
-        null=True,
-        blank=True,
-        db_index=True,
-    )
-
-    moneda = models.CharField(
-        max_length=20,
-        blank=True,
-        default="MXN",
-    )
-
-    metodo_pago = models.CharField(
-        max_length=100,
-        blank=True,
-        default="",
-    )
-
-    forma_pago = models.CharField(
-        max_length=200,
-        blank=True,
-        default="",
-    )
-
-    # =========================================================
-    # TOTALES
-    # =========================================================
-
-    subtotal = models.DecimalField(
-        max_digits=18,
-        decimal_places=2,
-        default=0,
-    )
-
-    impuestos = models.DecimalField(
-        max_digits=18,
-        decimal_places=2,
-        default=0,
-    )
-
-    total = models.DecimalField(
-        max_digits=18,
-        decimal_places=2,
-        default=0,
-    )
-
-    # Respuesta original estructurada de Gemini.
-    resultado_ia = models.JSONField(
-        default=dict,
-        blank=True,
-    )
-
-    analizado = models.DateTimeField(
-        null=True,
-        blank=True,
-    )
-
-    creado = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    actualizado = models.DateTimeField(
-        auto_now=True,
-    )
+    subtotal = models.DecimalField(max_digits=18,decimal_places=2,default=0,)
+    impuestos = models.DecimalField(max_digits=18,decimal_places=2,default=0,)
+    total = models.DecimalField(max_digits=18,decimal_places=2,default=0,)
+    # Respuesta original estructurada de openai.
+    resultado_ia = models.JSONField(default=dict,blank=True,)
+    analizado = models.DateTimeField(null=True,blank=True,)
+    creado = models.DateTimeField(auto_now_add=True,)
+    actualizado = models.DateTimeField(auto_now=True,)
 
     class Meta:
         db_table = "analisis_facturas"
         managed = True
-        ordering = [
-            "-creado",
-            "-id_factura",
-        ]
+        ordering = ["-creado","-id_factura",]
         indexes = [
-            models.Index(
-                fields=["estado", "creado"],
-                name="fact_estado_creado_idx",
-            ),
-            models.Index(
-                fields=["emisor_rfc", "fecha_factura"],
-                name="fact_emisor_fecha_idx",
-            ),
-            models.Index(
-                fields=["receptor_rfc", "fecha_factura"],
-                name="fact_receptor_fecha_idx",
-            ),
+            models.Index(fields=["estado", "creado"],name="fact_estado_creado_idx",),
+            models.Index(fields=["emisor_rfc", "fecha_factura"],name="fact_emisor_fecha_idx",),
+            models.Index(fields=["receptor_rfc", "fecha_factura"],name="fact_receptor_fecha_idx",),
+            models.Index(fields=["dealer", "departamento", "fecha_factura"], name="fact_dealer_depto_idx"),
         ]
 
     def __str__(self):
-        return (
-            self.nombre_original
-            or f"Factura {self.id_factura}"
-        )
-
+        return (self.nombre_original or f"Factura {self.id_factura}")
 
 class ConceptoFactura(models.Model):
-    id_concepto = models.AutoField(
-        primary_key=True,
-    )
-
-    factura = models.ForeignKey(
-        FacturaMarketing,
-        on_delete=models.CASCADE,
-        related_name="conceptos",
-    )
-
-    orden = models.PositiveIntegerField(
-        default=1,
-    )
-
-    # =========================================================
-    # DATOS EXTRAÍDOS POR GEMINI
-    # =========================================================
-
-    clave = models.CharField(
-        max_length=100,
-        blank=True,
-        default="",
-    )
-
-    descripcion = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    cantidad = models.DecimalField(
-        max_digits=14,
-        decimal_places=4,
-        default=0,
-    )
-
-    unidad = models.CharField(
-        max_length=100,
-        blank=True,
-        default="",
-    )
-
-    precio_unitario = models.DecimalField(
-        max_digits=18,
-        decimal_places=4,
-        default=0,
-    )
+    id_concepto = models.AutoField(primary_key=True,)
+    factura = models.ForeignKey(FacturaMarketing,on_delete=models.CASCADE,related_name="conceptos",)
+    orden = models.PositiveIntegerField(default=1,)
+    clave = models.CharField(max_length=100,blank=True,default="",)
+    descripcion = models.TextField(blank=True,default="",)
+    cantidad = models.DecimalField(max_digits=14,decimal_places=4,default=0,)
+    unidad = models.CharField(max_length=100,blank=True,default="",)
+    precio_unitario = models.DecimalField(max_digits=18,decimal_places=4,default=0,)
 
     importe = models.DecimalField(
         max_digits=18,

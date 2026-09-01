@@ -3,81 +3,39 @@ from django.conf import settings
 
 from rest_framework import serializers
 
-from .models import (
-    FacturaMarketing,
-    ConceptoFactura,
-    SITIOS_POR_CLASIFICACION,
-)
-
+from .models import FacturaMarketing, ConceptoFactura, SITIOS_POR_CLASIFICACION, DEALERS, DEPARTAMENTOS
 
 class FacturaUploadSerializer(serializers.Serializer):
     archivo = serializers.FileField()
+    dealer = serializers.ChoiceField(choices=DEALERS)
+    departamento = serializers.ChoiceField(choices=DEPARTAMENTOS)
 
     def validate_archivo(self, archivo):
-        nombre = str(
-            getattr(
-                archivo,
-                "name",
-                "",
-            )
-            or ""
-        ).lower()
-
-        mime = str(
-            getattr(
-                archivo,
-                "content_type",
-                "",
-            )
-            or ""
-        ).lower()
+        nombre = str(getattr(archivo, "name", "") or "").lower()
+        mime = str(getattr(archivo, "content_type", "") or "").lower()
 
         if not nombre.endswith(".pdf"):
-            raise serializers.ValidationError(
-                "Solo se permiten archivos con extensión .pdf."
-            )
+            raise serializers.ValidationError("Solo se permiten archivos con extensión .pdf.")
 
         if mime and mime != "application/pdf":
-            raise serializers.ValidationError(
-                "Solo se permiten archivos PDF."
-            )
+            raise serializers.ValidationError("Solo se permiten archivos PDF.")
 
-        posicion = (
-            archivo.tell()
-            if hasattr(archivo, "tell")
-            else 0
-        )
-
+        posicion = archivo.tell() if hasattr(archivo, "tell") else 0
         cabecera = archivo.read(5)
 
         if hasattr(archivo, "seek"):
             archivo.seek(posicion)
 
         if cabecera != b"%PDF-":
-            raise serializers.ValidationError(
-                "El archivo seleccionado no es un PDF válido."
-            )
+            raise serializers.ValidationError("El archivo seleccionado no es un PDF válido.")
 
-        max_bytes = int(
-            getattr(
-                settings,
-                "OPENAI_MAX_PDF_BYTES",
-                18 * 1024 * 1024,
-            )
-        )
+        max_bytes = int(getattr(settings, "OPENAI_MAX_PDF_BYTES", 18 * 1024 * 1024))
 
         if archivo.size > max_bytes:
-            limite_mb = round(
-                max_bytes / 1024 / 1024,
-                2,
-            )
-
-            raise serializers.ValidationError(
-                f"El PDF supera el límite de {limite_mb} MB para análisis."
-            )
+            limite_mb = round(max_bytes / 1024 / 1024, 2)
+            raise serializers.ValidationError(f"El PDF supera el límite de {limite_mb} MB para análisis.")
 
         return archivo
-
 
 class ConceptoFacturaSerializer(serializers.ModelSerializer):
     id = serializers.IntegerField(
@@ -201,63 +159,30 @@ class ConceptoFacturaSerializer(serializers.ModelSerializer):
             validated_data,
         )
 
-
 class FacturaMarketingSerializer(serializers.ModelSerializer):
-    id = serializers.IntegerField(
-        source="id_factura",
-        read_only=True,
-    )
-
-    archivo = serializers.CharField(
-        source="nombre_original",
-        read_only=True,
-    )
-
+    id = serializers.IntegerField(source="id_factura", read_only=True)
+    archivo = serializers.CharField(source="nombre_original", read_only=True)
     archivoUrl = serializers.SerializerMethodField()
-
-    archivoSize = serializers.IntegerField(
-        source="tamano_bytes",
-        read_only=True,
-    )
-
-    fechaCarga = serializers.DateTimeField(
-        source="creado",
-        read_only=True,
-    )
-
-    creadoPor = serializers.CharField(
-        source="creado_por",
-        read_only=True,
-    )
-
-    errorAnalisis = serializers.CharField(
-        source="error_analisis",
-        read_only=True,
-    )
-
-    analizadoEn = serializers.DateTimeField(
-        source="analizado",
-        read_only=True,
-    )
-
+    archivoSize = serializers.IntegerField(source="tamano_bytes", read_only=True)
+    fechaCarga = serializers.DateTimeField(source="creado", read_only=True)
+    creadoPor = serializers.CharField(source="creado_por", read_only=True)
+    errorAnalisis = serializers.CharField(source="error_analisis", read_only=True)
+    analizadoEn = serializers.DateTimeField(source="analizado", read_only=True)
     emisor = serializers.SerializerMethodField()
     receptor = serializers.SerializerMethodField()
     comprobante = serializers.SerializerMethodField()
     totales = serializers.SerializerMethodField()
-
-    conceptos = ConceptoFacturaSerializer(
-        many=True,
-        read_only=True,
-    )
+    conceptos = ConceptoFacturaSerializer(many=True, read_only=True)
 
     class Meta:
         model = FacturaMarketing
-
         fields = [
             "id",
             "archivo",
             "archivoUrl",
             "archivoSize",
+            "dealer",
+            "departamento",
             "estado",
             "fechaCarga",
             "creadoPor",
@@ -269,7 +194,6 @@ class FacturaMarketingSerializer(serializers.ModelSerializer):
             "totales",
             "conceptos",
         ]
-
         read_only_fields = fields
 
     def get_archivoUrl(self, obj):
@@ -277,62 +201,36 @@ class FacturaMarketingSerializer(serializers.ModelSerializer):
             return ""
 
         request = self.context.get("request")
-
-        if request:
-            return request.build_absolute_uri(
-                obj.archivo.url
-            )
-
-        return obj.archivo.url
+        return request.build_absolute_uri(obj.archivo.url) if request else obj.archivo.url
 
     def get_emisor(self, obj):
         return {
-            "razonSocial":
-                obj.emisor_razon_social,
-            "rfc":
-                obj.emisor_rfc,
-            "regimenFiscal":
-                obj.emisor_regimen_fiscal,
-            "domicilio":
-                obj.emisor_domicilio,
+            "razonSocial": obj.emisor_razon_social,
+            "rfc": obj.emisor_rfc,
+            "regimenFiscal": obj.emisor_regimen_fiscal,
+            "domicilio": obj.emisor_domicilio,
         }
 
     def get_receptor(self, obj):
         return {
-            "razonSocial":
-                obj.receptor_razon_social,
-            "rfc":
-                obj.receptor_rfc,
-            "usoCfdi":
-                obj.receptor_uso_cfdi,
+            "razonSocial": obj.receptor_razon_social,
+            "rfc": obj.receptor_rfc,
+            "usoCfdi": obj.receptor_uso_cfdi,
         }
 
     def get_comprobante(self, obj):
         return {
-            "uuid":
-                obj.uuid_cfdi,
-            "folio":
-                obj.folio,
-            "fecha":
-                (
-                    obj.fecha_factura.isoformat()
-                    if obj.fecha_factura
-                    else None
-                ),
-            "moneda":
-                obj.moneda or "MXN",
-            "metodoPago":
-                obj.metodo_pago,
-            "formaPago":
-                obj.forma_pago,
+            "uuid": obj.uuid_cfdi,
+            "folio": obj.folio,
+            "fecha": obj.fecha_factura.isoformat() if obj.fecha_factura else None,
+            "moneda": obj.moneda or "MXN",
+            "metodoPago": obj.metodo_pago,
+            "formaPago": obj.forma_pago,
         }
 
     def get_totales(self, obj):
         return {
-            "subtotal":
-                float(obj.subtotal or 0),
-            "impuestos":
-                float(obj.impuestos or 0),
-            "total":
-                float(obj.total or 0),
+            "subtotal": float(obj.subtotal or 0),
+            "impuestos": float(obj.impuestos or 0),
+            "total": float(obj.total or 0),
         }

@@ -781,90 +781,43 @@ class FacturaMarketingViewSet(
     )
 
     def get_queryset(self):
-        queryset = (
-            FacturaMarketing.objects
-            .prefetch_related(
-                "conceptos"
-            )
-            .all()
-        )
+        queryset = FacturaMarketing.objects.prefetch_related("conceptos").all()
 
-        q = str(
-            self.request.query_params.get(
-                "q",
-                "",
-            )
-            or ""
-        ).strip()
-
-        clasificacion = str(
-            self.request.query_params.get(
-                "clasificacion",
-                "",
-            )
-            or ""
-        ).strip()
-
-        sitio = str(
-            self.request.query_params.get(
-                "sitio",
-                "",
-            )
-            or ""
-        ).strip()
-
-        estado = str(
-            self.request.query_params.get(
-                "estado",
-                "",
-            )
-            or ""
-        ).strip()
+        q = str(self.request.query_params.get("q", "") or "").strip()
+        clasificacion = str(self.request.query_params.get("clasificacion", "") or "").strip()
+        sitio = str(self.request.query_params.get("sitio", "") or "").strip()
+        dealer = str(self.request.query_params.get("dealer", "") or "").strip()
+        departamento = str(self.request.query_params.get("departamento", "") or "").strip()
+        estado = str(self.request.query_params.get("estado", "") or "").strip()
 
         if q:
             queryset = queryset.filter(
-                Q(
-                    nombre_original__icontains=q
-                )
-                | Q(
-                    emisor_razon_social__icontains=q
-                )
-                | Q(
-                    emisor_rfc__icontains=q
-                )
-                | Q(
-                    receptor_razon_social__icontains=q
-                )
-                | Q(
-                    receptor_rfc__icontains=q
-                )
-                | Q(
-                    uuid_cfdi__icontains=q
-                )
-                | Q(
-                    folio__icontains=q
-                )
-                | Q(
-                    conceptos__descripcion__icontains=q
-                )
+                Q(nombre_original__icontains=q) |
+                Q(emisor_razon_social__icontains=q) |
+                Q(emisor_rfc__icontains=q) |
+                Q(receptor_razon_social__icontains=q) |
+                Q(receptor_rfc__icontains=q) |
+                Q(uuid_cfdi__icontains=q) |
+                Q(folio__icontains=q) |
+                Q(dealer__icontains=q) |
+                Q(departamento__icontains=q) |
+                Q(conceptos__descripcion__icontains=q)
             )
 
         if clasificacion:
-            queryset = queryset.filter(
-                conceptos__clasificacion=
-                clasificacion
-            )
+            queryset = queryset.filter(conceptos__clasificacion=clasificacion)
 
         if sitio:
-            queryset = queryset.filter(
-                conceptos__sitio=
-                sitio
-            )
+            queryset = queryset.filter(conceptos__sitio=sitio)
+
+        if dealer:
+            queryset = queryset.filter(dealer=dealer)
+
+        if departamento:
+            queryset = queryset.filter(departamento=departamento)
 
         if estado:
-            queryset = queryset.filter(
-                estado=estado
-            )
+            queryset = queryset.filter(estado=estado)
 
         return queryset.distinct()
 
@@ -884,181 +837,68 @@ class FacturaMarketingViewSet(
     # POST /facturas/analizar/
     # ========================================================
 
-    @action(
-        detail=False,
-        methods=[
-            "post",
-        ],
-        url_path="analizar",
-        parser_classes=[
-            MultiPartParser,
-            FormParser,
-        ],
-    )
-    def analizar(
-        self,
-        request,
-    ):
-        serializer = (
-            FacturaUploadSerializer(
-                data=request.data
-            )
-        )
+    @action(detail=False, methods=["post"], url_path="analizar", parser_classes=[MultiPartParser, FormParser])
+    def analizar(self, request):
+        serializer = FacturaUploadSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
 
-        serializer.is_valid(
-            raise_exception=True
-        )
+        archivo = serializer.validated_data["archivo"]
+        dealer = serializer.validated_data["dealer"]
+        departamento = serializer.validated_data["departamento"]
 
-        archivo = (
-            serializer.validated_data[
-                "archivo"
-            ]
-        )
-
-        factura = (
-            FacturaMarketing.objects.create(
-                archivo=archivo,
-
-                nombre_original=(
-                    getattr(
-                        archivo,
-                        "name",
-                        "",
-                    )
-                    or ""
-                ),
-
-                tipo_mime=(
-                    getattr(
-                        archivo,
-                        "content_type",
-                        "",
-                    )
-                    or "application/pdf"
-                ),
-
-                tamano_bytes=(
-                    getattr(
-                        archivo,
-                        "size",
-                        0,
-                    )
-                    or 0
-                ),
-
-                creado_por=(
-                    nombre_usuario_crm(
-                        request.user
-                    )
-                ),
-
-                estado=(
-                    FacturaMarketing
-                    .Estado
-                    .PROCESANDO
-                ),
-            )
+        factura = FacturaMarketing.objects.create(
+            archivo=archivo,
+            nombre_original=getattr(archivo, "name", "") or "",
+            tipo_mime=getattr(archivo, "content_type", "") or "application/pdf",
+            tamano_bytes=getattr(archivo, "size", 0) or 0,
+            creado_por=nombre_usuario_crm(request.user),
+            dealer=dealer,
+            departamento=departamento,
+            estado=FacturaMarketing.Estado.PROCESANDO,
         )
 
         try:
-            blob = leer_pdf_factura(
-                factura
+            blob = leer_pdf_factura(factura)
+
+            resultado = analizar_pdf_con_openai(
+                blob=blob,
+                nombre_archivo=factura.nombre_original,
             )
 
-            resultado = (
-                analizar_pdf_con_openai(
-                    blob=blob,
-                    nombre_archivo=(
-                        factura.nombre_original
-                    ),
-                )
-            )
+            if resultado.get("es_factura") is False:
+                raise ValueError("El documento cargado no parece ser una factura.")
 
-            if (
-                resultado.get(
-                    "es_factura"
-                )
-                is False
-            ):
-                raise ValueError(
-                    "El documento cargado no parece ser una factura."
-                )
+            guardar_resultado_ia(factura.id_factura, resultado)
 
-            guardar_resultado_ia(
-                factura.id_factura,
-                resultado,
-            )
-
-            factura = (
-                self.get_queryset()
-                .get(
-                    pk=factura.pk
-                )
-            )
-
-            salida = (
-                self.get_serializer(
-                    factura
-                )
-            )
+            factura = self.get_queryset().get(pk=factura.pk)
+            salida = self.get_serializer(factura)
 
             return Response(
                 {
-                    "message":
-                        "Factura analizada correctamente.",
-
-                    "data":
-                        salida.data,
+                    "message": "Factura analizada correctamente.",
+                    "data": salida.data,
                 },
-                status=(
-                    status.HTTP_201_CREATED
-                ),
+                status=status.HTTP_201_CREATED,
             )
 
         except Exception as exc:
             logger.exception(
-                (
-                    "ERROR ANALIZANDO FACTURA OPENAI | "
-                    "factura=%s archivo=%s"
-                ),
+                "ERROR ANALIZANDO FACTURA OPENAI | factura=%s archivo=%s",
                 factura.pk,
                 factura.nombre_original,
             )
 
-            marcar_factura_error(
-                factura,
-                exc,
-            )
-
-            factura = (
-                self.get_queryset()
-                .get(
-                    pk=factura.pk
-                )
-            )
-
-            salida = (
-                self.get_serializer(
-                    factura
-                )
-            )
+            marcar_factura_error(factura, exc)
+            factura = self.get_queryset().get(pk=factura.pk)
+            salida = self.get_serializer(factura)
 
             return Response(
                 {
-                    "detail": (
-                        "La factura se guardó, pero no pudo "
-                        "analizarse correctamente."
-                    ),
-
-                    "error":
-                        str(exc),
-
-                    "data":
-                        salida.data,
+                    "detail": "La factura se guardó, pero no pudo analizarse correctamente.",
+                    "error": str(exc),
+                    "data": salida.data,
                 },
-                status=(
-                    status.HTTP_502_BAD_GATEWAY
-                ),
+                status=status.HTTP_502_BAD_GATEWAY,
             )
 
     # ========================================================
