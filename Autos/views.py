@@ -50,6 +50,13 @@ class VWVNListView(APIView):
             request.query_params.get("fecha_hasta", "") or ""
         ).strip()
 
+        familia = str(
+            request.query_params.get("familia", "") or ""
+        ).strip()
+
+        condicion_pago = str(
+            request.query_params.get("condicion_pago", "") or ""
+        ).strip()
 
         # ---------------------------------------------------------
         # 2. PAGINACIÓN
@@ -84,8 +91,14 @@ class VWVNListView(APIView):
         # 3. CONSTRUIMOS LOS FILTROS SQL
         # ---------------------------------------------------------
 
-        condiciones = []
-        parametros = []
+# Autos Nuevos: siempre excluir unidades usadas.
+        condiciones = [
+            "CondUso = %s"
+        ]
+
+        parametros = [
+            "N"
+        ]
 
         if busqueda:
             termino = f"%{busqueda}%"
@@ -136,17 +149,24 @@ class VWVNListView(APIView):
             )
             parametros.append(fecha_hasta)
 
+        if familia:
+            condiciones.append(
+                "NmFamilia = %s"
+            )
+            parametros.append(familia)
+
+
+        if condicion_pago:
+            condiciones.append(
+                "NmCondPgto = %s"
+            )
+            parametros.append(condicion_pago)
 
         # Si no hay filtros, no agregamos WHERE.
-        where_sql = ""
-
-        if condiciones:
-            where_sql = (
-                "WHERE "
-                + " AND ".join(condiciones)
-            )
-
-
+        where_sql = (
+            "WHERE "
+            + " AND ".join(condiciones)
+        )
         # ---------------------------------------------------------
         # 4. CONTAMOS CUÁNTOS REGISTROS EXISTEN
         # ---------------------------------------------------------
@@ -268,4 +288,605 @@ class VWVNListView(APIView):
                 "results": serializer.data,
             },
             status=status.HTTP_200_OK,
+        )
+
+class VWVNDashboardView(APIView):
+    """
+    Dashboard de Autos Nuevos basado en dbo.VW_VN.
+
+    Reglas comerciales confirmadas:
+
+    - Solo autos nuevos:
+        CondUso = 'N'
+
+    - Unidades vendidas:
+        Situacao = 'E' -> 1
+        Situacao = 'X' -> 0
+        Otro valor     -> NULL
+
+    - Importe / Ingresos:
+        ValorFacturaSnIva - ISAN
+
+    - Costo:
+        ValorCompra
+
+    Filtros:
+        DtEmissao
+        AGENCIA
+        Asesor
+        NmFamilia
+        NmCondPgto
+    """
+
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+
+        # ==========================================================
+        # 1. FILTROS RECIBIDOS DESDE REACT
+        # ==========================================================
+
+        fecha_desde = str(
+            request.query_params.get("fecha_desde", "") or ""
+        ).strip()
+
+        fecha_hasta = str(
+            request.query_params.get("fecha_hasta", "") or ""
+        ).strip()
+
+        agencia = str(
+            request.query_params.get("agencia", "") or ""
+        ).strip()
+
+        asesor = str(
+            request.query_params.get("asesor", "") or ""
+        ).strip()
+
+        familia = str(
+            request.query_params.get("familia", "") or ""
+        ).strip()
+
+        condicion_pago = str(
+            request.query_params.get("condicion_pago", "") or ""
+        ).strip()
+
+
+        # ==========================================================
+        # 2. WHERE DINÁMICO
+        #
+        # CondUso = N SIEMPRE.
+        # El usuario no podrá cambiar este filtro desde el frontend.
+        # ==========================================================
+
+        condiciones = [
+            "CondUso = %s"
+        ]
+
+        parametros = [
+            "N"
+        ]
+
+
+        # Fecha inicial
+        if fecha_desde:
+            condiciones.append(
+                "DtEmissao >= %s"
+            )
+            parametros.append(fecha_desde)
+
+
+        # Fecha final
+        if fecha_hasta:
+            condiciones.append(
+                "DtEmissao <= %s"
+            )
+            parametros.append(fecha_hasta)
+
+
+        # Agencia
+        if agencia:
+            condiciones.append(
+                "AGENCIA = %s"
+            )
+            parametros.append(agencia)
+
+
+        # Asesor
+        if asesor:
+            condiciones.append(
+                "Asesor = %s"
+            )
+            parametros.append(asesor)
+
+
+        # Familia / modelo
+        if familia:
+            condiciones.append(
+                "NmFamilia = %s"
+            )
+            parametros.append(familia)
+
+
+        # Condición de pago
+        if condicion_pago:
+            condiciones.append(
+                "NmCondPgto = %s"
+            )
+            parametros.append(condicion_pago)
+
+
+        where_sql = (
+            "WHERE "
+            + " AND ".join(condiciones)
+        )
+
+
+        # ==========================================================
+        # FUNCIÓN INTERNA
+        #
+        # Convierte:
+        #
+        # [(dato1, dato2), ...]
+        #
+        # en:
+        #
+        # [{"columna1": dato1, "columna2": dato2}, ...]
+        # ==========================================================
+
+        def cursor_a_dicts(cursor):
+            columnas = [
+                columna[0]
+                for columna in cursor.description
+            ]
+
+            return [
+                dict(zip(columnas, fila))
+                for fila in cursor.fetchall()
+            ]
+
+
+        # ==========================================================
+        # USAMOS EL SQL SERVER REAL DE VW_VN
+        # ==========================================================
+
+        with connections["sqlserver_inv"].cursor() as cursor:
+
+            # ======================================================
+            # 3. TOTALES PRINCIPALES
+            # ======================================================
+
+            consulta_totales = f"""
+                SELECT
+
+                    -- Cantidad de registros que tienen ProdOuServ.
+                    COUNT(ProdOuServ) AS productos,
+
+                    -- Emulación exacta del DAX de Rey.
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN Situacao = 'E' THEN 1
+                                WHEN Situacao = 'X' THEN 0
+                                ELSE NULL
+                            END
+                        ),
+                        0
+                    ) AS unidades_vendidas,
+
+                    -- IMPORTE = ValorFacturaSnIva - ISAN
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorFacturaSnIva, 0)
+                            -
+                            COALESCE(ISAN, 0)
+                        ),
+                        0
+                    ) AS ingresos,
+
+                    -- COSTO = ValorCompra
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorCompra, 0)
+                        ),
+                        0
+                    ) AS costo
+
+                FROM dbo.VW_VN
+
+                {where_sql}
+            """
+
+            cursor.execute(
+                consulta_totales,
+                parametros,
+            )
+
+            columnas_totales = [
+                columna[0]
+                for columna in cursor.description
+            ]
+
+            fila_totales = cursor.fetchone()
+
+            totales = dict(
+                zip(
+                    columnas_totales,
+                    fila_totales,
+                )
+            )
+
+
+            # ======================================================
+            # 4. GRÁFICA POR MES
+            # ======================================================
+
+            consulta_meses = f"""
+                SELECT
+
+                    YEAR(DtEmissao) AS anio,
+
+                    MONTH(DtEmissao) AS mes,
+
+                    COUNT(ProdOuServ) AS productos,
+
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN Situacao = 'E' THEN 1
+                                WHEN Situacao = 'X' THEN 0
+                                ELSE NULL
+                            END
+                        ),
+                        0
+                    ) AS unidades_vendidas,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorFacturaSnIva, 0)
+                            -
+                            COALESCE(ISAN, 0)
+                        ),
+                        0
+                    ) AS ingresos,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorCompra, 0)
+                        ),
+                        0
+                    ) AS costo
+
+                FROM dbo.VW_VN
+
+                {where_sql}
+
+                    AND DtEmissao IS NOT NULL
+
+                GROUP BY
+                    YEAR(DtEmissao),
+                    MONTH(DtEmissao)
+
+                ORDER BY
+                    YEAR(DtEmissao),
+                    MONTH(DtEmissao)
+            """
+
+            cursor.execute(
+                consulta_meses,
+                parametros,
+            )
+
+            por_mes = cursor_a_dicts(cursor)
+
+
+            # Agregamos "periodo":
+            # 2026-01
+            # 2026-02
+            # etc.
+            for item in por_mes:
+
+                anio = item.get("anio")
+                mes = item.get("mes")
+
+                if anio and mes:
+                    item["periodo"] = (
+                        f"{int(anio)}-{int(mes):02d}"
+                    )
+                else:
+                    item["periodo"] = ""
+
+
+            # ======================================================
+            # 5. GRÁFICA POR ASESOR
+            # ======================================================
+
+            consulta_asesores = f"""
+                SELECT
+
+                    COALESCE(
+                        NULLIF(
+                            LTRIM(RTRIM(Asesor)),
+                            ''
+                        ),
+                        'Sin asesor'
+                    ) AS asesor,
+
+                    COUNT(ProdOuServ) AS productos,
+
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN Situacao = 'E' THEN 1
+                                WHEN Situacao = 'X' THEN 0
+                                ELSE NULL
+                            END
+                        ),
+                        0
+                    ) AS unidades_vendidas,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorFacturaSnIva, 0)
+                            -
+                            COALESCE(ISAN, 0)
+                        ),
+                        0
+                    ) AS ingresos,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorCompra, 0)
+                        ),
+                        0
+                    ) AS costo
+
+                FROM dbo.VW_VN
+
+                {where_sql}
+
+                GROUP BY
+                    COALESCE(
+                        NULLIF(
+                            LTRIM(RTRIM(Asesor)),
+                            ''
+                        ),
+                        'Sin asesor'
+                    )
+
+                ORDER BY
+                    ingresos DESC
+            """
+
+            cursor.execute(
+                consulta_asesores,
+                parametros,
+            )
+
+            por_asesor = cursor_a_dicts(cursor)
+
+
+            # ======================================================
+            # 6. GRÁFICA POR FAMILIA / MODELO
+            # ======================================================
+
+            consulta_familias = f"""
+                SELECT
+
+                    COALESCE(
+                        NULLIF(
+                            LTRIM(RTRIM(NmFamilia)),
+                            ''
+                        ),
+                        'Sin familia'
+                    ) AS familia,
+
+                    COUNT(ProdOuServ) AS productos,
+
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN Situacao = 'E' THEN 1
+                                WHEN Situacao = 'X' THEN 0
+                                ELSE NULL
+                            END
+                        ),
+                        0
+                    ) AS unidades_vendidas,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorFacturaSnIva, 0)
+                            -
+                            COALESCE(ISAN, 0)
+                        ),
+                        0
+                    ) AS ingresos,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorCompra, 0)
+                        ),
+                        0
+                    ) AS costo
+
+                FROM dbo.VW_VN
+
+                {where_sql}
+
+                GROUP BY
+                    COALESCE(
+                        NULLIF(
+                            LTRIM(RTRIM(NmFamilia)),
+                            ''
+                        ),
+                        'Sin familia'
+                    )
+
+                ORDER BY
+                    unidades_vendidas DESC
+            """
+
+            cursor.execute(
+                consulta_familias,
+                parametros,
+            )
+
+            por_familia = cursor_a_dicts(cursor)
+
+
+            # ======================================================
+            # 7. GRÁFICA POR CONDICIÓN DE PAGO
+            # ======================================================
+
+            consulta_condiciones_pago = f"""
+                SELECT
+
+                    COALESCE(
+                        NULLIF(
+                            LTRIM(RTRIM(NmCondPgto)),
+                            ''
+                        ),
+                        'Sin condición'
+                    ) AS condicion_pago,
+
+                    COUNT(ProdOuServ) AS productos,
+
+                    COALESCE(
+                        SUM(
+                            CASE
+                                WHEN Situacao = 'E' THEN 1
+                                WHEN Situacao = 'X' THEN 0
+                                ELSE NULL
+                            END
+                        ),
+                        0
+                    ) AS unidades_vendidas,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorFacturaSnIva, 0)
+                            -
+                            COALESCE(ISAN, 0)
+                        ),
+                        0
+                    ) AS ingresos,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(ValorCompra, 0)
+                        ),
+                        0
+                    ) AS costo
+
+                FROM dbo.VW_VN
+
+                {where_sql}
+
+                GROUP BY
+                    COALESCE(
+                        NULLIF(
+                            LTRIM(RTRIM(NmCondPgto)),
+                            ''
+                        ),
+                        'Sin condición'
+                    )
+
+                ORDER BY
+                    unidades_vendidas DESC
+            """
+
+            cursor.execute(
+                consulta_condiciones_pago,
+                parametros,
+            )
+
+            por_condicion_pago = cursor_a_dicts(
+                cursor
+            )
+
+
+            # ======================================================
+            # 8. OPCIONES PARA LOS FILTROS DEL FRONT
+            #
+            # Estas opciones se consultan con CondUso = N,
+            # pero NO dependen de los filtros actuales.
+            # Así los selectores siempre muestran todas las opciones.
+            # ======================================================
+
+            def opciones_distintas(columna):
+                consulta = f"""
+                    SELECT DISTINCT
+                        {columna} AS valor
+
+                    FROM dbo.VW_VN
+
+                    WHERE CondUso = %s
+                      AND {columna} IS NOT NULL
+                      AND LTRIM(RTRIM({columna})) <> ''
+
+                    ORDER BY {columna}
+                """
+
+                cursor.execute(
+                    consulta,
+                    ["N"],
+                )
+
+                return [
+                    fila[0]
+                    for fila in cursor.fetchall()
+                    if fila[0] is not None
+                ]
+
+
+            agencias = opciones_distintas(
+                "AGENCIA"
+            )
+
+            asesores = opciones_distintas(
+                "Asesor"
+            )
+
+            familias = opciones_distintas(
+                "NmFamilia"
+            )
+
+            condiciones_pago = opciones_distintas(
+                "NmCondPgto"
+            )
+
+
+        # ==========================================================
+        # 9. RESPUESTA PARA REACT
+        # ==========================================================
+
+        return Response(
+            {
+                "filtros_aplicados": {
+                    "fecha_desde": fecha_desde,
+                    "fecha_hasta": fecha_hasta,
+                    "agencia": agencia,
+                    "asesor": asesor,
+                    "familia": familia,
+                    "condicion_pago": condicion_pago,
+                    "cond_uso": "N",
+                },
+
+                "totales": totales,
+
+                "graficas": {
+                    "por_mes": por_mes,
+                    "por_asesor": por_asesor,
+                    "por_familia": por_familia,
+                    "por_condicion_pago": por_condicion_pago,
+                },
+
+                "opciones": {
+                    "agencias": agencias,
+                    "asesores": asesores,
+                    "familias": familias,
+                    "condiciones_pago": condiciones_pago,
+                },
+            }
         )
