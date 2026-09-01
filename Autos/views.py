@@ -2,7 +2,7 @@ from django.shortcuts import render
 
 # Create your views here.
 
-from django.db import connection
+from django.db import connections
 
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
@@ -157,7 +157,7 @@ class VWVNListView(APIView):
             {where_sql}
         """
 
-        with connection.cursor() as cursor:
+        with connections["sqlserver_inv"].cursor() as cursor:
             cursor.execute(
                 consulta_total,
                 parametros,
@@ -229,7 +229,7 @@ class VWVNListView(APIView):
         # 6. EJECUTAMOS LA CONSULTA
         # ---------------------------------------------------------
 
-        with connection.cursor() as cursor:
+        with connections["sqlserver_inv"].cursor() as cursor:
             cursor.execute(
                 consulta,
                 parametros_consulta,

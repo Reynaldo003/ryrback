@@ -29,7 +29,7 @@ urlpatterns = [
     path("api/BitacoraMantenimiento/", include("BitacoraMantenimiento.urls")),
     path("documentacion/", include("documentacion.urls")),
     path("gestion_inversion/", include("gestion_inversion.urls"),),
-    path("ventas-vn/",include("ventas_vn.urls"),
+    path("ventas-vn/",include("Autos.urls"),
 ),
 ]
 
