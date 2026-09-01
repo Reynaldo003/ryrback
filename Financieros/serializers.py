@@ -141,13 +141,20 @@ class SolicitudCreditoSerializer(BaseClienteComercialSerializer):
             "comentarios",
             "creado",
         )
-        read_only_fields = ("id", "cliente", "creado")
+
+        read_only_fields = (
+            "id",
+            "cliente",
+        )
 
     @transaction.atomic
     def create(self, validated_data):
         cliente = self._resolver_cliente(validated_data)
 
-        return SolicitudCredito.objects.create(cliente=cliente, **validated_data)
+        return SolicitudCredito.objects.create(
+            cliente=cliente,
+            **validated_data
+        )
 
     @transaction.atomic
     def update(self, instance, validated_data):
@@ -173,6 +180,7 @@ class SolicitudCreditoSerializer(BaseClienteComercialSerializer):
             "estado_compra",
             "fecha_respuesta",
             "comentarios",
+            "creado",
         ]
 
         for campo in campos:
@@ -180,8 +188,8 @@ class SolicitudCreditoSerializer(BaseClienteComercialSerializer):
                 setattr(instance, campo, validated_data[campo])
 
         instance.save()
-        return instance
 
+        return instance
 
 class LongDriveSerializer(BaseClienteComercialSerializer):
     class Meta:
