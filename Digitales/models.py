@@ -96,6 +96,9 @@ class ExpedienteDigital(models.Model):
     class Meta:
         db_table = "expediente_digital"
         managed = True
+        indexes = [
+            models.Index(fields=["estado"], name="dig_exp_estado_idx"),
+        ]
 
     def touch_mensaje_cliente(self, when=None, save_now=False):
         """
@@ -278,6 +281,7 @@ class MensajeWhatsApp(models.Model):
     status = models.CharField(max_length=30, blank=True, default="sent")
 
     raw = models.JSONField(default=dict, blank=True)
+    from_ia = models.BooleanField(default=False, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
@@ -295,11 +299,21 @@ class MensajeWhatsApp(models.Model):
             ),
             models.Index(fields=["numero_asesor", "created_at"]),
             models.Index(fields=["wa_message_id"]),
+            models.Index(
+                fields=["telefono", "numero_asesor", "direction", "from_ia"],
+                name="dig_msg_contact_check_idx",
+            ),
         ]
 
     def save(self, *args, **kwargs):
         self.telefono = normaliza_tel_mx(self.telefono)
         self.numero_asesor = normaliza_tel_mx(self.numero_asesor)
+        if not self.from_ia:
+            raw = self.raw or {}
+            self.from_ia = bool(
+                raw.get("ia_provider") or raw.get("ia_model")
+                or raw.get("openai_model") or raw.get("gemini_model")
+            )
         super().save(*args, **kwargs)
 
     def __str__(self):
