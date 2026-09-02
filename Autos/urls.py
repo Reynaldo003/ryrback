@@ -5,6 +5,9 @@ from .views import (
     VWVNDashboardView,
 )
 
+from .productos_estoque import ProductosEstoqueListView
+from .inventario_refacciones import InventarioRefaccionesListView
+
 urlpatterns = [
     path(
         "api/",
@@ -16,4 +19,14 @@ urlpatterns = [
         VWVNDashboardView.as_view(),
         name="ventas-vn-dashboard",
     ),
+    path(
+    "api/productos/",
+    ProductosEstoqueListView.as_view(),
+    name="productos-estoque-list",
+    ),
+    path(
+    "api/piezas/",
+    InventarioRefaccionesListView.as_view(),
+    name="inventario-refacciones-list",
+),
 ]
