@@ -638,3 +638,43 @@ class Asesor(models.Model):
             f"{self.tipo_asesor} | "
             f"{self.agencia}"
         )
+
+class Tecnico(models.Model):
+    nombre = models.CharField(
+        max_length=200,
+        db_index=True,
+    )
+
+    tipo_personal = models.CharField(
+        max_length=80,
+        blank=True,
+        default="Tecnico",
+        db_index=True,
+    )
+
+    agencia = models.CharField(
+        max_length=150,
+        blank=True,
+        default="",
+        db_index=True,
+    )
+
+    activo = models.BooleanField(
+        default=True,
+        db_index=True,
+    )
+
+    creado = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    actualizado = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "digitales_catalogo_tecnico"
+        ordering = ["nombre", "agencia"]
+
+    def __str__(self):
+        return f"{self.nombre} - {self.tipo_personal} - {self.agencia}"

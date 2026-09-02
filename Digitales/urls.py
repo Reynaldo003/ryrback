@@ -69,6 +69,12 @@ from .asesores_catalogo import (
     asesor_admin_detail,
 )
 
+from .tecnicos_catalogo import (
+    tecnicos_list,
+    tecnicos_admin_list_create,
+    tecnico_admin_detail,
+)
+
 router = DefaultRouter()
 router.register(r"prospectos", ProspectosViewSet, basename="prospectos")
 
@@ -147,5 +153,22 @@ urlpatterns = [
         "asesores/admin/<int:asesor_id>/",
         asesor_admin_detail,
         name="asesor-admin-detail",
+    ),
+    path(
+    "tecnicos/",
+    tecnicos_list,
+    name="tecnicos-list",
+    ),
+
+    path(
+        "tecnicos/admin/",
+        tecnicos_admin_list_create,
+        name="tecnicos-admin-list-create",
+    ),
+
+    path(
+        "tecnicos/admin/<int:tecnico_id>/",
+        tecnico_admin_detail,
+        name="tecnico-admin-detail",
     ),
 ]
