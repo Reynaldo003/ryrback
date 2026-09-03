@@ -20,8 +20,7 @@ from rest_framework.decorators import api_view, authentication_classes, permissi
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from citas.models import normaliza_tel_mx
@@ -32,7 +31,7 @@ from .sett import WHATSAPP_LINES
 
 logger = logging.getLogger(__name__)
 
-GEMINI_PRESUPUESTO_SEGUNDOS = 120
+OPENAI_PRESUPUESTO_SEGUNDOS = 120
 MAX_LOTE_CHARS = 60_000
 MAX_CONVERSACION_CHARS = 55_000
 CACHE_SECONDS = 60 * 30
@@ -231,6 +230,54 @@ EJECUTIVO_SCHEMA = {
     ],
 }
 
+def _convertir_schema_openai(valor):
+    """
+    Convierte los schemas existentes a JSON Schema estándar
+    compatible con Structured Outputs de OpenAI.
+    """
+    if isinstance(valor, dict):
+        resultado = {}
+
+        for clave, contenido in valor.items():
+            if clave == "type":
+                if isinstance(contenido, str):
+                    resultado[clave] = contenido.lower()
+
+                elif isinstance(contenido, list):
+                    resultado[clave] = [
+                        item.lower()
+                        if isinstance(item, str)
+                        else _convertir_schema_openai(item)
+                        for item in contenido
+                    ]
+
+                else:
+                    resultado[clave] = _convertir_schema_openai(
+                        contenido
+                    )
+            else:
+                resultado[clave] = _convertir_schema_openai(
+                    contenido
+                )
+
+        return resultado
+
+    if isinstance(valor, list):
+        return [
+            _convertir_schema_openai(item)
+            for item in valor
+        ]
+
+    return valor
+
+
+OPENAI_AUDITORIA_SCHEMA = _convertir_schema_openai(
+    AUDITORIA_SCHEMA
+)
+
+OPENAI_EJECUTIVO_SCHEMA = _convertir_schema_openai(
+    EJECUTIVO_SCHEMA
+)
 
 def _texto(value) -> str:
     return " ".join(str(value or "").split()).strip()
@@ -623,45 +670,41 @@ def _estado_medicion_respuesta(*, primer_cliente, primera_respuesta_humana, nume
         "sin_respuesta_humana_evaluable": bool(sin_respuesta and segundos_habiles > 0),
     }
 
-
-def _get_gemini_client():
+def _get_openai_client() -> OpenAI:
     api_key = _texto(
         getattr(
             settings,
-            "GEMINI_API_KEY",
+            "OPENAI_API_KEY",
             "",
         )
     )
 
     if not api_key:
         raise RuntimeError(
-            "Falta configurar GEMINI_API_KEY en settings.py"
+            "Falta configurar OPENAI_API_KEY en settings.py"
         )
 
     timeout_ms = int(
         getattr(
             settings,
-            "GEMINI_RESULTS_TIMEOUT_MS",
+            "OPENAI_RESULTS_TIMEOUT_MS",
             45000,
         )
     )
 
-    return genai.Client(
+    return OpenAI(
         api_key=api_key,
-        http_options=types.HttpOptions(
-            timeout=timeout_ms,
-        ),
+        timeout=timeout_ms / 1000.0,
+        max_retries=2,
     )
 
 
-def _modelo_gemini() -> str:
+def _modelo_openai() -> str:
     return _texto(
-        getattr(settings, "GEMINI_RESULTS_MODEL", "")
-        or getattr(settings, "GEMINI_SUMMARY_MODEL", "")
-        or getattr(settings, "GEMINI_MODEL", "")
-        or "gemini-3.0-flash"
+        getattr(settings, "OPENAI_RESULTS_MODEL", "")
+        or getattr(settings, "OPENAI_MODEL", "")
+        or "gpt-5.6-luna"
     )
-
 
 def _parse_json(texto: str) -> dict:
     try:
@@ -846,7 +889,7 @@ def _fallback_auditoria(ctx: dict) -> dict:
         "objeciones": [], "causa_perdida_probable": "Sin evidencia suficiente",
         "siguiente_accion": "Revisar la conversación y definir el siguiente compromiso comercial.",
         "recomendacion_asesor": "Responder con rapidez, perfilar necesidad y cerrar una acción concreta.",
-        "resumen": "Clasificación de respaldo basada en reglas operativas; Gemini no estuvo disponible.",
+        "resumen": "Clasificación de respaldo basada en reglas operativas; OpenAI no estuvo disponible.",
     }
 
 
@@ -865,7 +908,7 @@ def _lotes_contextos(contextos: list[dict]) -> list[list[dict]]:
     return lotes
 
 
-def _auditar_con_gemini(
+def _auditar_con_openai(
     contextos: list[dict],
     *,
     limite_tiempo: float | None = None,
@@ -873,8 +916,8 @@ def _auditar_con_gemini(
     if not contextos:
         return [], []
 
-    client = _get_gemini_client()
-    modelo = _modelo_gemini()
+    client = _get_openai_client()
+    modelo = _modelo_openai()
 
     salida_por_id = {}
     errores = []
@@ -904,21 +947,29 @@ def _auditar_con_gemini(
         )
 
         try:
-            response = client.models.generate_content(
+            response = client.responses.create(
                 model=modelo,
-                contents=contenido,
-                config=types.GenerateContentConfig(
-                    system_instruction=PROMPT_AUDITORIA,
-                    response_mime_type="application/json",
-                    response_schema=AUDITORIA_SCHEMA,
-                    temperature=0.15,
-                ),
+                instructions=PROMPT_AUDITORIA,
+                input=contenido,
+                reasoning={
+                    "effort": "none",
+                },
+                text={
+                    "format": {
+                        "type": "json_schema",
+                        "name": "auditoria_resultados",
+                        "schema": OPENAI_AUDITORIA_SCHEMA,
+                        "strict": False,
+                    }
+                },
+                temperature=0.15,
+                store=False,
             )
 
             data = _parse_json(
                 getattr(
                     response,
-                    "text",
+                    "output_text",
                     "",
                 )
                 or ""
@@ -953,7 +1004,7 @@ def _auditar_con_gemini(
                 or "deadline_exceeded" in mensaje_normalizado
             ):
                 errores.append(
-                    "Gemini está temporalmente saturado o agotó su tiempo de respuesta; "
+                    "OpenAI está temporalmente saturado o agotó su tiempo de respuesta; "
                     "los lotes restantes utilizaron análisis de respaldo."
                 )
                 break
@@ -1394,7 +1445,7 @@ def _fallback_ejecutivo(agregados: dict) -> dict:
             "impacto": "Incrementa riesgo de abandono en leads que ya mostraron interés.", "prioridad": "alta",
         })
     return {
-        "resumen_ejecutivo": "El panel conserva métricas objetivas; la interpretación avanzada de Gemini no estuvo disponible en esta ejecución.",
+        "resumen_ejecutivo": "El panel conserva métricas objetivas; la interpretación avanzada de OpenAI no estuvo disponible en esta ejecución.",
         "hallazgos_clave": [], "causas_raiz": causas,
         "recomendaciones_globales": [{
             "accion": "Atender primero conversaciones con interés alto y riesgo alto.",
@@ -1412,8 +1463,8 @@ def _fallback_ejecutivo(agregados: dict) -> dict:
     }
 
 
-def _analisis_ejecutivo_gemini(agregados: dict, auditorias: list[dict]) -> dict:
-    client = _get_gemini_client()
+def _analisis_ejecutivo_openai(agregados: dict, auditorias: list[dict]) -> dict:
+    client = _get_openai_client()
     payload = {
         "metricas": agregados["metricas"],
         "asesores": agregados["asesores"],
@@ -1434,21 +1485,42 @@ def _analisis_ejecutivo_gemini(agregados: dict, auditorias: list[dict]) -> dict:
             for a in auditorias
         ],
     }
-    response = client.models.generate_content(
-        model=_modelo_gemini(),
-        contents=json.dumps(payload, ensure_ascii=False),
-        config=types.GenerateContentConfig(
-            system_instruction=PROMPT_EJECUTIVO,
-            response_mime_type="application/json",
-            response_schema=EJECUTIVO_SCHEMA,
-            temperature=0.2,
+    response = client.responses.create(
+        model=_modelo_openai(),
+        instructions=PROMPT_EJECUTIVO,
+        input=json.dumps(
+            payload,
+            ensure_ascii=False,
         ),
+        reasoning={
+            "effort": "none",
+        },
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "analisis_ejecutivo",
+                "schema": OPENAI_EJECUTIVO_SCHEMA,
+                "strict": False,
+            }
+        },
+        temperature=0.2,
+        store=False,
     )
-    data = _parse_json(getattr(response, "text", "") or "")
-    if not data:
-        raise RuntimeError("Gemini no devolvió un análisis ejecutivo JSON válido")
-    return data
 
+    data = _parse_json(
+        getattr(
+            response,
+            "output_text",
+            "",
+        )
+        or ""
+    )
+
+    if not data:
+        raise RuntimeError(
+            "OpenAI no devolvió un análisis ejecutivo JSON válido"
+        )
+    return data
 
 def _fusionar_recomendaciones_asesores(agregados: dict, ejecutivo: dict, auditorias: list[dict]):
     ai_rows = { _normaliza(x.get("asesor")): x for x in ejecutivo.get("recomendaciones_asesores") or [] if isinstance(x, dict) }
@@ -1587,13 +1659,16 @@ def resultados_ia_view(request):
         })
 
     errores_ia = []
-    limite_ia = time_module.monotonic() + GEMINI_PRESUPUESTO_SEGUNDOS
+    limite_ia = time_module.monotonic() + OPENAI_PRESUPUESTO_SEGUNDOS
 
     try:
-        auditorias, errores_lotes = _auditar_con_gemini(contextos, limite_tiempo=limite_ia)
+        auditorias, errores_lotes = _auditar_con_openai(
+            contextos,
+            limite_tiempo=limite_ia,
+        )
         errores_ia.extend(errores_lotes)
     except Exception as exc:
-        logger.exception("No fue posible iniciar auditoría Gemini de resultados")
+        logger.exception("No fue posible iniciar auditoría OpenAI de resultados")
         errores_ia.append(str(exc))
         auditorias = [_fallback_auditoria(ctx) for ctx in contextos]
 
@@ -1602,7 +1677,7 @@ def resultados_ia_view(request):
     try:
         tiempo_disponible = time_module.monotonic() < limite_ia
         if contextos and tiempo_disponible:
-            ejecutivo = _analisis_ejecutivo_gemini(agregados, auditorias)
+            ejecutivo = _analisis_ejecutivo_openai(agregados, auditorias)
             ia_ejecutiva = True
         else:
             ejecutivo = _fallback_ejecutivo(agregados)
@@ -1624,7 +1699,7 @@ def resultados_ia_view(request):
         "mes": mes,
         "rango": {"inicio": inicio.isoformat(), "fin_exclusivo": fin.isoformat()},
         "generado_at": timezone.now().isoformat(),
-        "modelo_ia": _modelo_gemini(),
+        "modelo_ia": _modelo_openai(),
         "ia": {
             "disponible": not errores_ia,
             "analisis_ejecutivo_generado": ia_ejecutiva,
