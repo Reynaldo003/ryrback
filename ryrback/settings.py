@@ -305,6 +305,10 @@ EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "no-reply@crm.local"
 PUBLIC_API_BASE_URL = "https://crm.grupoautomotrizryr.com"
 OPENAI_API_KEY = ""
+OPENAI_MODEL = "gpt-5.6-luna"
+OPENAI_MEDIA_MODEL = "gpt-5.6-luna"
+OPENAI_TRANSCRIBE_MODEL = "gpt-transcribe"
+
 GEMINI_API_KEY = ""
 GEMINI_MULTIMODAL_MODEL = "gemini-2.5-flash"
 GEMINI_MAX_INLINE_MEDIA_BYTES = 18 * 1024 * 1024

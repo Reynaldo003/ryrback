@@ -1,6 +1,8 @@
 #Digitales/IA.py
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import re
@@ -17,9 +19,6 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 from openai import OpenAI
-
-from google import genai
-from google.genai import types
 
 from .sett import WHATSAPP_LINES
 from citas.models import Cita, ClienteComercial, normaliza_tel_mx
@@ -1200,15 +1199,6 @@ def _get_openai_client() -> OpenAI:
         raise RuntimeError("Falta OPENAI_API_KEY")
     return OpenAI(api_key=api_key, timeout=25.0, max_retries=2)
 
-@lru_cache(maxsize=1)
-def _get_gemini_client():
-    api_key = getattr(settings, "GEMINI_API_KEY", "") or ""
-
-    if not api_key:
-        raise RuntimeError("Falta GEMINI_API_KEY")
-
-    return genai.Client(api_key=api_key)
-
 PREGUNTAS_PERFIL_VALIDAS = {
     "nombre",
     "vehiculo_interes",
@@ -1247,7 +1237,7 @@ CAMPOS_CORREGIBLES_IA = {
     "comentarios",
 }
 
-GEMINI_DECISION_SCHEMA = {
+DECISION_SCHEMA_BASE = {
     "type": "OBJECT",
     "properties": {
         "reply_text": {"type": "STRING"},
@@ -1379,6 +1369,50 @@ GEMINI_DECISION_SCHEMA = {
         "reasoning_tags",
     ],
 }
+
+def _convertir_schema_openai(valor):
+    """
+    Convierte el schema base a JSON Schema compatible
+    con Structured Outputs de OpenAI.
+    """
+    if isinstance(valor, dict):
+        resultado = {}
+
+        for clave, contenido in valor.items():
+            if clave == "type":
+                if isinstance(contenido, str):
+                    resultado[clave] = contenido.lower()
+
+                elif isinstance(contenido, list):
+                    resultado[clave] = [
+                        item.lower()
+                        if isinstance(item, str)
+                        else _convertir_schema_openai(item)
+                        for item in contenido
+                    ]
+
+                else:
+                    resultado[clave] = _convertir_schema_openai(
+                        contenido
+                    )
+            else:
+                resultado[clave] = _convertir_schema_openai(
+                    contenido
+                )
+
+        return resultado
+
+    if isinstance(valor, list):
+        return [
+            _convertir_schema_openai(item)
+            for item in valor
+        ]
+
+    return valor
+
+OPENAI_DECISION_SCHEMA = _convertir_schema_openai(
+    DECISION_SCHEMA_BASE
+)
 
 PROMPT_OPERATIVO_IA = """
 REGLAS OPERATIVAS PRIORITARIAS DEL CRM
@@ -1879,15 +1913,15 @@ def _decision_conversacional_ia(
         },
     }
 
-    client = _get_gemini_client()
+    client = _get_openai_client()
     modelo = getattr(
         settings,
-        "GEMINI_MODEL",
-        "gemini-2.5-flash",
+        "OPENAI_MODEL",
+        "gpt-5.6-luna",
     )
 
     try:
-        salida = _llamar_gemini_decision(
+        salida = _llamar_openai_decision(
             client=client,
             modelo=modelo,
             instrucciones=instrucciones,
@@ -2026,7 +2060,7 @@ def _decision_conversacional_ia(
                 },
             }
 
-            segunda_salida = _llamar_gemini_decision(
+            segunda_salida = _llamar_openai_decision(
                 client=client,
                 modelo=modelo,
                 instrucciones=instrucciones,
@@ -2472,60 +2506,57 @@ def _respuesta_ia_es_repetida(
 
     return False
 
-
-def _llamar_gemini_decision(
+def _llamar_openai_decision(
     *,
-    client,
+    client: OpenAI,
     modelo: str,
     instrucciones: str,
     contexto: dict[str, Any],
 ) -> dict[str, Any]:
-    respuesta = client.models.generate_content(
+    respuesta = client.responses.create(
         model=modelo,
-        contents=json.dumps(
+        instructions=instrucciones,
+        input=json.dumps(
             contexto,
             ensure_ascii=False,
             default=str,
         ),
-        config=types.GenerateContentConfig(
-            system_instruction=instrucciones,
-            response_mime_type="application/json",
-            response_schema=GEMINI_DECISION_SCHEMA,
-
-            # El perfilamiento comercial no necesita razonamiento
-            # profundo. Evita consumir tokens de pensamiento.
-            thinking_config=types.ThinkingConfig(
-                thinking_budget=0,
-            ),
-
-            # El JSON contiene varios campos, pero reply_text está
-            # limitado a 700 caracteres.
-            max_output_tokens=1200,
-            temperature=0.45,
-        ),
+        reasoning={
+            "effort": "none",
+        },
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "decision_comercial",
+                "schema": OPENAI_DECISION_SCHEMA,
+                "strict": False,
+            }
+        },
+        max_output_tokens=1200,
+        temperature=0.45,
+        store=False,
     )
 
     usage = getattr(
         respuesta,
-        "usage_metadata",
+        "usage",
         None,
     )
 
     if usage:
         logger.info(
             (
-                "GEMINI USAGE | modelo=%s "
-                "entrada=%s salida=%s pensamiento=%s total=%s"
+                "OPENAI USAGE | modelo=%s "
+                "entrada=%s salida=%s total=%s"
             ),
             modelo,
-            getattr(usage, "prompt_token_count", None),
-            getattr(usage, "candidates_token_count", None),
-            getattr(usage, "thoughts_token_count", None),
-            getattr(usage, "total_token_count", None),
+            getattr(usage, "input_tokens", None),
+            getattr(usage, "output_tokens", None),
+            getattr(usage, "total_tokens", None),
         )
 
     return _json_seguro(
-        getattr(respuesta, "text", "") or ""
+        getattr(respuesta, "output_text", "") or ""
     )
 
 def _sanitizar_decision_ia(
@@ -3794,71 +3825,6 @@ def construir_respuesta_informativa(
 
 TIPOS_MEDIA_PROCESABLE_IA = {"image", "sticker", "video", "audio"}
 
-
-def _describir_media_entrante_con_ia(
-    *,
-    raw_message: Optional[dict],
-    numero_asesor: str,
-) -> str:
-    """
-    Descarga el archivo desde Meta y le pide a Gemini que lo convierta
-    en contexto útil para atención automotriz.
-    """
-    media = _extraer_media_entrante(raw_message)
-
-    if not media:
-        return ""
-
-    try:
-        blob, content_type = download_media_whatsapp(
-            media.get("media_id") or media.get("id"),
-            numero_asesor=numero_asesor,
-        )
-
-        mime_type = media.get("mime_type") or content_type or "application/octet-stream"
-        media_type = media.get("type") or "media"
-
-        prompt = f"""
-Eres una IA de atención comercial para agencias Volkswagen.
-
-El cliente envió un archivo de tipo: {media_type}.
-Analiza el contenido y responde SOLO con un resumen útil para continuar la conversación.
-
-Enfócate en:
-- Si se ve o menciona algún vehículo.
-- Si parece comprobante, identificación, cotización, captura de pantalla o documento.
-- Si el audio/video contiene una solicitud de precio, modelo, cita, financiamiento o ubicación.
-- Si el sticker comunica emoción/intención: interés, duda, aprobación, molestia, risa, etc.
-- No inventes datos que no se vean o escuchen.
-
-Devuelve máximo 8 líneas.
-""".strip()
-
-        client = _get_gemini_client()
-
-        response = client.models.generate_content(
-            model=getattr(
-                settings,
-                "GEMINI_MEDIA_MODEL",
-                getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
-            ),
-            contents=[
-                prompt,
-                types.Part.from_bytes(
-                    data=blob,
-                    mime_type=mime_type,
-                ),
-            ],
-        )
-
-        return _limitar_texto((getattr(response, "text", "") or "").strip(), 900)
-
-    except Exception as exc:
-        return (
-            "El cliente envió un archivo multimedia, pero no pude analizarlo "
-            f"automáticamente. Tipo detectado: {media.get('type')}. Error interno: {str(exc)[:180]}"
-        )
-
 TIPOS_MEDIA_IA = {
     "image",
     "video",
@@ -3923,9 +3889,9 @@ def _extraer_media_entrante(raw_message: Optional[dict]) -> dict[str, Any]:
     }
 
 
-def _mime_para_gemini(tipo: str, content_type: str = "") -> str:
+def _mime_para_openai(tipo: str, content_type: str = "") -> str:
     """
-    Normaliza MIME type para que Gemini pueda interpretar el archivo.
+    Normaliza MIME type para que OpenAI pueda interpretar el archivo.
 
     Cuando Meta no manda content-type claro, usamos un fallback por tipo.
     """
@@ -4020,9 +3986,7 @@ Caption del archivo:
 {caption or "Sin caption."}
 """.strip()
 
-
-
-def _analizar_media_con_gemini(
+def _analizar_media_con_openai(
     *,
     media: dict[str, Any],
     blob: bytes,
@@ -4031,10 +3995,13 @@ def _analizar_media_con_gemini(
     numero_asesor: str,
 ) -> str:
     """
-    Envía el archivo descargado desde Meta a Gemini para convertirlo en texto.
+    Analiza multimedia de WhatsApp utilizando OpenAI.
 
-    Para archivos pequeños usamos inline bytes.
-    Si el archivo es muy grande, no lo mandamos para evitar romper el request.
+    - Imágenes y stickers: GPT-5.6 Luna con visión.
+    - Documentos: Responses API como input_file.
+    - Audio: transcripción y posterior análisis con Luna.
+    - Video: transcripción del audio y posterior análisis con Luna.
+      Esta ruta no analiza directamente los fotogramas del video.
     """
     if not blob:
         return ""
@@ -4042,24 +4009,32 @@ def _analizar_media_con_gemini(
     max_bytes = int(
         getattr(
             settings,
-            "GEMINI_MAX_INLINE_MEDIA_BYTES",
+            "OPENAI_MAX_INLINE_MEDIA_BYTES",
             18 * 1024 * 1024,
         )
     )
 
-    tipo = str(media.get("type") or "media").lower().strip()
+    tipo = str(
+        media.get("type") or "media"
+    ).lower().strip()
 
     if len(blob) > max_bytes:
         return (
             f"El cliente envió un archivo de tipo {tipo}, "
-            f"pero pesa {round(len(blob) / 1024 / 1024, 2)} MB y supera el límite "
-            "configurado para análisis automático."
+            f"pero pesa {round(len(blob) / 1024 / 1024, 2)} MB "
+            "y supera el límite configurado para análisis automático."
         )
 
-    mime_type = _mime_para_gemini(tipo, content_type)
+    mime_type = _mime_para_openai(
+        tipo,
+        content_type,
+    )
 
     if mime_type == "application/octet-stream":
-        return f"El cliente envió un archivo de tipo {tipo}, pero no se pudo determinar el formato."
+        return (
+            f"El cliente envió un archivo de tipo {tipo}, "
+            "pero no se pudo determinar el formato."
+        )
 
     prompt = _instruccion_analisis_multimedia(
         tipo=tipo,
@@ -4067,32 +4042,221 @@ def _analizar_media_con_gemini(
         texto_usuario=texto_usuario,
     )
 
-    client = _get_gemini_client()
+    client = _get_openai_client()
 
     modelo_multimodal = getattr(
         settings,
-        "GEMINI_MULTIMODAL_MODEL",
-        getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
-    )
-
-    respuesta = client.models.generate_content(
-        model=modelo_multimodal,
-        contents=[
-            types.Part.from_bytes(
-                data=blob,
-                mime_type=mime_type,
-            ),
-            prompt,
-        ],
-        config=types.GenerateContentConfig(
-            temperature=0.2,
+        "OPENAI_MEDIA_MODEL",
+        getattr(
+            settings,
+            "OPENAI_MODEL",
+            "gpt-5.6-luna",
         ),
     )
 
-    texto = str(getattr(respuesta, "text", "") or "").strip()
+    # Imagen o sticker
+    if tipo in {"image", "sticker"}:
+        contenido_base64 = base64.b64encode(
+            blob
+        ).decode("ascii")
 
-    return _limitar_texto(texto, max_len=1200)
+        data_url = (
+            f"data:{mime_type};base64,"
+            f"{contenido_base64}"
+        )
 
+        respuesta = client.responses.create(
+            model=modelo_multimodal,
+            reasoning={
+                "effort": "none",
+            },
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": prompt,
+                        },
+                        {
+                            "type": "input_image",
+                            "image_url": data_url,
+                            "detail": "auto",
+                        },
+                    ],
+                }
+            ],
+            max_output_tokens=500,
+            store=False,
+        )
+
+        texto = str(
+            getattr(
+                respuesta,
+                "output_text",
+                "",
+            )
+            or ""
+        ).strip()
+
+        return _limitar_texto(
+            texto,
+            max_len=1200,
+        )
+
+    # Documento
+    if tipo == "document":
+        contenido_base64 = base64.b64encode(
+            blob
+        ).decode("ascii")
+
+        filename = str(
+            media.get("filename") or ""
+        ).strip()
+
+        if not filename:
+            filename = (
+                "documento.pdf"
+                if mime_type == "application/pdf"
+                else "documento"
+            )
+
+        respuesta = client.responses.create(
+            model=modelo_multimodal,
+            reasoning={
+                "effort": "none",
+            },
+            input=[
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_file",
+                            "filename": filename,
+                            "file_data": (
+                                f"data:{mime_type};base64,"
+                                f"{contenido_base64}"
+                            ),
+                        },
+                        {
+                            "type": "input_text",
+                            "text": prompt,
+                        },
+                    ],
+                }
+            ],
+            max_output_tokens=500,
+            store=False,
+        )
+
+        texto = str(
+            getattr(
+                respuesta,
+                "output_text",
+                "",
+            )
+            or ""
+        ).strip()
+
+        return _limitar_texto(
+            texto,
+            max_len=1200,
+        )
+
+    # Audio o video
+    if tipo in {"audio", "video"}:
+        extensiones = {
+            "audio/ogg": "ogg",
+            "audio/mpeg": "mp3",
+            "audio/mp3": "mp3",
+            "audio/mp4": "m4a",
+            "audio/x-m4a": "m4a",
+            "audio/wav": "wav",
+            "audio/x-wav": "wav",
+            "audio/webm": "webm",
+            "video/mp4": "mp4",
+            "video/webm": "webm",
+        }
+
+        extension = extensiones.get(
+            mime_type,
+            "mp4" if tipo == "video" else "ogg",
+        )
+
+        archivo = io.BytesIO(blob)
+        archivo.name = f"multimedia.{extension}"
+
+        transcripcion = (
+            client.audio.transcriptions.create(
+                model=getattr(
+                    settings,
+                    "OPENAI_TRANSCRIBE_MODEL",
+                    "gpt-transcribe",
+                ),
+                file=archivo,
+            )
+        )
+
+        texto_transcrito = str(
+            getattr(
+                transcripcion,
+                "text",
+                "",
+            )
+            or ""
+        ).strip()
+
+        if not texto_transcrito:
+            return (
+                f"El cliente envió un archivo de tipo {tipo}, "
+                "pero no se detectó contenido hablado."
+            )
+
+        if tipo == "video":
+            aclaracion = (
+                "\n\nIMPORTANTE: Para este video solo dispones "
+                "de la transcripción de su audio. "
+                "No afirmes ni inventes detalles visuales "
+                "que no estén mencionados en el audio."
+            )
+        else:
+            aclaracion = ""
+
+        prompt_con_transcripcion = (
+            f"{prompt}"
+            f"{aclaracion}"
+            "\n\nTranscripción detectada:\n"
+            f"{texto_transcrito}"
+        )
+
+        respuesta = client.responses.create(
+            model=modelo_multimodal,
+            reasoning={
+                "effort": "none",
+            },
+            input=prompt_con_transcripcion,
+            max_output_tokens=500,
+            store=False,
+        )
+
+        texto = str(
+            getattr(
+                respuesta,
+                "output_text",
+                "",
+            )
+            or ""
+        ).strip()
+
+        return _limitar_texto(
+            texto,
+            max_len=1200,
+        )
+
+    return (
+        f"El cliente envió un archivo de tipo {tipo}, "
+        "pero este formato no tiene análisis automático configurado."
+    )
 
 def _enriquecer_texto_usuario_con_media(
     *,
@@ -4101,7 +4265,7 @@ def _enriquecer_texto_usuario_con_media(
     numero_asesor: str,
 ) -> str:
     """
-    Si el cliente mandó media, descarga el archivo de Meta, lo analiza con Gemini
+    Si el cliente mandó media, descarga el archivo de Meta, lo analiza con OpenAI
     y agrega el resultado al texto que ya usa tu flujo conversacional.
 
     Esto permite que tu función construir_respuesta_informativa() siga funcionando
@@ -4128,7 +4292,7 @@ def _enriquecer_texto_usuario_con_media(
 
         content_type = media.get("mime_type") or content_type_descargado
 
-        descripcion = _analizar_media_con_gemini(
+        descripcion = _analizar_media_con_openai(
             media=media,
             blob=blob,
             content_type=content_type,
@@ -4138,7 +4302,7 @@ def _enriquecer_texto_usuario_con_media(
 
     except Exception as exc:
         logger.exception(
-            "No se pudo analizar media con Gemini | tipo=%s media_id=%s numero_asesor=%s error=%s",
+            "No se pudo analizar media con OpenAI | tipo=%s media_id=%s numero_asesor=%s error=%s",
             tipo,
             media_id,
             numero_asesor,
@@ -4749,11 +4913,11 @@ def responder_mensaje_automatico(
             wa_message_id=wa_message_id_parte,
             raw={
                 "reply_to": wa_message_id_entrante,
-                "ia_provider": "gemini",
+                "ia_provider": "openai",
                 "ia_model": getattr(
                     settings,
-                    "GEMINI_MODEL",
-                    "gemini-2.5-flash",
+                    "OPENAI_MODEL",
+                    "gpt-5.6-luna",
                 ),
                 "numero_asesor": numero_asesor,
                 "version_contexto": version_contexto,
