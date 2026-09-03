@@ -49,35 +49,61 @@ class SolicitudCreditoViewSet(viewsets.ModelViewSet):
         "cliente__correo",
     ]
 
-
 class LongDriveViewSet(viewsets.ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
 
     queryset = (
         LongDrive.objects
-        .select_related("cliente")
         .all()
         .order_by("-creado")
     )
+
     serializer_class = LongDriveSerializer
     filter_backends = [OrderingFilter, SearchFilter]
 
     ordering_fields = [
         "creado",
-        "fecha_entrega",
-        "agencia",
-        "chasis",
-        "producto_long_drive",
-        "tipo_venta",
+        "fecha_creacion",
+        "fecha_saga",
+        "numero_certificado",
+        "numero_contrato",
+        "numero_cliente",
+        "modelo",
+        "version",
+        "numero_serie",
+        "concesionario",
+        "precio_sin_iva",
+        "precio_con_iva",
+        "cobertura",
+        "nombre_razon_social",
+        "rfc",
+        "estatus_certificado",
+        "estatus_pago",
+        "condicion",
+        "marca",
+        "anio",
+        "kilometraje",
     ]
 
     search_fields = [
-        "agencia",
-        "chasis",
-        "producto_long_drive",
-        "tipo_venta",
-        "cliente__nombre",
-        "cliente__telefono",
-        "cliente__correo",
+        "numero_certificado",
+        "numero_contrato",
+        "numero_cliente",
+        "modelo",
+        "version",
+        "clave_comercial",
+        "numero_serie",
+        "concesionario",
+        "cobertura",
+        "tipo_cliente",
+        "nombre_razon_social",
+        "rfc",
+        "estatus_certificado",
+        "estatus_pago",
+        "condicion",
+        "marca",
+        "motor",
+        "correo_electronico",
+        "telefono_celular",
     ]

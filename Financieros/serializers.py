@@ -191,53 +191,8 @@ class SolicitudCreditoSerializer(BaseClienteComercialSerializer):
 
         return instance
 
-class LongDriveSerializer(BaseClienteComercialSerializer):
+class LongDriveSerializer(serializers.ModelSerializer):
     class Meta:
         model = LongDrive
-        fields = (
-            "id",
-            "cliente",
-            "cliente_id",
-            "nombre",
-            "telefono",
-            "correo",
-            "agencia",
-            "chasis",
-            "producto_long_drive",
-            "tipo_venta",
-            "fecha_entrega",
-            "creado",
-        )
-        read_only_fields = ("id", "cliente", "creado")
-
-    @transaction.atomic
-    def create(self, validated_data):
-        cliente = self._resolver_cliente(validated_data)
-
-        return LongDrive.objects.create(cliente=cliente, **validated_data)
-
-    @transaction.atomic
-    def update(self, instance, validated_data):
-        cliente = self._resolver_cliente(validated_data) if (
-            "cliente_id" in validated_data or
-            "nombre" in validated_data or
-            "telefono" in validated_data or
-            "correo" in validated_data
-        ) else instance.cliente
-
-        instance.cliente = cliente
-
-        campos = [
-            "agencia",
-            "chasis",
-            "producto_long_drive",
-            "tipo_venta",
-            "fecha_entrega",
-        ]
-
-        for campo in campos:
-            if campo in validated_data:
-                setattr(instance, campo, validated_data[campo])
-
-        instance.save()
-        return instance
+        fields = "__all__"
+        read_only_fields = ("id", "creado")
