@@ -1,8 +1,10 @@
 # retencion/views.py
 import re
+from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from django.db.models import Q
+from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models.functions import ExtractDay, ExtractMonth
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
@@ -161,7 +163,28 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
     def aplicar_ordenamiento(self, qs):
         ordering = self.request.query_params.get("ordering", "-fecha_ultima_os")
         campo = self.ordering_permitido.get(ordering, "-fecha_ultima_os")
-        return qs.order_by(campo)
+
+        # Próximos cumpleaños primero (0 a 5 días) para que los iconos del
+        # pastelito vuelvan a verse en la primera página de Retención.
+        hoy = datetime.now().date()
+        proximos_cumple = [
+            (hoy + timedelta(days=n)).month * 100 + (hoy + timedelta(days=n)).day
+            for n in range(0, 6)
+        ]
+
+        return (
+            qs.annotate(
+                _md_cumple=(
+                    ExtractMonth("cumpleaños") * Value(100)
+                ) + ExtractDay("cumpleaños")
+            ).annotate(
+                _proximo_cumple=Case(
+                    When(_md_cumple__in=proximos_cumple, then=Value(0)),
+                    default=Value(1),
+                    output_field=IntegerField(),
+                )
+            ).order_by("_proximo_cumple", campo)
+        )
 
     @action(detail=False, methods=["get"], url_path="ligero")
     def ligero(self, request):
