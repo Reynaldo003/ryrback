@@ -2,19 +2,19 @@
 import re
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from django.db.models import Case, IntegerField, Q, Value, When
+
+from django.db.models import Case, IntegerField, Q, Sum, Value, When
 from django.db.models.functions import ExtractDay, ExtractMonth
-from django.db.models import Count, Q, Sum
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import OrdenServicioCompletaVW, OrdenServicioVentaVW, TareaCliente
-
 from .serializers import (
     OrdenServicioCompletaVWSerializer,
     OrdenServicioVentaVWSerializer,
+    TareaClienteSerializer,
 )
 
 DB_ALIAS = "sqlserver_inv"
@@ -438,35 +438,41 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
     
     @action(detail=False, methods=["get"], url_path="resumen")
     def resumen(self, request):
-        qs = self.get_queryset()
+        qs = OrdenServicioVentaVW.objects.using(DB_ALIAS).all()
+        qs = self.aplicar_filtros(qs)
 
-        datos = qs.aggregate(
-            total_vehiculos=Count("vin", distinct=True),
-            total_servicio=Sum("total_ultimo_servicio"),
+        total_vehiculos = qs.values("vin").distinct().count()
+
+        activos = (
+            qs.filter(estado_actividad__iexact="Activo")
+            .values("vin")
+            .distinct()
+            .count()
         )
 
-        activos = qs.filter(
-            estado_actividad__iexact="Activo"
-        ).aggregate(
-            total=Count("vin", distinct=True)
-        )["total"] or 0
+        inactivos = (
+            qs.filter(estado_actividad__iexact="Inactivo")
+            .values("vin")
+            .distinct()
+            .count()
+        )
 
-        inactivos = qs.filter(
-            estado_actividad__iexact="Inactivo"
-        ).aggregate(
-            total=Count("vin", distinct=True)
-        )["total"] or 0
+        total_servicio = qs.aggregate(
+            total=Sum("total_ultimo_servicio")
+        )["total"] or Decimal("0")
 
-        total_vehiculos = datos["total_vehiculos"] or 0
-        total_servicio = datos["total_servicio"] or Decimal("0")
-        retorno = (activos / total_vehiculos * 100) if total_vehiculos else 0
+        retorno = (
+            activos / total_vehiculos * 100
+            if total_vehiculos
+            else 0
+        )
 
         return Response({
             "total_vehiculos": total_vehiculos,
             "activos": activos,
             "inactivos": inactivos,
             "total_servicio": float(total_servicio),
-            "retorno": retorno,
+            "retorno": round(retorno, 2),
         })
 
     @action(detail=True, methods=["get"], url_path="historial")
@@ -482,13 +488,6 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         )
         serializer = OrdenServicioCompletaVWSerializer(qs, many=True)
         return Response(serializer.data)
-
-from .serializers import (
-    OrdenServicioCompletaVWSerializer,
-    OrdenServicioVentaVWSerializer,
-    TareaClienteSerializer,
-)
-
 
 class TareaClienteViewSet(viewsets.ModelViewSet):
     """
