@@ -7,7 +7,10 @@ from .views import (
 
 from .productos_estoque import ProductosEstoqueListView
 from .inventario_refacciones import InventarioRefaccionesListView
-from .piezas_tipificadas import PiezasTipificadasListView
+from .piezas_tipificadas import (
+    PiezasObsolescenciaListView,
+    PiezasTipificadasListView,
+)
 
 urlpatterns = [
     path(
@@ -34,5 +37,10 @@ urlpatterns = [
     "api/piezas-tipificadas/",
     PiezasTipificadasListView.as_view(),
     name="piezas-tipificadas-list",
+),
+    path(
+    "api/piezas-tipificadas/obsolescencia/",
+    PiezasObsolescenciaListView.as_view(),
+    name="piezas-tipificadas-obsolescencia",
 ),
 ]

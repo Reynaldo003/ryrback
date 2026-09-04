@@ -1,3 +1,5 @@
+from datetime import date
+
 from django.db import connections
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -48,6 +50,154 @@ def dictfetchall(cursor):
         dict(zip(columnas, fila))
         for fila in cursor.fetchall()
     ]
+
+
+class PiezasObsolescenciaListView(APIView):
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        sql = f"""
+            WITH Estoque AS (
+                SELECT
+                    REPLACE(CodProduto, N' ', N'') AS CodigoJoin,
+                    SUM(QtdeEstoque) AS QtdeEstoque,
+                    SUM(VrEstoque) AS VrEstoque,
+                    MAX(DtUltimaVenda) AS DtUltimaVenda,
+                    MAX(DtUltimaCompra) AS DtUltimaCompra
+                FROM dbo.Cordoba_ProductosEstoque
+                WHERE NULLIF(REPLACE(CodProduto, N' ', N''), N'') IS NOT NULL
+                GROUP BY REPLACE(CodProduto, N' ', N'')
+            ),
+            Dias AS (
+                SELECT
+                    VrEstoque,
+                    QtdeEstoque,
+                    DATEDIFF(
+                        day,
+                        COALESCE(
+                            NULLIF(DtUltimaVenda, CAST('0001-01-01' AS date)),
+                            NULLIF(DtUltimaCompra, CAST('0001-01-01' AS date))
+                        ),
+                        CAST(GETDATE() AS date)
+                    ) AS dias
+                FROM Estoque
+            )
+            SELECT 'capa' AS tipo,
+                CASE
+                    WHEN dias IS NULL THEN 'O'
+                    WHEN dias < 180 THEN 'A'
+                    WHEN dias <= 365 THEN 'B'
+                    ELSE 'O'
+                END AS grupo,
+                COUNT(*) AS cantidad,
+                SUM(VrEstoque) AS valor,
+                SUM(QtdeEstoque) AS unidades
+            FROM Dias
+            GROUP BY CASE
+                WHEN dias IS NULL THEN 'O'
+                WHEN dias < 180 THEN 'A'
+                WHEN dias <= 365 THEN 'B'
+                ELSE 'O'
+            END
+
+            UNION ALL
+
+            SELECT 'movimiento' AS tipo,
+                CASE
+                    WHEN dias <= 180 THEN 'rapido'
+                    WHEN dias <= 365 THEN 'lento'
+                    ELSE 'obsoleto'
+                END AS grupo,
+                COUNT(*),
+                SUM(VrEstoque),
+                SUM(QtdeEstoque)
+            FROM Dias
+            GROUP BY CASE
+                WHEN dias <= 180 THEN 'rapido'
+                WHEN dias <= 365 THEN 'lento'
+                ELSE 'obsoleto'
+            END
+
+            UNION ALL
+
+            SELECT 'dias' AS tipo,
+                CASE
+                    WHEN dias IS NULL THEN 'sin_referencia'
+                    WHEN dias <= 30 THEN '0_30'
+                    WHEN dias <= 90 THEN '31_90'
+                    WHEN dias <= 180 THEN '91_180'
+                    WHEN dias <= 365 THEN '181_365'
+                    ELSE 'mas_365'
+                END AS grupo,
+                COUNT(*),
+                SUM(VrEstoque),
+                SUM(QtdeEstoque)
+            FROM Dias
+            GROUP BY CASE
+                WHEN dias IS NULL THEN 'sin_referencia'
+                WHEN dias <= 30 THEN '0_30'
+                WHEN dias <= 90 THEN '31_90'
+                WHEN dias <= 180 THEN '91_180'
+                WHEN dias <= 365 THEN '181_365'
+                ELSE 'mas_365'
+            END
+        """
+
+        with connections["sqlserver_inv"].cursor() as cursor:
+            cursor.execute(sql)
+            filas = dictfetchall(cursor)
+
+        capas = [f for f in filas if f["tipo"] == "capa"]
+        movimiento = [f for f in filas if f["tipo"] == "movimiento"]
+        distribucion_dias = [f for f in filas if f["tipo"] == "dias"]
+
+        for f in capas:
+            f["capa"] = f.pop("grupo")
+            f.pop("tipo", None)
+        for f in movimiento:
+            f["categoria"] = f.pop("grupo")
+            f.pop("tipo", None)
+        for f in distribucion_dias:
+            f["rango"] = f.pop("grupo")
+            f.pop("tipo", None)
+
+        orden_capas = {"A": 0, "B": 1, "O": 2}
+        capas.sort(key=lambda c: orden_capas.get(c["capa"], 9))
+
+        orden_movimiento = {
+            "rapido": 0,
+            "lento": 1,
+            "obsoleto": 2,
+        }
+        movimiento.sort(key=lambda m: orden_movimiento.get(m["categoria"], 9))
+
+        orden_dias = {
+            "0_30": 0,
+            "31_90": 1,
+            "91_180": 2,
+            "181_365": 3,
+            "mas_365": 4,
+            "sin_referencia": 5,
+        }
+        distribucion_dias.sort(key=lambda r: orden_dias.get(r["rango"], 9))
+
+        totales = {
+            "cantidad": sum(c["cantidad"] or 0 for c in capas),
+            "valor": sum(c["valor"] or 0 for c in capas),
+            "unidades": sum(c["unidades"] or 0 for c in capas),
+        }
+
+        return Response(
+            {
+                "fecha_calculo": date.today().isoformat(),
+                "fuente": "Inventario Córdoba · SKU únicos",
+                "capas": capas,
+                "movimiento": movimiento,
+                "distribucion_dias": distribucion_dias,
+                "totales": totales,
+            }
+        )
 
 
 class PiezasTipificadasListView(APIView):
