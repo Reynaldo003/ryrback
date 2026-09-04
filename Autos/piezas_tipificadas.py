@@ -20,6 +20,12 @@ COLUMNAS_VISTA = """
     CodigoProductoNormalizado,
     NombreInventario,
     DescripcionInventario,
+    ItemOriginal,
+    GrupoPrincipal,
+    Subgrupo,
+    NombreEstandarizado,
+    Categoria,
+    Observacion,
     MarcaPeca,
     QtdeEstoque,
     QtReservada,
@@ -33,13 +39,7 @@ COLUMNAS_VISTA = """
     PrecoRevenda,
     PrecoGarantia,
     PrecoVenda,
-    FechaActualizacionFabrica,
-    ItemOriginal,
-    GrupoPrincipal,
-    Subgrupo,
-    NombreEstandarizado,
-    Categoria,
-    Observacion
+    FechaActualizacionFabrica
 """
 
 
