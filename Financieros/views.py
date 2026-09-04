@@ -1,6 +1,7 @@
 # Financieros/views.py
 from rest_framework import viewsets, permissions
 from rest_framework.filters import OrderingFilter, SearchFilter
+from rest_framework.pagination import PageNumberPagination
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
@@ -49,6 +50,11 @@ class SolicitudCreditoViewSet(viewsets.ModelViewSet):
         "cliente__correo",
     ]
 
+class LongDrivePagination(PageNumberPagination):
+    page_size = 200
+    page_size_query_param = "page_size"
+    max_page_size = 200
+
 class LongDriveViewSet(viewsets.ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
@@ -60,6 +66,7 @@ class LongDriveViewSet(viewsets.ModelViewSet):
     )
 
     serializer_class = LongDriveSerializer
+    pagination_class = LongDrivePagination
     filter_backends = [OrderingFilter, SearchFilter]
 
     ordering_fields = [
@@ -107,3 +114,35 @@ class LongDriveViewSet(viewsets.ModelViewSet):
         "correo_electronico",
         "telefono_celular",
     ]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+
+        concesionario = str(
+            self.request.query_params.get("concesionario", "")
+        ).strip()
+
+        fecha_desde = str(
+            self.request.query_params.get("fecha_desde", "")
+        ).strip()
+
+        fecha_hasta = str(
+            self.request.query_params.get("fecha_hasta", "")
+        ).strip()
+
+        if concesionario and concesionario.lower() != "todos":
+            queryset = queryset.filter(
+                concesionario=concesionario
+            )
+
+        if fecha_desde:
+            queryset = queryset.filter(
+                fecha_creacion__date__gte=fecha_desde
+            )
+
+        if fecha_hasta:
+            queryset = queryset.filter(
+                fecha_creacion__date__lte=fecha_hasta
+            )
+
+        return queryset
