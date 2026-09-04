@@ -3,7 +3,7 @@ import re
 from datetime import datetime, timedelta
 from decimal import Decimal, InvalidOperation
 
-from django.db.models import Case, IntegerField, Q, Value, When
+from django.db.models import Case, IntegerField, Q, Sum, Value, When
 from django.db.models.functions import ExtractDay, ExtractMonth
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
@@ -11,10 +11,10 @@ from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import OrdenServicioCompletaVW, OrdenServicioVentaVW, TareaCliente
-
 from .serializers import (
     OrdenServicioCompletaVWSerializer,
     OrdenServicioVentaVWSerializer,
+    TareaClienteSerializer,
 )
 
 DB_ALIAS = "sqlserver_inv"
@@ -52,6 +52,46 @@ class OrdenVentaPagination(PageNumberPagination):
     page_size_query_param = "page_size"
     max_page_size = 1000
 
+def normalizar_segmento(valor):
+    texto = str(valor or "").strip().upper()
+
+    if not texto:
+        return ""
+
+    match = re.search(r"(\d+)", texto)
+
+    if match:
+        return f"S{match.group(1)}"
+
+    return texto
+
+
+def aliases_segmento(valor):
+    segmento = normalizar_segmento(valor)
+
+    if not segmento:
+        return []
+
+    match = re.fullmatch(r"S(\d+)", segmento)
+
+    if not match:
+        return [segmento]
+
+    numero = match.group(1)
+
+    return [
+        f"S{numero}",
+        f"Segmento {numero}",
+        f"SEGMENTO {numero}",
+    ]
+
+
+def separar_valores(valor):
+    return [
+        item.strip()
+        for item in re.split(r"[|,;]+", str(valor or ""))
+        if item.strip()
+    ]
 
 class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = OrdenServicioVentaVWSerializer
@@ -91,18 +131,20 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
 
         anio = params.get("anio")
         mes = params.get("mes")
+        semana = params.get("semana")
         estado = params.get("estado")
         segmento = params.get("segmento")
         marca = params.get("marca")
         modelo = params.get("modelo")
         agencia = params.get("agencia")
+        agencia_venta = params.get("agencia_venta")
+        agencias_venta = params.get("agencias_venta")
         condicion = params.get("condicion")
         search = params.get("search")
 
         sin_venta = str(params.get("sin_venta", "")).strip().lower()
         es_sin_venta = sin_venta in ("1", "true", "si", "sí", "yes")
 
-        # Separamos completamente ambos universos.
         if es_sin_venta:
             qs = qs.filter(fecha_venta__isnull=True, fecha_ultima_os__isnull=False)
         else:
@@ -111,20 +153,32 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         if not es_filtro_vacio(anio):
             try:
                 qs = qs.filter(fecha_ultima_os__year=int(anio))
-            except ValueError:
+            except (ValueError, TypeError):
                 pass
 
         if not es_filtro_vacio(mes):
             try:
                 qs = qs.filter(fecha_ultima_os__month=int(mes))
-            except ValueError:
+            except (ValueError, TypeError):
+                pass
+
+        if not es_filtro_vacio(semana):
+            try:
+                qs = qs.filter(fecha_ultima_os__week=int(semana))
+            except (ValueError, TypeError):
                 pass
 
         if not es_filtro_vacio(estado):
             qs = qs.filter(estado_actividad__iexact=estado)
 
         if not es_filtro_vacio(segmento):
-            qs = qs.filter(segmento__iexact=segmento)
+            aliases = aliases_segmento(segmento)
+            filtro_segmento = Q()
+
+            for alias in aliases:
+                filtro_segmento |= Q(segmento__iexact=alias)
+
+            qs = qs.filter(filtro_segmento)
 
         if not es_filtro_vacio(marca):
             qs = qs.filter(marca__iexact=marca)
@@ -132,13 +186,25 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         if not es_filtro_vacio(modelo):
             qs = qs.filter(modelo_nombre__iexact=modelo)
 
-        # CRÍTICO:
-        # Retención normal -> dealer de venta.
-        # Retención No Ventas -> dealer de servicio.
-        if not es_filtro_vacio(agencia):
-            if es_sin_venta:
+        if es_sin_venta:
+            if not es_filtro_vacio(agencia):
                 qs = qs.filter(agencia_servicio__iexact=agencia)
-            else:
+        else:
+            if not es_filtro_vacio(agencias_venta):
+                dealers = separar_valores(agencias_venta)
+
+                if dealers:
+                    filtro_dealers = Q()
+
+                    for dealer in dealers:
+                        filtro_dealers |= Q(agencia_venta__iexact=dealer)
+
+                    qs = qs.filter(filtro_dealers)
+
+            elif not es_filtro_vacio(agencia_venta):
+                qs = qs.filter(agencia_venta__iexact=agencia_venta)
+
+            elif not es_filtro_vacio(agencia):
                 qs = qs.filter(agencia_venta__iexact=agencia)
 
         if not es_filtro_vacio(condicion):
@@ -146,16 +212,18 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
 
         if not es_filtro_vacio(search):
             texto = search.strip()
+
             qs = qs.filter(
-                Q(vin__icontains=texto)
-                | Q(nombre_cliente__icontains=texto)
-                | Q(telefono_cliente__icontains=texto)
-                | Q(correo_cliente__icontains=texto)
-                | Q(placa_vehiculo__icontains=texto)
-                | Q(numero_nota__icontains=texto)
-                | Q(ultima_orden_servicio__icontains=texto)
-                | Q(agencia_venta__icontains=texto)
-                | Q(agencia_servicio__icontains=texto)
+                Q(vin__icontains=texto) |
+                Q(nombre_cliente__icontains=texto) |
+                Q(telefono_cliente__icontains=texto) |
+                Q(correo_cliente__icontains=texto) |
+                Q(placa_vehiculo__icontains=texto) |
+                Q(numero_nota__icontains=texto) |
+                Q(ultima_orden_servicio__icontains=texto) |
+                Q(agencia_venta__icontains=texto) |
+                Q(agencia_servicio__icontains=texto) |
+                Q(modelo_nombre__icontains=texto)
             )
 
         return qs
@@ -309,23 +377,36 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
                 anios.add(fecha.year)
                 anio_mes_set.add((fecha.year, fecha.month))
 
-            for campo, target in (
-                ("estado_actividad", estados),
-                ("segmento", segmentos),
-                ("marca", marcas),
-                ("modelo_nombre", modelos),
-                (campo_agencia, agencias),
-                ("condicion_vehiculo", condiciones),
-            ):
-                valor = str(item.get(campo) or "").strip()
-                if valor:
-                    target.add(valor)
+            estado = str(item.get("estado_actividad") or "").strip()
+            segmento = normalizar_segmento(item.get("segmento"))
+            marca = str(item.get("marca") or "").strip()
+            modelo = str(item.get("modelo_nombre") or "").strip()
+            agencia = str(item.get(campo_agencia) or "").strip()
+            condicion = str(item.get("condicion_vehiculo") or "").strip()
+
+            if estado:
+                estados.add(estado)
+
+            if segmento:
+                segmentos.add(segmento)
+
+            if marca:
+                marcas.add(marca)
+
+            if modelo:
+                modelos.add(modelo)
+
+            if agencia:
+                agencias.add(agencia)
+
+            if condicion:
+                condiciones.add(condicion)
 
         anio_mes = [
             {"anio": anio, "mes": mes}
             for anio, mes in sorted(
                 anio_mes_set,
-                key=lambda v: (v[0], v[1]),
+                key=lambda valor: (valor[0], valor[1]),
                 reverse=True,
             )
         ]
@@ -333,22 +414,65 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         meses_por_anio = {}
 
         for item in anio_mes:
-            clave_anio = str(item["anio"])
-            meses_por_anio.setdefault(clave_anio, []).append(item["mes"])
+            clave = str(item["anio"])
+            meses_por_anio.setdefault(clave, []).append(item["mes"])
 
-        for clave_anio in meses_por_anio:
-            meses_por_anio[clave_anio] = sorted(set(meses_por_anio[clave_anio]))
+        for clave in meses_por_anio:
+            meses_por_anio[clave] = sorted(set(meses_por_anio[clave]))
+
+        def ordenar_segmento(valor):
+            match = re.search(r"(\d+)", valor)
+            return int(match.group(1)) if match else 999
 
         return Response({
             "anios": sorted(anios, reverse=True),
             "anio_mes": anio_mes,
             "meses_por_anio": meses_por_anio,
             "estados": sorted(estados, key=str.lower),
-            "segmentos": sorted(segmentos, key=str.lower),
+            "segmentos": sorted(segmentos, key=ordenar_segmento),
             "marcas": sorted(marcas, key=str.lower),
             "modelos": sorted(modelos, key=str.lower),
             "agencias": sorted(agencias, key=str.lower),
             "condiciones": sorted(condiciones, key=str.lower),
+        })
+    
+    @action(detail=False, methods=["get"], url_path="resumen")
+    def resumen(self, request):
+        qs = OrdenServicioVentaVW.objects.using(DB_ALIAS).all()
+        qs = self.aplicar_filtros(qs)
+
+        total_vehiculos = qs.values("vin").distinct().count()
+
+        activos = (
+            qs.filter(estado_actividad__iexact="Activo")
+            .values("vin")
+            .distinct()
+            .count()
+        )
+
+        inactivos = (
+            qs.filter(estado_actividad__iexact="Inactivo")
+            .values("vin")
+            .distinct()
+            .count()
+        )
+
+        total_servicio = qs.aggregate(
+            total=Sum("total_ultimo_servicio")
+        )["total"] or Decimal("0")
+
+        retorno = (
+            activos / total_vehiculos * 100
+            if total_vehiculos
+            else 0
+        )
+
+        return Response({
+            "total_vehiculos": total_vehiculos,
+            "activos": activos,
+            "inactivos": inactivos,
+            "total_servicio": float(total_servicio),
+            "retorno": round(retorno, 2),
         })
 
     @action(detail=True, methods=["get"], url_path="historial")
@@ -364,13 +488,6 @@ class OrdenServicioVentaViewSet(viewsets.ReadOnlyModelViewSet):
         )
         serializer = OrdenServicioCompletaVWSerializer(qs, many=True)
         return Response(serializer.data)
-
-from .serializers import (
-    OrdenServicioCompletaVWSerializer,
-    OrdenServicioVentaVWSerializer,
-    TareaClienteSerializer,
-)
-
 
 class TareaClienteViewSet(viewsets.ModelViewSet):
     """
