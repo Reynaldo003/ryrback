@@ -207,7 +207,7 @@ class PiezasTipificadasListView(APIView):
     def get(self, request):
         agencia = (request.GET.get("agencia") or "").strip()
 
-        if agencia and agencia == AGENCIA_CORDOBA:
+        if not agencia or agencia == AGENCIA_CORDOBA:
             return self._consulta_vista(request)
 
         return InventarioRefaccionesListView().get(request)
