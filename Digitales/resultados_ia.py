@@ -1465,6 +1465,7 @@ def _fallback_ejecutivo(agregados: dict) -> dict:
 
 def _analisis_ejecutivo_openai(agregados: dict, auditorias: list[dict]) -> dict:
     client = _get_openai_client()
+
     payload = {
         "metricas": agregados["metricas"],
         "asesores": agregados["asesores"],
@@ -1476,52 +1477,74 @@ def _analisis_ejecutivo_openai(agregados: dict, auditorias: list[dict]) -> dict:
         "campanas": agregados["campanas"],
         "auditorias": [
             {
-                "nivel_interes": a.get("nivel_interes"), "senal_compra": a.get("senal_compra"),
-                "calidad_atencion": a.get("calidad_atencion"), "puntaje_atencion": a.get("puntaje_atencion"),
-                "mal_atendido": a.get("mal_atendido"), "riesgo_perdida": a.get("riesgo_perdida"),
-                "deficiencias": a.get("deficiencias"), "objeciones": a.get("objeciones"),
+                "nivel_interes": a.get("nivel_interes"),
+                "senal_compra": a.get("senal_compra"),
+                "calidad_atencion": a.get("calidad_atencion"),
+                "puntaje_atencion": a.get("puntaje_atencion"),
+                "mal_atendido": a.get("mal_atendido"),
+                "riesgo_perdida": a.get("riesgo_perdida"),
+                "deficiencias": a.get("deficiencias"),
+                "objeciones": a.get("objeciones"),
                 "causa_perdida_probable": a.get("causa_perdida_probable"),
             }
             for a in auditorias
         ],
     }
-    response = client.responses.create(
-        model=_modelo_openai(),
-        instructions=PROMPT_EJECUTIVO,
-        input=json.dumps(
-            payload,
-            ensure_ascii=False,
-        ),
-        reasoning={
-            "effort": "none",
-        },
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "analisis_ejecutivo",
-                "schema": OPENAI_EJECUTIVO_SCHEMA,
-                "strict": False,
-            }
-        },
-        temperature=0.2,
-        store=False,
-    )
 
-    data = _parse_json(
-        getattr(
-            response,
-            "output_text",
-            "",
+    try:
+        response = client.responses.create(
+            model=_modelo_openai(),
+            instructions=PROMPT_EJECUTIVO,
+            input=json.dumps(payload, ensure_ascii=False),
+            reasoning={"effort": "none"},
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "analisis_ejecutivo",
+                    "schema": OPENAI_EJECUTIVO_SCHEMA,
+                    "strict": False,
+                }
+            },
+            temperature=0.2,
+            store=False,
         )
-        or ""
-    )
 
-    if not data:
-        raise RuntimeError(
-            "OpenAI no devolvió un análisis ejecutivo JSON válido"
-        )
-    return data
+        texto_respuesta = getattr(response, "output_text", "") or ""
 
+        if not texto_respuesta:
+            raise RuntimeError("OpenAI devolvió output_text vacío.")
+
+        data = _parse_json(texto_respuesta)
+
+        campos_requeridos = {
+            "resumen_ejecutivo",
+            "hallazgos_clave",
+            "causas_raiz",
+            "recomendaciones_globales",
+            "recomendaciones_asesores",
+            "recomendaciones_campanas",
+            "prediccion",
+            "oportunidades",
+        }
+
+        faltantes = campos_requeridos - set(data.keys())
+
+        if faltantes:
+            raise RuntimeError(
+                f"Respuesta ejecutiva incompleta. Faltan: {', '.join(sorted(faltantes))}"
+            )
+
+        if not _texto(data.get("resumen_ejecutivo")):
+            raise RuntimeError("OpenAI devolvió resumen_ejecutivo vacío.")
+
+        return data
+
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+        
 def _fusionar_recomendaciones_asesores(agregados: dict, ejecutivo: dict, auditorias: list[dict]):
     ai_rows = { _normaliza(x.get("asesor")): x for x in ejecutivo.get("recomendaciones_asesores") or [] if isinstance(x, dict) }
     audit_por_asesor = defaultdict(list)
@@ -1554,10 +1577,7 @@ def resultados_ia_view(request):
         return error
 
     horario_respuesta = _parsear_horario_respuesta(request.query_params.get("horario_respuesta", ""))
-    lineas_excluidas_tiempo = _parsear_lineas_excluidas_tiempo(
-        request.query_params.get("lineas_excluir_tiempo", ""),
-        lineas,
-    )
+    lineas_excluidas_tiempo = _parsear_lineas_excluidas_tiempo(request.query_params.get("lineas_excluir_tiempo", ""), lineas)
 
     if _normaliza(request.query_params.get("configuracion", "")) in {"1", "true", "si", "yes"}:
         return Response({
@@ -1575,7 +1595,6 @@ def resultados_ia_view(request):
             ],
         })
 
-    # Estas sí participarán en el análisis completo.
     lineas_analisis = [numero for numero in lineas if numero not in lineas_excluidas_tiempo]
 
     mes, inicio, fin = _rango_mes(request.query_params.get("mes", ""))
@@ -1591,17 +1610,13 @@ def resultados_ia_view(request):
     )
 
     firma_config = hashlib.sha1(
-        json.dumps(
-            {
-                "horario": horario_respuesta,
-                "lineas_excluidas": sorted(lineas_excluidas_tiempo),
-            },
-            sort_keys=True,
-            ensure_ascii=True,
-        ).encode("utf-8")
+        json.dumps({
+            "horario": horario_respuesta,
+            "lineas_excluidas": sorted(lineas_excluidas_tiempo),
+        }, sort_keys=True, ensure_ascii=True).encode("utf-8")
     ).hexdigest()[:12]
 
-    cache_key = "digitales:resultados_ia:" + ":".join([
+    cache_key = "digitales:resultados_ia:v2:" + ":".join([
         mes,
         ",".join(sorted(lineas_analisis)),
         _normaliza(agencia) or "todos",
@@ -1614,8 +1629,7 @@ def resultados_ia_view(request):
     if not solo_bd and not forzar:
         cached = cache.get(cache_key)
         if isinstance(cached, dict):
-            cached = {**cached, "cache": True}
-            return Response(cached)
+            return Response({**cached, "cache": True})
 
     contextos, cobertura_base = _contextos_conversacion(
         lineas=lineas_analisis,
@@ -1632,6 +1646,7 @@ def resultados_ia_view(request):
 
     if solo_bd:
         base = _agregar_metricas_bd(contextos, campanas)
+
         return Response({
             "ok": True,
             "solo_bd": True,
@@ -1649,7 +1664,11 @@ def resultados_ia_view(request):
                 }
                 for numero in lineas
             ],
-            "filtros": {"agencia": agencia, "business": business, "numero_asesor": request.query_params.get("numero_asesor", "")},
+            "filtros": {
+                "agencia": agencia,
+                "business": business,
+                "numero_asesor": request.query_params.get("numero_asesor", ""),
+            },
             "configuracion_tiempo_respuesta": {
                 "horario": horario_respuesta,
                 "lineas_excluidas": sorted(lineas_excluidas_tiempo),
@@ -1659,36 +1678,34 @@ def resultados_ia_view(request):
         })
 
     errores_ia = []
-    limite_ia = time_module.monotonic() + OPENAI_PRESUPUESTO_SEGUNDOS
+
+    limite_auditoria = time_module.monotonic() + 75
 
     try:
         auditorias, errores_lotes = _auditar_con_openai(
             contextos,
-            limite_tiempo=limite_ia,
+            limite_tiempo=limite_auditoria,
         )
         errores_ia.extend(errores_lotes)
     except Exception as exc:
         logger.exception("No fue posible iniciar auditoría OpenAI de resultados")
-        errores_ia.append(str(exc))
+        errores_ia.append(f"Auditoría: {exc}")
         auditorias = [_fallback_auditoria(ctx) for ctx in contextos]
 
     agregados = _agregar_metricas(contextos, auditorias, campanas)
 
-    try:
-        tiempo_disponible = time_module.monotonic() < limite_ia
-        if contextos and tiempo_disponible:
+    ia_ejecutiva = False
+
+    if contextos:
+        try:
             ejecutivo = _analisis_ejecutivo_openai(agregados, auditorias)
             ia_ejecutiva = True
-        else:
+        except Exception as exc:
+            logger.exception("Error generando análisis ejecutivo de resultados")
+            errores_ia.append(f"Análisis ejecutivo: {exc}")
             ejecutivo = _fallback_ejecutivo(agregados)
-            ia_ejecutiva = False
-            if contextos:
-                errores_ia.append("El análisis ejecutivo utilizó fallback porque se alcanzó el presupuesto máximo de tiempo IA.")
-    except Exception as exc:
-        logger.exception("Error generando análisis ejecutivo de resultados")
-        errores_ia.append(str(exc))
+    else:
         ejecutivo = _fallback_ejecutivo(agregados)
-        ia_ejecutiva = False
 
     _fusionar_recomendaciones_asesores(agregados, ejecutivo, auditorias)
     _fusionar_recomendaciones_campanas(agregados, ejecutivo)
@@ -1697,11 +1714,14 @@ def resultados_ia_view(request):
         "ok": True,
         "cache": False,
         "mes": mes,
-        "rango": {"inicio": inicio.isoformat(), "fin_exclusivo": fin.isoformat()},
+        "rango": {
+            "inicio": inicio.isoformat(),
+            "fin_exclusivo": fin.isoformat(),
+        },
         "generado_at": timezone.now().isoformat(),
         "modelo_ia": _modelo_openai(),
         "ia": {
-            "disponible": not errores_ia,
+            "disponible": ia_ejecutiva,
             "analisis_ejecutivo_generado": ia_ejecutiva,
             "errores": errores_ia[:6],
         },
@@ -1723,14 +1743,19 @@ def resultados_ia_view(request):
             }
             for numero in lineas
         ],
-        "filtros": {"agencia": agencia, "business": business, "numero_asesor": request.query_params.get("numero_asesor", "")},
+        "filtros": {
+            "agencia": agencia,
+            "business": business,
+            "numero_asesor": request.query_params.get("numero_asesor", ""),
+        },
         "configuracion_tiempo_respuesta": {
             "horario": horario_respuesta,
             "lineas_excluidas": sorted(lineas_excluidas_tiempo),
             "metodo": "minutos_habiles_con_pausa_comida",
-            "nota": "El tiempo fuera del horario configurado y la pausa de comida no se suman; una conversación aún fuera de jornada no se penaliza como falta de respuesta.",
+            "nota": "El tiempo fuera del horario configurado y la pausa de comida no se suman.",
         },
     }
 
     cache.set(cache_key, payload, CACHE_SECONDS)
+
     return Response(payload)
