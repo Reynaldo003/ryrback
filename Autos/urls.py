@@ -8,6 +8,7 @@ from .views import (
 from .productos_estoque import ProductosEstoqueListView
 from .inventario_refacciones import InventarioRefaccionesListView
 from .piezas_tipificadas import (
+    PiezasJerarquiaListView,
     PiezasObsolescenciaListView,
     PiezasTipificadasListView,
 )
@@ -42,5 +43,10 @@ urlpatterns = [
     "api/piezas-tipificadas/obsolescencia/",
     PiezasObsolescenciaListView.as_view(),
     name="piezas-tipificadas-obsolescencia",
+),
+    path(
+    "api/piezas-tipificadas/jerarquia/",
+    PiezasJerarquiaListView.as_view(),
+    name="piezas-tipificadas-jerarquia",
 ),
 ]

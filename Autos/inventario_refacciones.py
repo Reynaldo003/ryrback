@@ -69,6 +69,7 @@ class InventarioRefaccionesListView(APIView):
                     '{nombre_agencia}' AS agencia,
                     *
                 FROM dbo.{tabla}
+                WHERE QtInventario > 0
                 """
             )
 
