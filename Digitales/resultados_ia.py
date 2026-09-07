@@ -671,31 +671,17 @@ def _estado_medicion_respuesta(*, primer_cliente, primera_respuesta_humana, nume
     }
 
 def _get_openai_client() -> OpenAI:
-    api_key = _texto(
-        getattr(
-            settings,
-            "OPENAI_API_KEY",
-            "",
-        )
-    )
+    api_key = _texto(getattr(settings, "OPENAI_API_KEY", ""))
 
     if not api_key:
-        raise RuntimeError(
-            "Falta configurar OPENAI_API_KEY en settings.py"
-        )
+        raise RuntimeError("Falta configurar OPENAI_API_KEY en settings.py")
 
-    timeout_ms = int(
-        getattr(
-            settings,
-            "OPENAI_RESULTS_TIMEOUT_MS",
-            45000,
-        )
-    )
+    timeout_segundos = int(getattr(settings, "OPENAI_RESULTS_TIMEOUT_SECONDS", 30))
 
     return OpenAI(
         api_key=api_key,
-        timeout=timeout_ms / 1000.0,
-        max_retries=2,
+        timeout=timeout_segundos,
+        max_retries=1,
     )
 
 
@@ -1544,7 +1530,7 @@ def _analisis_ejecutivo_openai(agregados: dict, auditorias: list[dict]) -> dict:
             client.close()
         except Exception:
             pass
-        
+
 def _fusionar_recomendaciones_asesores(agregados: dict, ejecutivo: dict, auditorias: list[dict]):
     ai_rows = { _normaliza(x.get("asesor")): x for x in ejecutivo.get("recomendaciones_asesores") or [] if isinstance(x, dict) }
     audit_por_asesor = defaultdict(list)
