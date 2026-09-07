@@ -229,7 +229,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.postgresql",
         "NAME": "crm_ryr",
         "USER": "israel",
-        "PASSWORD": "CRMR&R2026@",
+        "PASSWORD": "KVMR&R2026@",
         "HOST": "127.0.0.1",
 #       "HOST": "45.82.73.31",
         "PORT": "5432",
