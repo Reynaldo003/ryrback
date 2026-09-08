@@ -1,3 +1,4 @@
+from django.core.cache import cache
 from django.db import connections
 from django.utils.dateparse import parse_date
 from rest_framework import status
@@ -11,6 +12,7 @@ from .serializers import InventarioRefaccionesObsolescenciaSerializer
 
 DB_ALIAS = "sqlserver_inv"
 TABLA = "dbo.Inventario_Refacciones_Obsolescencia"
+CACHE_OPCIONES = "refacciones_obsolescencia_opciones_v2"
 
 
 def texto_parametro(request, nombre):
@@ -19,7 +21,6 @@ def texto_parametro(request, nombre):
 
 def entero_parametro(request, nombre):
     valor = texto_parametro(request, nombre)
-
     if not valor:
         return None
 
@@ -54,6 +55,15 @@ def construir_filtros(request):
     validar_fecha(fecha_desde, "fecha_desde")
     validar_fecha(fecha_hasta, "fecha_hasta")
 
+    if dias_min is not None and dias_min < 0:
+        raise ValueError("El parámetro 'dias_min' no puede ser negativo.")
+
+    if dias_max is not None and dias_max < 0:
+        raise ValueError("El parámetro 'dias_max' no puede ser negativo.")
+
+    if dias_min is not None and dias_max is not None and dias_min > dias_max:
+        raise ValueError("'dias_min' no puede ser mayor que 'dias_max'.")
+
     condiciones = []
     parametros = []
 
@@ -62,16 +72,16 @@ def construir_filtros(request):
         condiciones.append("""
             (
                 Agencia LIKE %s
-                OR CodProd LIKE %s
+                OR CodLinhaProd LIKE %s
+                OR Localizacao LIKE %s
+                OR CodProduto LIKE %s
                 OR NmProduto LIKE %s
-                OR NombreEstandarizado LIKE %s
                 OR GrupoPrincipal LIKE %s
                 OR Subgrupo LIKE %s
+                OR NombreEstandarizado LIKE %s
                 OR Categoria LIKE %s
-                OR Localizacao LIKE %s
-                OR NmPed LIKE %s
                 OR Observacion LIKE %s
-                OR CAST(NrPedCpa AS NVARCHAR(50)) LIKE %s
+                OR Categoria_Movimiento LIKE %s
             )
         """)
         parametros.extend([termino] * 11)
@@ -113,7 +123,6 @@ def construir_filtros(request):
         parametros.append(dias_max)
 
     where_sql = f"WHERE {' AND '.join(condiciones)}" if condiciones else ""
-
     return where_sql, parametros
 
 
@@ -138,10 +147,7 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
         try:
             where_sql, parametros = construir_filtros(request)
         except ValueError as exc:
-            return Response(
-                {"detail": str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         consulta_total = f"""
             SELECT COUNT(*)
@@ -152,19 +158,10 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
         consulta = f"""
             SELECT
                 Agencia AS agencia,
-                NrPedCpa AS nr_ped_cpa,
-                TpPedCpa AS tp_ped_cpa,
-                NmPed AS nm_ped,
-                QtdePed AS qtde_ped,
-                VrPedido AS vr_pedido,
-                Situacao_Header AS situacao_header,
-                Situacao_Item AS situacao_item,
-                Fecha_Emision AS fecha_emision,
-                Fecha_Creacion AS fecha_creacion,
-                Fecha_Modificacion AS fecha_modificacion,
+                QtInventario AS qt_inventario,
                 CodLinhaProd AS cod_linha_prod,
                 Localizacao AS localizacao,
-                CodProd AS cod_prod,
+                CodProduto AS cod_produto,
                 NmProduto AS nm_produto,
                 Unidade AS unidade,
                 QtdeEstoque AS qtde_estoque,
@@ -186,8 +183,6 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
                 Fecha_Primera_Compra_Refac AS fecha_primera_compra_refac,
                 Fecha_Actualizacion_Refac AS fecha_actualizacion_refac,
                 VrUniUltCpa AS vr_uni_ult_cpa,
-                PrcUnitIt AS prc_unit_it,
-                VrProd AS vr_prod,
                 Fecha_Referencia AS fecha_referencia,
                 Dias_Desde_Ultimo_Movimiento AS dias_desde_ultimo_movimiento,
                 Capa_Obsolescencia AS capa_obsolescencia,
@@ -195,11 +190,11 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
             FROM {TABLA}
             {where_sql}
             ORDER BY
-                CASE WHEN Fecha_Referencia IS NULL THEN 1 ELSE 0 END,
-                Fecha_Referencia DESC,
+                CASE WHEN Dias_Desde_Ultimo_Movimiento IS NULL THEN 1 ELSE 0 END,
                 Dias_Desde_Ultimo_Movimiento DESC,
                 Agencia,
-                CodProd
+                CodProduto,
+                Localizacao
             OFFSET %s ROWS
             FETCH NEXT %s ROWS ONLY
         """
@@ -208,17 +203,10 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
             cursor.execute(consulta_total, parametros)
             total = cursor.fetchone()[0]
 
-            cursor.execute(
-                consulta,
-                [*parametros, offset, tamano_pagina],
-            )
-
+            cursor.execute(consulta, [*parametros, offset, tamano_pagina])
             registros = cursor_a_dicts(cursor)
 
-        serializer = InventarioRefaccionesObsolescenciaSerializer(
-            registros,
-            many=True,
-        )
+        serializer = InventarioRefaccionesObsolescenciaSerializer(registros, many=True)
 
         return Response({
             "count": total,
@@ -236,10 +224,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
         try:
             where_sql, parametros = construir_filtros(request)
         except ValueError as exc:
-            return Response(
-                {"detail": str(exc)},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         with connections[DB_ALIAS].cursor() as cursor:
             cursor.execute("SET NOCOUNT ON;")
@@ -247,93 +232,50 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
             cursor.execute("""
                 IF OBJECT_ID('tempdb..#Base') IS NOT NULL
                     DROP TABLE #Base;
-
-                IF OBJECT_ID('tempdb..#Inventario') IS NOT NULL
-                    DROP TABLE #Inventario;
             """)
 
             consulta_base = f"""
                 SELECT
                     Agencia,
-                    NrPedCpa,
-                    VrPedido,
-                    Fecha_Emision,
-                    Fecha_Modificacion,
-                    CodProd,
-                    NmProduto,
+                    QtInventario,
+                    CodLinhaProd,
                     Localizacao,
+                    CodProduto,
+                    NmProduto,
                     QtdeEstoque,
                     VrEstoque,
                     VrUnitarioMedio,
+                    QtReservada,
+                    QtPedida,
                     GrupoPrincipal,
+                    Subgrupo,
                     Categoria,
                     Capa_Obsolescencia,
                     Categoria_Movimiento,
                     Dias_Desde_Ultimo_Movimiento,
-                    Fecha_Referencia,
-                    Fecha_Actualizacion_Refac
+                    Fecha_Referencia
                 INTO #Base
                 FROM {TABLA}
                 {where_sql};
             """
 
-            cursor.execute(
-                consulta_base,
-                parametros,
-            )
+            cursor.execute(consulta_base, parametros)
 
             cursor.execute("""
                 SELECT
-                    Agencia,
-                    NrPedCpa,
-                    VrPedido,
-                    Fecha_Emision,
-                    Fecha_Modificacion,
-                    CodProd,
-                    NmProduto,
-                    Localizacao,
-                    QtdeEstoque,
-                    VrEstoque,
-                    VrUnitarioMedio,
-                    GrupoPrincipal,
-                    Categoria,
-                    Capa_Obsolescencia,
-                    Categoria_Movimiento,
-                    Dias_Desde_Ultimo_Movimiento,
-                    Fecha_Referencia,
-                    Fecha_Actualizacion_Refac
-                INTO #Inventario
-                FROM (
-                    SELECT
-                        *,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY
-                                ISNULL(Agencia, ''),
-                                ISNULL(CodProd, ''),
-                                ISNULL(Localizacao, '')
-                            ORDER BY
-                                CASE WHEN Fecha_Referencia IS NULL THEN 1 ELSE 0 END,
-                                Fecha_Referencia DESC,
-                                Fecha_Actualizacion_Refac DESC,
-                                Fecha_Modificacion DESC,
-                                Fecha_Emision DESC,
-                                NrPedCpa DESC
-                        ) AS rn
-                    FROM #Base
-                ) AS datos
-                WHERE rn = 1;
-            """)
+                    COUNT(*) AS registros,
 
-            cursor.execute("""
-                SELECT
-                    (SELECT COUNT(*) FROM #Base) AS registros,
-
-                    (
-                        SELECT COUNT(DISTINCT CodProd)
-                        FROM #Base
-                        WHERE CodProd IS NOT NULL
-                          AND LTRIM(RTRIM(CodProd)) <> ''
+                    COUNT(
+                        DISTINCT NULLIF(
+                            LTRIM(RTRIM(CodProduto)),
+                            ''
+                        )
                     ) AS productos,
+
+                    COALESCE(
+                        SUM(COALESCE(QtInventario, 0)),
+                        0
+                    ) AS qt_inventario,
 
                     COALESCE(
                         SUM(COALESCE(QtdeEstoque, 0)),
@@ -346,12 +288,14 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                     ) AS valor_estoque,
 
                     COALESCE(
-                        (
-                            SELECT SUM(COALESCE(VrPedido, 0))
-                            FROM #Base
-                        ),
+                        SUM(COALESCE(QtReservada, 0)),
                         0
-                    ) AS valor_pedido,
+                    ) AS reservada,
+
+                    COALESCE(
+                        SUM(COALESCE(QtPedida, 0)),
+                        0
+                    ) AS pedida,
 
                     COALESCE(
                         AVG(
@@ -363,20 +307,11 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         0
                     ) AS promedio_dias_movimiento
 
-                FROM #Inventario;
+                FROM #Base;
             """)
 
-            columnas = [
-                columna[0]
-                for columna in cursor.description
-            ]
-
-            totales = dict(
-                zip(
-                    columnas,
-                    cursor.fetchone(),
-                )
-            )
+            columnas = [columna[0] for columna in cursor.description]
+            totales = dict(zip(columnas, cursor.fetchone()))
 
             cursor.execute("""
                 SELECT
@@ -397,7 +332,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         0
                     ) AS valor_estoque
 
-                FROM #Inventario
+                FROM #Base
 
                 GROUP BY
                     COALESCE(
@@ -405,10 +340,8 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         'Sin capa'
                     )
 
-                ORDER BY
-                    valor_estoque DESC;
+                ORDER BY valor_estoque DESC;
             """)
-
             por_capa = cursor_a_dicts(cursor)
 
             cursor.execute("""
@@ -430,7 +363,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         0
                     ) AS valor_estoque
 
-                FROM #Inventario
+                FROM #Base
 
                 GROUP BY
                     COALESCE(
@@ -438,10 +371,8 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         'Sin categoría'
                     )
 
-                ORDER BY
-                    valor_estoque DESC;
+                ORDER BY valor_estoque DESC;
             """)
-
             por_categoria_movimiento = cursor_a_dicts(cursor)
 
             cursor.execute("""
@@ -463,7 +394,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         0
                     ) AS valor_estoque
 
-                FROM #Inventario
+                FROM #Base
 
                 GROUP BY
                     COALESCE(
@@ -471,10 +402,8 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         'Sin agencia'
                     )
 
-                ORDER BY
-                    valor_estoque DESC;
+                ORDER BY valor_estoque DESC;
             """)
-
             por_agencia = cursor_a_dicts(cursor)
 
             cursor.execute("""
@@ -496,7 +425,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         0
                     ) AS valor_estoque
 
-                FROM #Inventario
+                FROM #Base
 
                 GROUP BY
                     COALESCE(
@@ -504,11 +433,40 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         'Sin grupo'
                     )
 
-                ORDER BY
-                    valor_estoque DESC;
+                ORDER BY valor_estoque DESC;
             """)
-
             por_grupo = cursor_a_dicts(cursor)
+
+            cursor.execute("""
+                SELECT TOP 12
+                    COALESCE(
+                        NULLIF(LTRIM(RTRIM(Categoria)), ''),
+                        'Sin categoría'
+                    ) AS categoria,
+
+                    COUNT(*) AS productos,
+
+                    COALESCE(
+                        SUM(COALESCE(QtdeEstoque, 0)),
+                        0
+                    ) AS existencia,
+
+                    COALESCE(
+                        SUM(COALESCE(VrEstoque, 0)),
+                        0
+                    ) AS valor_estoque
+
+                FROM #Base
+
+                GROUP BY
+                    COALESCE(
+                        NULLIF(LTRIM(RTRIM(Categoria)), ''),
+                        'Sin categoría'
+                    )
+
+                ORDER BY valor_estoque DESC;
+            """)
+            por_categoria = cursor_a_dicts(cursor)
 
             cursor.execute("""
                 SELECT
@@ -531,21 +489,11 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                         VrEstoque,
 
                         CASE
-                            WHEN Dias_Desde_Ultimo_Movimiento IS NULL
-                                THEN 'Sin dato'
-
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 90
-                                THEN '0-90 días'
-
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 180
-                                THEN '91-180 días'
-
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 365
-                                THEN '181-365 días'
-
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 730
-                                THEN '366-730 días'
-
+                            WHEN Dias_Desde_Ultimo_Movimiento IS NULL THEN 'Sin dato'
+                            WHEN Dias_Desde_Ultimo_Movimiento <= 90 THEN '0-90 días'
+                            WHEN Dias_Desde_Ultimo_Movimiento <= 180 THEN '91-180 días'
+                            WHEN Dias_Desde_Ultimo_Movimiento <= 365 THEN '181-365 días'
+                            WHEN Dias_Desde_Ultimo_Movimiento <= 730 THEN '366-730 días'
                             ELSE 'Más de 730 días'
                         END AS rango,
 
@@ -558,23 +506,18 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                             ELSE 5
                         END AS orden
 
-                    FROM #Inventario
+                    FROM #Base
                 ) AS datos
 
                 GROUP BY
                     rango,
                     orden
 
-                ORDER BY
-                    orden;
+                ORDER BY orden;
             """)
-
             por_antiguedad = cursor_a_dicts(cursor)
 
-            cursor.execute("""
-                DROP TABLE #Inventario;
-                DROP TABLE #Base;
-            """)
+            cursor.execute("DROP TABLE #Base;")
 
         return Response({
             "totales": totales,
@@ -583,6 +526,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                 "por_categoria_movimiento": por_categoria_movimiento,
                 "por_agencia": por_agencia,
                 "por_grupo": por_grupo,
+                "por_categoria": por_categoria,
                 "por_antiguedad": por_antiguedad,
             },
         })
@@ -593,58 +537,32 @@ class InventarioRefaccionesObsolescenciaOpcionesView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        opciones_cache = cache.get(CACHE_OPCIONES)
+
+        if opciones_cache:
+            return Response(opciones_cache)
+
         def valores_distintos(cursor, columna):
             consulta = f"""
                 SELECT DISTINCT
                     LTRIM(RTRIM({columna})) AS valor
-
                 FROM {TABLA}
-
                 WHERE {columna} IS NOT NULL
                   AND LTRIM(RTRIM({columna})) <> ''
-
-                ORDER BY
-                    valor
+                ORDER BY valor
             """
 
             cursor.execute(consulta)
-
-            return [
-                fila[0]
-                for fila in cursor.fetchall()
-                if fila[0]
-            ]
+            return [fila[0] for fila in cursor.fetchall() if fila[0]]
 
         with connections[DB_ALIAS].cursor() as cursor:
-            agencias = valores_distintos(
-                cursor,
-                "Agencia",
-            )
+            opciones = {
+                "agencias": valores_distintos(cursor, "Agencia"),
+                "grupos_principales": valores_distintos(cursor, "GrupoPrincipal"),
+                "categorias": valores_distintos(cursor, "Categoria"),
+                "capas_obsolescencia": valores_distintos(cursor, "Capa_Obsolescencia"),
+                "categorias_movimiento": valores_distintos(cursor, "Categoria_Movimiento"),
+            }
 
-            grupos_principales = valores_distintos(
-                cursor,
-                "GrupoPrincipal",
-            )
-
-            categorias = valores_distintos(
-                cursor,
-                "Categoria",
-            )
-
-            capas_obsolescencia = valores_distintos(
-                cursor,
-                "Capa_Obsolescencia",
-            )
-
-            categorias_movimiento = valores_distintos(
-                cursor,
-                "Categoria_Movimiento",
-            )
-
-        return Response({
-            "agencias": agencias,
-            "grupos_principales": grupos_principales,
-            "categorias": categorias,
-            "capas_obsolescencia": capas_obsolescencia,
-            "categorias_movimiento": categorias_movimiento,
-        })
+        cache.set(CACHE_OPCIONES, opciones, 300)
+        return Response(opciones)
