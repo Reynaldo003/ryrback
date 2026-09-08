@@ -224,303 +224,511 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
         try:
             where_sql, parametros = construir_filtros(request)
         except ValueError as exc:
-            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
-        with connections[DB_ALIAS].cursor() as cursor:
-            cursor.execute("SET NOCOUNT ON;")
+        consulta = f"""
+            SET NOCOUNT ON;
 
-            cursor.execute("""
-                IF OBJECT_ID('tempdb..#Base') IS NOT NULL
-                    DROP TABLE #Base;
-            """)
+            IF OBJECT_ID('tempdb..#Base') IS NOT NULL
+                DROP TABLE #Base;
 
-            consulta_base = f"""
+            SELECT
+                Agencia,
+                QtInventario,
+                CodLinhaProd,
+                Localizacao,
+                CodProduto,
+                NmProduto,
+                Unidade,
+                QtdeEstoque,
+                VrEstoque,
+                VrUnitarioMedio,
+                QtReservada,
+                QtPedida,
+                GrupoPrincipal,
+                Subgrupo,
+                NombreEstandarizado,
+                Categoria,
+                Observacion,
+                Fecha_Ultima_Venta,
+                Fecha_Ult_Comp_Prod,
+                Fecha_Ult_Ped_Prod,
+                Fecha_Ult_Actu_Prod,
+                Fecha_Regis_Refac,
+                Fecha_Inventario_Refac,
+                Fecha_Primera_Compra_Refac,
+                Fecha_Actualizacion_Refac,
+                VrUniUltCpa,
+                Fecha_Referencia,
+                Dias_Desde_Ultimo_Movimiento,
+                Capa_Obsolescencia,
+                Categoria_Movimiento
+            INTO #Base
+            FROM {TABLA}
+            {where_sql};
+
+            -- =====================================================
+            -- 1. KPIs
+            -- =====================================================
+
+            SELECT
+                COUNT(*) AS registros,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtInventario, 0)
+                    ),
+                    0
+                ) AS qt_inventario,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtReservada, 0)
+                    ),
+                    0
+                ) AS reservada,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtPedida, 0)
+                    ),
+                    0
+                ) AS pedida,
+
+                COALESCE(
+                    AVG(
+                        CAST(
+                            Dias_Desde_Ultimo_Movimiento
+                            AS DECIMAL(18, 2)
+                        )
+                    ),
+                    0
+                ) AS promedio_dias_movimiento
+
+            FROM #Base;
+
+
+            -- =====================================================
+            -- 2. CAPAS DE OBSOLESCENCIA
+            -- =====================================================
+
+            SELECT
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Capa_Obsolescencia)),
+                        ''
+                    ),
+                    'Sin capa'
+                ) AS capa_obsolescencia,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque
+
+            FROM #Base
+
+            GROUP BY
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Capa_Obsolescencia)),
+                        ''
+                    ),
+                    'Sin capa'
+                )
+
+            ORDER BY
+                valor_estoque DESC;
+
+
+            -- =====================================================
+            -- 3. CATEGORÍA DE MOVIMIENTO
+            -- =====================================================
+
+            SELECT
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Categoria_Movimiento)),
+                        ''
+                    ),
+                    'Sin categoría'
+                ) AS categoria_movimiento,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque
+
+            FROM #Base
+
+            GROUP BY
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Categoria_Movimiento)),
+                        ''
+                    ),
+                    'Sin categoría'
+                )
+
+            ORDER BY
+                valor_estoque DESC;
+
+
+            -- =====================================================
+            -- 4. AGENCIAS
+            -- =====================================================
+
+            SELECT
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Agencia)),
+                        ''
+                    ),
+                    'Sin agencia'
+                ) AS agencia,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque
+
+            FROM #Base
+
+            GROUP BY
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Agencia)),
+                        ''
+                    ),
+                    'Sin agencia'
+                )
+
+            ORDER BY
+                valor_estoque DESC;
+
+
+            -- =====================================================
+            -- 5. GRUPOS PRINCIPALES
+            -- =====================================================
+
+            SELECT TOP 12
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(GrupoPrincipal)),
+                        ''
+                    ),
+                    'Sin grupo'
+                ) AS grupo_principal,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque
+
+            FROM #Base
+
+            GROUP BY
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(GrupoPrincipal)),
+                        ''
+                    ),
+                    'Sin grupo'
+                )
+
+            ORDER BY
+                valor_estoque DESC;
+
+
+            -- =====================================================
+            -- 6. CATEGORÍAS
+            -- =====================================================
+
+            SELECT TOP 12
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Categoria)),
+                        ''
+                    ),
+                    'Sin categoría'
+                ) AS categoria,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque
+
+            FROM #Base
+
+            GROUP BY
+                COALESCE(
+                    NULLIF(
+                        LTRIM(RTRIM(Categoria)),
+                        ''
+                    ),
+                    'Sin categoría'
+                )
+
+            ORDER BY
+                valor_estoque DESC;
+
+
+            -- =====================================================
+            -- 7. ANTIGÜEDAD
+            -- =====================================================
+
+            SELECT
+                rango,
+
+                COUNT(
+                    DISTINCT NULLIF(
+                        LTRIM(RTRIM(CodProduto)),
+                        ''
+                    )
+                ) AS productos,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(QtdeEstoque, 0)
+                    ),
+                    0
+                ) AS existencia,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(VrEstoque, 0)
+                    ),
+                    0
+                ) AS valor_estoque
+
+            FROM (
                 SELECT
-                    Agencia,
-                    QtInventario,
-                    CodLinhaProd,
-                    Localizacao,
                     CodProduto,
-                    NmProduto,
                     QtdeEstoque,
                     VrEstoque,
-                    VrUnitarioMedio,
-                    QtReservada,
-                    QtPedida,
-                    GrupoPrincipal,
-                    Subgrupo,
-                    Categoria,
-                    Capa_Obsolescencia,
-                    Categoria_Movimiento,
-                    Dias_Desde_Ultimo_Movimiento,
-                    Fecha_Referencia
-                INTO #Base
-                FROM {TABLA}
-                {where_sql};
-            """
 
-            cursor.execute(consulta_base, parametros)
+                    CASE
+                        WHEN Dias_Desde_Ultimo_Movimiento IS NULL
+                            THEN 'Sin dato'
 
-            cursor.execute("""
-                SELECT
-                    COUNT(*) AS registros,
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 90
+                            THEN '0-90 días'
 
-                    COUNT(
-                        DISTINCT NULLIF(
-                            LTRIM(RTRIM(CodProduto)),
-                            ''
-                        )
-                    ) AS productos,
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 180
+                            THEN '91-180 días'
 
-                    COALESCE(
-                        SUM(COALESCE(QtInventario, 0)),
-                        0
-                    ) AS qt_inventario,
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 365
+                            THEN '181-365 días'
 
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 730
+                            THEN '366-730 días'
 
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque,
+                        ELSE 'Más de 730 días'
+                    END AS rango,
 
-                    COALESCE(
-                        SUM(COALESCE(QtReservada, 0)),
-                        0
-                    ) AS reservada,
-
-                    COALESCE(
-                        SUM(COALESCE(QtPedida, 0)),
-                        0
-                    ) AS pedida,
-
-                    COALESCE(
-                        AVG(
-                            CAST(
-                                Dias_Desde_Ultimo_Movimiento
-                                AS DECIMAL(18, 2)
-                            )
-                        ),
-                        0
-                    ) AS promedio_dias_movimiento
-
-                FROM #Base;
-            """)
-
-            columnas = [columna[0] for columna in cursor.description]
-            totales = dict(zip(columnas, cursor.fetchone()))
-
-            cursor.execute("""
-                SELECT
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Capa_Obsolescencia)), ''),
-                        'Sin capa'
-                    ) AS capa_obsolescencia,
-
-                    COUNT(*) AS productos,
-
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
-
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque
+                    CASE
+                        WHEN Dias_Desde_Ultimo_Movimiento IS NULL THEN 6
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 90 THEN 1
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 180 THEN 2
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 365 THEN 3
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 730 THEN 4
+                        ELSE 5
+                    END AS orden
 
                 FROM #Base
+            ) AS datos
 
-                GROUP BY
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Capa_Obsolescencia)), ''),
-                        'Sin capa'
-                    )
+            GROUP BY
+                rango,
+                orden
 
-                ORDER BY valor_estoque DESC;
-            """)
-            por_capa = cursor_a_dicts(cursor)
+            ORDER BY
+                orden;
 
-            cursor.execute("""
-                SELECT
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Categoria_Movimiento)), ''),
-                        'Sin categoría'
-                    ) AS categoria_movimiento,
+            DROP TABLE #Base;
+        """
 
-                    COUNT(*) AS productos,
+        def avanzar_hasta_resultado(cursor):
+            while cursor.description is None:
+                if not cursor.nextset():
+                    return False
 
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
+            return True
 
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque
+        def leer_resultado(cursor):
+            if not avanzar_hasta_resultado(cursor):
+                return []
 
-                FROM #Base
+            columnas = [
+                columna[0]
+                for columna in cursor.description
+            ]
 
-                GROUP BY
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Categoria_Movimiento)), ''),
-                        'Sin categoría'
-                    )
+            filas = [
+                dict(zip(columnas, fila))
+                for fila in cursor.fetchall()
+            ]
 
-                ORDER BY valor_estoque DESC;
-            """)
-            por_categoria_movimiento = cursor_a_dicts(cursor)
+            cursor.nextset()
 
-            cursor.execute("""
-                SELECT
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Agencia)), ''),
-                        'Sin agencia'
-                    ) AS agencia,
+            return filas
 
-                    COUNT(*) AS productos,
+        with connections[DB_ALIAS].cursor() as cursor:
+            cursor.execute(
+                consulta,
+                parametros,
+            )
 
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
+            resultados_totales = leer_resultado(
+                cursor
+            )
 
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque
+            por_capa = leer_resultado(
+                cursor
+            )
 
-                FROM #Base
+            por_categoria_movimiento = leer_resultado(
+                cursor
+            )
 
-                GROUP BY
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Agencia)), ''),
-                        'Sin agencia'
-                    )
+            por_agencia = leer_resultado(
+                cursor
+            )
 
-                ORDER BY valor_estoque DESC;
-            """)
-            por_agencia = cursor_a_dicts(cursor)
+            por_grupo = leer_resultado(
+                cursor
+            )
 
-            cursor.execute("""
-                SELECT TOP 12
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(GrupoPrincipal)), ''),
-                        'Sin grupo'
-                    ) AS grupo_principal,
+            por_categoria = leer_resultado(
+                cursor
+            )
 
-                    COUNT(*) AS productos,
+            por_antiguedad = leer_resultado(
+                cursor
+            )
 
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
-
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque
-
-                FROM #Base
-
-                GROUP BY
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(GrupoPrincipal)), ''),
-                        'Sin grupo'
-                    )
-
-                ORDER BY valor_estoque DESC;
-            """)
-            por_grupo = cursor_a_dicts(cursor)
-
-            cursor.execute("""
-                SELECT TOP 12
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Categoria)), ''),
-                        'Sin categoría'
-                    ) AS categoria,
-
-                    COUNT(*) AS productos,
-
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
-
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque
-
-                FROM #Base
-
-                GROUP BY
-                    COALESCE(
-                        NULLIF(LTRIM(RTRIM(Categoria)), ''),
-                        'Sin categoría'
-                    )
-
-                ORDER BY valor_estoque DESC;
-            """)
-            por_categoria = cursor_a_dicts(cursor)
-
-            cursor.execute("""
-                SELECT
-                    rango,
-                    COUNT(*) AS productos,
-
-                    COALESCE(
-                        SUM(COALESCE(QtdeEstoque, 0)),
-                        0
-                    ) AS existencia,
-
-                    COALESCE(
-                        SUM(COALESCE(VrEstoque, 0)),
-                        0
-                    ) AS valor_estoque
-
-                FROM (
-                    SELECT
-                        QtdeEstoque,
-                        VrEstoque,
-
-                        CASE
-                            WHEN Dias_Desde_Ultimo_Movimiento IS NULL THEN 'Sin dato'
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 90 THEN '0-90 días'
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 180 THEN '91-180 días'
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 365 THEN '181-365 días'
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 730 THEN '366-730 días'
-                            ELSE 'Más de 730 días'
-                        END AS rango,
-
-                        CASE
-                            WHEN Dias_Desde_Ultimo_Movimiento IS NULL THEN 6
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 90 THEN 1
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 180 THEN 2
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 365 THEN 3
-                            WHEN Dias_Desde_Ultimo_Movimiento <= 730 THEN 4
-                            ELSE 5
-                        END AS orden
-
-                    FROM #Base
-                ) AS datos
-
-                GROUP BY
-                    rango,
-                    orden
-
-                ORDER BY orden;
-            """)
-            por_antiguedad = cursor_a_dicts(cursor)
-
-            cursor.execute("DROP TABLE #Base;")
+        totales = (
+            resultados_totales[0]
+            if resultados_totales
+            else {
+                "registros": 0,
+                "productos": 0,
+                "qt_inventario": 0,
+                "existencia": 0,
+                "valor_estoque": 0,
+                "reservada": 0,
+                "pedida": 0,
+                "promedio_dias_movimiento": 0,
+            }
+        )
 
         return Response({
             "totales": totales,
+
             "graficas": {
                 "por_capa": por_capa,
                 "por_categoria_movimiento": por_categoria_movimiento,
@@ -530,7 +738,6 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                 "por_antiguedad": por_antiguedad,
             },
         })
-
 
 class InventarioRefaccionesObsolescenciaOpcionesView(APIView):
     authentication_classes = [CRMJWTAuthentication]
