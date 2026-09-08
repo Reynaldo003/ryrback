@@ -1,5 +1,6 @@
 #Digitales/prospectos_stats.py
 import logging
+import unicodedata
 from datetime import date
 
 from django.db.models import Count, Q
@@ -19,6 +20,12 @@ ESTADOS_DESCALIFICADO = ("descalificado", "descalificada")
 
 def _normaliza(valor):
     return str(valor or "").strip().casefold()
+
+
+def _quita_tildes(valor):
+    texto = unicodedata.normalize("NFD", str(valor or ""))
+    sin_tildes = "".join(ch for ch in texto if unicodedata.category(ch) != "Mn")
+    return sin_tildes.casefold()
 
 
 def _parse_int(query_params, nombre, default):
@@ -46,7 +53,10 @@ def _mes_anterior(año, mes):
 def _filtro_por_agencia(agencia):
     if not agencia:
         return Q()
-    return Q(agencia__iexact=agencia)
+    limpio = _quita_tildes(agencia)
+    if not limpio:
+        return Q()
+    return Q(agencia__icontains=limpio)
 
 
 def _motivo_principal_descalificacion(año, mes, agencia):
@@ -127,9 +137,11 @@ def prospecto_stats_view(request):
         from_ia=True,
     )
     if agencia:
-        mensajes_ia = mensajes_ia.filter(
-            cliente__expediente_digital__agencia__iexact=agencia,
-        )
+        limpio = _quita_tildes(agencia)
+        if limpio:
+            mensajes_ia = mensajes_ia.filter(
+                cliente__expediente_digital__agencia__icontains=limpio,
+            )
     total_conv_inteligentes = (
         mensajes_ia
         .filter(cliente__expediente_digital__isnull=False)

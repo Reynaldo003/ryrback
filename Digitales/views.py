@@ -26,7 +26,7 @@ from rest_framework.decorators import api_view, permission_classes, parser_class
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 from rest_framework.response import Response
-from rest_framework.exceptions import PermissionDenied
+from rest_framework.exceptions import NotFound, PermissionDenied
 
 from CrmConformidad.models import Usuario
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
@@ -249,6 +249,69 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         return self._queryset_por_linea(
             numero_asesor
         )
+
+    def get_object(self):
+        queryset = self.filter_queryset(
+            self.get_queryset()
+        )
+
+        lookup_url_kwarg = (
+            self.lookup_url_kwarg
+            or self.lookup_field
+        )
+
+        filter_kwargs = {
+            self.lookup_field: (
+                self.kwargs[lookup_url_kwarg]
+            )
+        }
+
+        obj = (
+            queryset.filter(
+                **filter_kwargs
+            ).first()
+        )
+
+        if obj is not None:
+            self.check_object_permissions(
+                self.request,
+                obj,
+            )
+            return obj
+
+        # El expediente no aparece en el queryset restringido por línea,
+        # pero puede estar visible en la conversación (contacto_por_telefono).
+        # Se valida con las mismas reglas de acceso de la conversación antes
+        # de permitir ver o editar el registro.
+        try:
+            obj = self._base_queryset().get(
+                **filter_kwargs
+            )
+        except ExpedienteDigital.DoesNotExist:
+            raise NotFound(
+                "No se encontró el expediente digital "
+                "relacionado. Actualiza la página o "
+                "selecciona nuevamente el registro."
+            )
+
+        numero_asesor = (
+            _get_numero_asesor_request(
+                self.request
+            )
+        )
+
+        _validar_acceso_expediente(
+            request=self.request,
+            expediente=obj,
+            numero_asesor=numero_asesor,
+        )
+
+        self.check_object_permissions(
+            self.request,
+            obj,
+        )
+
+        return obj
 
     def perform_create(self, serializer):
         expediente = serializer.save()

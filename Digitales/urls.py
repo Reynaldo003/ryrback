@@ -12,6 +12,7 @@ from .citas_stats import citas_stats_view
 from .cotizaciones_stats import cotizaciones_stats_view
 from .solicitudes_stats import solicitudes_financiamiento_view
 from .facturados_stats import facturados_stats_view
+from .canal_diario import canal_diario_view
 from .views import (
     bienvenido,
     webhook,
@@ -133,6 +134,7 @@ urlpatterns = [
     path("analitica/citas-stats/", citas_stats_view, name="digitales-citas-stats"),
     path("analitica/cotizaciones-stats/", cotizaciones_stats_view, name="digitales-cotizaciones-stats"),
     path("analitica/solicitudes-financiamiento/", solicitudes_financiamiento_view, name="digitales-solicitudes-financiamiento"),
+    path("analitica/canal-diario/", canal_diario_view, name="digitales-canal-diario"),
     path("analitica/facturados-stats/", facturados_stats_view, name="digitales-facturados-stats"),
 
     path("api/", include(router.urls)),

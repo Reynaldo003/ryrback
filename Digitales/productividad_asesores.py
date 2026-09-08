@@ -18,6 +18,7 @@ CANALES = [
     {"id": "whatsapp", "nombre": "WhatsApp"},
     {"id": "vw_direct", "nombre": "VW Concesionaria/VW Direct"},
     {"id": "facebook", "nombre": "Facebook Ads"},
+    {"id": "llamada", "nombre": "Llamada entrante"},
 ]
 
 
@@ -27,6 +28,8 @@ def _canal_normalizado(valor):
         return "whatsapp"
     if texto == "facebook" or texto == "meta" or texto == "facebook ads":
         return "facebook"
+    if "llamada" in texto or "telefon" in texto or texto.startswith("tel"):
+        return "llamada"
     return "vw_direct"
 
 
@@ -37,6 +40,11 @@ def _iniciales(nombre):
     if len(partes) == 1:
         return partes[0][:2].upper()
     return (partes[0][0] + partes[-1][0]).upper()
+
+
+def _es_asesor_excluido(nombre):
+    tokens = {t for t in str(nombre or "").casefold().split()}
+    return "oba" in tokens
 
 
 @api_view(["GET"])
@@ -88,6 +96,8 @@ def productividad_asesores_view(request):
     asesores = []
     for grupo in grupos_lead:
         nombre = str(grupo["asesor_digital"] or "").strip()
+        if _es_asesor_excluido(nombre):
+            continue
         total = int(grupo["total"] or 0)
         clave_nombre = nombre.casefold()
         catalogo_asesor = catalogo.get(clave_nombre)

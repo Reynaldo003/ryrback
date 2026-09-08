@@ -11,11 +11,13 @@ from rest_framework.response import Response
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from retencion.models import OrdenServicioVentaVW
 
-from .prospectos_stats import _parse_int, _rango_mes
+from .prospectos_stats import _parse_int, _quita_tildes, _rango_mes
 
 logger = logging.getLogger(__name__)
 
 _PATRON_VIN = re.compile(r"^[A-HJ-NPR-Z0-9]{17}$")
+
+DB_VENTAS = "sqlserver_inv"
 
 
 def _normaliza_provincia(valor):
@@ -48,11 +50,11 @@ def facturados_stats_view(request):
 
     query = Q(fecha_venta__gte=inicio, fecha_venta__lt=fin)
     if agencia:
-        query &= Q(agencia_venta__icontains=agencia)
+        query &= Q(agencia_venta__icontains=_quita_tildes(agencia))
 
     # Factura válida: nota con importe > 0 (excluye nulos/anuladas).
     filas = list(
-        OrdenServicioVentaVW.objects
+        OrdenServicioVentaVW.objects.using(DB_VENTAS)
         .filter(query)
         .exclude(total_nota=None)
         .filter(total_nota__gt=0)
@@ -99,9 +101,9 @@ def facturados_stats_view(request):
     # Entregas: unidades con fecha de salida dentro del periodo
     query_entrega = Q(fecha_salida__gte=inicio, fecha_salida__lt=fin)
     if agencia:
-        query_entrega &= Q(agencia_venta__icontains=agencia)
+        query_entrega &= Q(agencia_venta__icontains=_quita_tildes(agencia))
     unidades_entregadas = (
-        OrdenServicioVentaVW.objects
+        OrdenServicioVentaVW.objects.using(DB_VENTAS)
         .filter(query_entrega)
         .exclude(total_nota=None)
         .filter(total_nota__gt=0)

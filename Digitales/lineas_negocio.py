@@ -24,6 +24,7 @@ CANALES = [
     {"id": "whatsapp", "nombre": "WhatsApp"},
     {"id": "vw_direct", "nombre": "VW Concesionaria/VW Direct"},
     {"id": "facebook", "nombre": "Facebook Ads"},
+    {"id": "llamada", "nombre": "Llamada entrante"},
     {"id": "sin_clasificar", "nombre": "Sin clasificar"},
 ]
 
@@ -45,6 +46,8 @@ def _canal_normalizado(canal):
         return "facebook"
     if not valor:
         return "sin_clasificar"
+    if "llamada" in valor or "telefon" in valor or valor.startswith("tel"):
+        return "llamada"
     return "vw_direct"
 
 
@@ -114,6 +117,17 @@ def lineas_negocio_view(request):
         .order_by("-total")
     )
 
+    filas_linea_canal = list(
+        base
+        .values("business", "canal_contacto")
+        .annotate(total=Count("id"))
+    )
+    canal_por_linea = {}
+    for fila in filas_linea_canal:
+        linea_id = _linea_de_business(fila["business"])
+        canal_id = _canal_normalizado(fila.get("canal_contacto"))
+        canal_por_linea[(linea_id, canal_id)] = canal_por_linea.get((linea_id, canal_id), 0) + int(fila["total"] or 0)
+
     detalle_por_linea = {l["id"]: [] for l in LINEAS}
     for fila in filas_detalle:
         linea_id = _linea_de_business(fila["business"])
@@ -134,11 +148,20 @@ def lineas_negocio_view(request):
         linea_id = linea_info["id"]
         total_linea = totales_linea[linea_id]
         items = sorted(detalle_por_linea[linea_id], key=lambda x: -x["total"])[:limite]
+        canales_linea = [
+            {
+                "id": c_info["id"],
+                "total": canal_por_linea.get((linea_id, c_info["id"]), 0),
+            }
+            for c_info in CANALES
+            if c_info["id"] != "sin_clasificar"
+        ]
         lineas.append({
             "id": linea_id,
             "nombre": linea_info["nombre"],
             "total": total_linea,
             "porcentaje": _porcentaje(total_linea, demanda_total),
+            "canales": canales_linea,
             "items": items,
             "total_items": len(detalle_por_linea[linea_id]),
         })
