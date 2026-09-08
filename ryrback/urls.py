@@ -4,8 +4,6 @@ from django.urls import include, path
 from django.conf import settings
 from django.conf.urls.static import static
 
-
-
 urlpatterns = [
     path("admin/", admin.site.urls),
     path("conformidad/", include("CrmConformidad.urls")),
@@ -29,8 +27,8 @@ urlpatterns = [
     path("api/BitacoraMantenimiento/", include("BitacoraMantenimiento.urls")),
     path("documentacion/", include("documentacion.urls")),
     path("gestion_inversion/", include("gestion_inversion.urls"),),
-    path("ventas-vn/",include("Autos.urls"),
-),
+    path("ventas-vn/",include("Autos.urls"),),
+    path("refacciones-obsolescencia/", include("refacciones_obsolescencia.urls")),
 ]
 
 if settings.DEBUG:
