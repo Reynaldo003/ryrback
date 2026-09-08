@@ -4,6 +4,14 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .resultados_ia import resultados_ia_view
 from .prospectos_stats import prospecto_stats_view
+from .productividad_asesores import productividad_asesores_view
+from .lineas_negocio import lineas_negocio_view
+from .pautas_origen import pautas_origen_view
+from .motivos_descarte import motivos_descarte_view
+from .citas_stats import citas_stats_view
+from .cotizaciones_stats import cotizaciones_stats_view
+from .solicitudes_stats import solicitudes_financiamiento_view
+from .facturados_stats import facturados_stats_view
 from .views import (
     bienvenido,
     webhook,
@@ -118,6 +126,14 @@ urlpatterns = [
 
     path("analitica/resultados-ia/",resultados_ia_view,name="digitales-resultados-ia",),
     path("analitica/prospectos-stats/", prospecto_stats_view, name="digitales-prospectos-stats"),
+    path("analitica/productividad-asesores/", productividad_asesores_view, name="digitales-productividad-asesores"),
+    path("analitica/lineas-negocio/", lineas_negocio_view, name="digitales-lineas-negocio"),
+    path("analitica/pautas-origen/", pautas_origen_view, name="digitales-pautas-origen"),
+    path("analitica/motivos-descarte/", motivos_descarte_view, name="digitales-motivos-descarte"),
+    path("analitica/citas-stats/", citas_stats_view, name="digitales-citas-stats"),
+    path("analitica/cotizaciones-stats/", cotizaciones_stats_view, name="digitales-cotizaciones-stats"),
+    path("analitica/solicitudes-financiamiento/", solicitudes_financiamiento_view, name="digitales-solicitudes-financiamiento"),
+    path("analitica/facturados-stats/", facturados_stats_view, name="digitales-facturados-stats"),
 
     path("api/", include(router.urls)),
     path("api/campanas-meta/", campanas_meta_recientes),

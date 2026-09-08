@@ -168,7 +168,7 @@ class PiezasObsolescenciaListView(APIView):
             SELECT 'capa' AS tipo,
                 CASE
                     WHEN dias IS NULL THEN 'O'
-                    WHEN dias < 180 THEN 'A'
+                    WHEN dias <= 180 THEN 'A'
                     WHEN dias <= 365 THEN 'B'
                     ELSE 'O'
                 END AS grupo,
@@ -178,7 +178,7 @@ class PiezasObsolescenciaListView(APIView):
             FROM Dias
             GROUP BY CASE
                 WHEN dias IS NULL THEN 'O'
-                WHEN dias < 180 THEN 'A'
+                WHEN dias <= 180 THEN 'A'
                 WHEN dias <= 365 THEN 'B'
                 ELSE 'O'
             END
