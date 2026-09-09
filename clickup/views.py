@@ -12,6 +12,7 @@ import os
 import requests as http_requests  
 
 from .authentication import UsuarioJWTAuthentication
+from datetime import date
 from .models import (
     Equipo,
     MiembroEquipo,
@@ -367,6 +368,63 @@ class TableroViewSet(viewsets.ViewSet):
                 "proyecto": ProyectoSerializer(pr).data,
                 "listas": listas_data,
                 "tareas_por_lista": tareas_por_lista,
+            }
+        )
+
+    @action(detail=False, methods=["get"], url_path="agenda")
+    def agenda(self, request, equipo_id=None):
+        proyecto_id = request.query_params.get("proyecto_id")
+        if not proyecto_id:
+            return Response({"detail": "proyecto_id es requerido."}, status=status.HTTP_400_BAD_REQUEST)
+
+        pr = Proyecto.objects.filter(id=proyecto_id, equipo_id=equipo_id).first()
+        if not pr:
+            return Response({"detail": "Proyecto no encontrado."}, status=status.HTTP_404_NOT_FOUND)
+
+        fecha_inicio = request.query_params.get("fecha_inicio")
+        fecha_fin = request.query_params.get("fecha_fin")
+
+        try:
+            if fecha_inicio:
+                fecha_inicio = date.fromisoformat(fecha_inicio)
+            if fecha_fin:
+                fecha_fin = date.fromisoformat(fecha_fin)
+        except ValueError:
+            return Response(
+                {"detail": "fecha_inicio y fecha_fin deben usar formato YYYY-MM-DD."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        qs = (
+            Tarea.objects.filter(
+                lista__proyecto_id=proyecto_id,
+                tarea_padre__isnull=True,
+            )
+            .select_related("lista", "creado_por")
+            .prefetch_related("asignados__usuario", "evidencias__subido_por", "subtareas")
+        )
+
+        if fecha_inicio and fecha_fin:
+            tareas = qs.filter(
+                Q(inicio__date__range=(fecha_inicio, fecha_fin))
+                | Q(vence__date__range=(fecha_inicio, fecha_fin))
+            )
+        else:
+            tareas = qs.none()
+
+        pendientes = (
+            qs.filter(inicio__isnull=True, vence__isnull=True)
+            .exclude(lista__nombre="Hecho")
+            .order_by("orden", "id")
+        )
+
+        listas = Lista.objects.filter(proyecto_id=proyecto_id).order_by("orden", "id")
+
+        return Response(
+            {
+                "listas": ListaSerializer(listas, many=True).data,
+                "tareas": TareaSerializer(tareas, many=True, context={"request": request}).data,
+                "pendientes": TareaSerializer(pendientes, many=True, context={"request": request}).data,
             }
         )
 

@@ -22,6 +22,7 @@ proyecto_detail = ProyectoViewSet.as_view({"get": "retrieve", "patch": "partial_
 proyecto_bootstrap = ProyectoViewSet.as_view({"post": "bootstrap"})
 
 tablero_list = TableroViewSet.as_view({"get": "list"})
+tablero_agenda = TableroViewSet.as_view({"get": "agenda"})
 tablero_mover = TableroViewSet.as_view({"post": "mover_tarea"})
 tablero_crear_tarea = TableroViewSet.as_view({"post": "crear_tarea"})
 tablero_editar_tarea = TableroViewSet.as_view({"patch": "editar_tarea"})
@@ -39,6 +40,7 @@ urlpatterns = [
     path("equipos/<int:equipo_id>/proyectos/<int:pk>/bootstrap/", proyecto_bootstrap, name="clickup-proyecto-bootstrap"),
 
     path("equipos/<int:equipo_id>/tablero/", tablero_list, name="clickup-tablero"),
+    path("equipos/<int:equipo_id>/tablero/agenda/", tablero_agenda, name="clickup-agenda"),
     path("equipos/<int:equipo_id>/tablero/mover-tarea/", tablero_mover, name="clickup-mover-tarea"),
     path("equipos/<int:equipo_id>/tablero/crear-tarea/", tablero_crear_tarea, name="clickup-crear-tarea"),
     path("equipos/<int:equipo_id>/tablero/tareas/<int:tarea_id>/", tablero_editar_tarea, name="clickup-editar-tarea"),
