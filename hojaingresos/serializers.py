@@ -6,8 +6,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from citas.models import ClienteComercial, normaliza_tel_mx
-from .models import HojaIngresos, TallerActividad
-
+from .models import HojaIngresos, HojaIngresoEvidencia, TallerActividad
 
 CAMPOS_TALLER = (
     "tecnico",
@@ -75,6 +74,29 @@ def asignar_correo_cliente(cliente, correo):
         cliente.correo_electronico = correo
 
 
+class HojaIngresoEvidenciaSerializer(serializers.ModelSerializer):
+    url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HojaIngresoEvidencia
+        fields = (
+            "id",
+            "nombre_original",
+            "tipo_mime",
+            "tamanio",
+            "url",
+            "creado_en",
+        )
+
+    def get_url(self, obj):
+        if not obj.archivo:
+            return ""
+
+        request = self.context.get("request")
+        url = obj.archivo.url
+
+        return request.build_absolute_uri(url) if request else url
+    
 class HojaIngresosSerializer(serializers.ModelSerializer):
     # Alias compatibles con Taller.jsx.
     cliente = serializers.CharField(required=False, allow_blank=True)
@@ -114,6 +136,10 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
         child=serializers.DictField(),
         required=False,
         write_only=True,
+    )
+    evidencias = HojaIngresoEvidenciaSerializer(
+        many=True,
+        read_only=True,
     )
     horasAgenda = serializers.SerializerMethodField()
     horasTotales = serializers.SerializerMethodField()
@@ -157,10 +183,10 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             "pre_picking_hecho",
             "pre_picking_notas",
             "asesor_digital",
-            "asesor_digital",
             "asesor_piso",
             "creado_en",
             "actualizado_en",
+            "evidencias",
             # TallerActividad
             "tecnico",
             "etapa",

@@ -1,17 +1,18 @@
 # hojaingresos/views.py
 import re
 import unicodedata
-
 from django.db.models import Q
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
-
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-
-from .models import HojaIngresos
-from .serializers import HojaIngresosSerializer
-
+from .models import HojaIngresos, HojaIngresoEvidencia
+from .serializers import HojaIngresosSerializer, HojaIngresoEvidenciaSerializer
+import os
+from rest_framework import status
+from rest_framework.decorators import action
+from rest_framework.parsers import FormParser, MultiPartParser
+from rest_framework.response import Response
 
 ADMIN_PERMISSIONS = {
     "ALL",
@@ -103,6 +104,7 @@ class HojaIngresosViewSet(ModelViewSet):
         queryset = (
             HojaIngresos.objects
             .select_related("cliente", "taller")
+            .prefetch_related("evidencias")
             .all()
             .order_by("-fecha_ingreso", "-id")
         )
@@ -110,8 +112,6 @@ class HojaIngresosViewSet(ModelViewSet):
         user = self.request.user
 
         if not getattr(user, "is_authenticated", False):
-            # Visitante público (sin login): debe indicar cuál agencia
-            # pública quiere ver, vía ?agencia=VW Cordoba / VW Orizaba.
             agencia_solicitada = normalizar_texto(
                 self.request.query_params.get("agencia") or ""
             )
@@ -123,17 +123,21 @@ class HojaIngresosViewSet(ModelViewSet):
                 return queryset.none()
 
             filtro_publico = Q()
+
             for agencia_publica in AGENCIAS_PUBLICAS:
                 if normalizar_texto(agencia_publica) == agencia_solicitada:
                     filtro_publico |= Q(agencia__iexact=agencia_publica)
 
             queryset = queryset.filter(filtro_publico)
+
         elif not es_administrador_taller(user):
             agencias_usuario = obtener_agencias_usuario(user)
+
             if not agencias_usuario:
                 return queryset.none()
 
             filtro_agencias = Q()
+
             for agencia_usuario in agencias_usuario:
                 filtro_agencias |= Q(agencia__iexact=agencia_usuario)
 
@@ -161,22 +165,34 @@ class HojaIngresosViewSet(ModelViewSet):
             queryset = queryset.filter(asesor__icontains=asesor)
 
         if asistencia in {"true", "false"}:
-            queryset = queryset.filter(asistencia=asistencia == "true")
+            queryset = queryset.filter(
+                asistencia=asistencia == "true"
+            )
 
         if desde:
-            queryset = queryset.filter(fecha_ingreso__date__gte=desde)
+            queryset = queryset.filter(
+                fecha_ingreso__date__gte=desde
+            )
 
         if hasta:
-            queryset = queryset.filter(fecha_ingreso__date__lte=hasta)
+            queryset = queryset.filter(
+                fecha_ingreso__date__lte=hasta
+            )
 
         if tecnico and tecnico not in {"Todos", "Todas"}:
-            queryset = queryset.filter(taller__tecnico__iexact=tecnico)
+            queryset = queryset.filter(
+                taller__tecnico__iexact=tecnico
+            )
 
         if fecha:
-            queryset = queryset.filter(taller__fecha_programada=fecha)
+            queryset = queryset.filter(
+                taller__fecha_programada=fecha
+            )
 
         if etapa:
-            queryset = queryset.filter(taller__etapa__iexact=etapa)
+            queryset = queryset.filter(
+                taller__etapa__iexact=etapa
+            )
 
         if estatus_agenda:
             queryset = queryset.filter(
@@ -184,7 +200,9 @@ class HojaIngresosViewSet(ModelViewSet):
             )
 
         if tipo_bloque:
-            queryset = queryset.filter(taller__tipo_bloque__iexact=tipo_bloque)
+            queryset = queryset.filter(
+                taller__tipo_bloque__iexact=tipo_bloque
+            )
 
         if busqueda:
             queryset = queryset.filter(
@@ -255,3 +273,101 @@ class HojaIngresosViewSet(ModelViewSet):
         )
         self._validar_agencia(agencia)
         serializer.save()
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="evidencias",
+        parser_classes=[MultiPartParser, FormParser],
+    )
+    def subir_evidencias(self, request, pk=None):
+        ingreso = self.get_object()
+        archivos = request.FILES.getlist("archivos")
+
+        if not archivos:
+            return Response(
+                {"detail": "No se recibió ningún archivo."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        extensiones_permitidas = {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".webp",
+            ".pdf",
+        }
+
+        max_bytes = 10 * 1024 * 1024
+        evidencias_creadas = []
+
+        for archivo in archivos:
+            extension = os.path.splitext(archivo.name)[1].lower()
+
+            if extension not in extensiones_permitidas:
+                return Response(
+                    {
+                        "detail": (
+                            f"El archivo '{archivo.name}' tiene "
+                            "una extensión no permitida."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if archivo.size > max_bytes:
+                return Response(
+                    {
+                        "detail": (
+                            f"El archivo '{archivo.name}' supera "
+                            "el máximo de 10 MB."
+                        )
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            evidencia = HojaIngresoEvidencia.objects.create(
+                ingreso=ingreso,
+                archivo=archivo,
+                nombre_original=archivo.name,
+                tipo_mime=archivo.content_type or "",
+                tamanio=archivo.size,
+            )
+
+            evidencias_creadas.append(evidencia)
+
+        serializer = HojaIngresoEvidenciaSerializer(
+            evidencias_creadas,
+            many=True,
+            context={"request": request},
+        )
+
+        return Response(
+            serializer.data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+    @action(
+        detail=True,
+        methods=["delete"],
+        url_path=r"evidencias/(?P<evidencia_id>\d+)",
+    )
+    def eliminar_evidencia(self, request, pk=None, evidencia_id=None):
+        ingreso = self.get_object()
+
+        try:
+            evidencia = ingreso.evidencias.get(
+                pk=evidencia_id
+            )
+        except HojaIngresoEvidencia.DoesNotExist:
+            return Response(
+                {"detail": "La evidencia no existe."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        evidencia.delete()
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT,
+        )

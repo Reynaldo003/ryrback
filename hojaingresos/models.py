@@ -1,9 +1,11 @@
+#hojaingresos/models.py
 from decimal import Decimal
-
 from django.db import models
-
 from citas.models import ClienteComercial
-
+import os
+import uuid
+from django.db.models.signals import post_delete
+from django.dispatch import receiver
 
 class HojaIngresos(models.Model):
     cliente = models.ForeignKey(
@@ -221,6 +223,51 @@ class HojaIngresos(models.Model):
             f"{telefono}"
         )
 
+def ruta_evidencia_hoja_ingresos(instance, filename):
+    extension = os.path.splitext(filename)[1].lower()
+    nombre = f"{uuid.uuid4().hex}{extension}"
+    return f"hoja_ingresos/evidencias/{instance.ingreso_id}/{nombre}"
+
+
+class HojaIngresoEvidencia(models.Model):
+    ingreso = models.ForeignKey(
+        HojaIngresos,
+        on_delete=models.CASCADE,
+        related_name="evidencias",
+        db_column="id_ingreso",
+    )
+    archivo = models.FileField(
+        upload_to=ruta_evidencia_hoja_ingresos,
+    )
+    nombre_original = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+    tipo_mime = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+    )
+    tamanio = models.PositiveBigIntegerField(
+        default=0,
+    )
+    creado_en = models.DateTimeField(
+        auto_now_add=True,
+    )
+
+    class Meta:
+        db_table = "hoja_ingresos_evidencias"
+        ordering = ["-creado_en", "-id"]
+
+    def __str__(self):
+        return self.nombre_original or self.archivo.name
+
+
+@receiver(post_delete, sender=HojaIngresoEvidencia)
+def eliminar_archivo_evidencia(sender, instance, **kwargs):
+    if instance.archivo:
+        instance.archivo.delete(save=False)
 
 class TallerActividad(models.Model):
     ingreso = models.OneToOneField(
