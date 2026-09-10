@@ -290,25 +290,15 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
             "results": serializer.data,
         })
 
-
 class InventarioRefaccionesObsolescenciaDashboardView(APIView):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
         try:
-            where_sql, parametros = construir_filtros(
-                request
-            )
+            where_sql, parametros = construir_filtros(request)
         except ValueError as exc:
-            return Response(
-                {
-                    "detail": str(
-                        exc
-                    )
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
 
         consulta = f"""
             SET NOCOUNT ON;
@@ -346,7 +336,26 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                 Fecha_Referencia,
                 Dias_Desde_Ultimo_Movimiento,
                 Capa_Obsolescencia,
-                Categoria_Movimiento
+                Categoria_Movimiento,
+
+                COALESCE(QtdeEstoque, 0) - COALESCE(QtReservada, 0)
+                    AS QtDisponible,
+
+                COALESCE(QtdeEstoque, 0) * COALESCE(VrUnitarioMedio, 0)
+                    AS ValorStock,
+
+                COALESCE(QtReservada, 0) * COALESCE(VrUnitarioMedio, 0)
+                    AS ValorReservado,
+
+                (
+                    COALESCE(QtdeEstoque, 0) -
+                    COALESCE(QtReservada, 0)
+                ) * COALESCE(VrUnitarioMedio, 0)
+                    AS ValorDisponible,
+
+                COALESCE(QtPedida, 0) * COALESCE(VrUnitarioMedio, 0)
+                    AS ValorPendiente
+
             INTO #Base
             FROM {TABLA}
             {where_sql};
@@ -361,64 +370,87 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
+                COALESCE(SUM(COALESCE(QtInventario, 0)), 0)
+                    AS qt_inventario,
+
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
+
+                COALESCE(SUM(COALESCE(QtReservada, 0)), 0)
+                    AS reservada,
+
+                COALESCE(SUM(COALESCE(QtPedida, 0)), 0)
+                    AS pedida,
+
+                COALESCE(SUM(COALESCE(QtDisponible, 0)), 0)
+                    AS disponible,
+
+                -- DAX: SUM(VrEstoque)
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                -- DAX: QtdeEstoque * VrUnitarioMedio
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock,
+
+                -- DAX: QtReservada * VrUnitarioMedio
+                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)
+                    AS valor_reservado,
+
+                -- DAX: QtDisponible * VrUnitarioMedio
+                COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)
+                    AS valor_disponible,
+
+                COALESCE(SUM(COALESCE(ValorPendiente, 0)), 0)
+                    AS valor_pendiente,
+
+                -- DAX Valor del Obsoleto
                 COALESCE(
                     SUM(
-                        COALESCE(
-                            QtInventario,
-                            0
-                        )
+                        CASE
+                            WHEN LTRIM(RTRIM(COALESCE(Capa_Obsolescencia, ''))) = 'O'
+                                THEN COALESCE(VrEstoque, 0)
+                            ELSE 0
+                        END
                     ),
                     0
-                ) AS qt_inventario,
+                ) AS valor_obsoleto,
+
+                -- DAX Porcentaje Obsolescencia
+                COALESCE(
+                    (
+                        SUM(
+                            CASE
+                                WHEN LTRIM(RTRIM(COALESCE(Capa_Obsolescencia, ''))) = 'O'
+                                    THEN COALESCE(VrEstoque, 0)
+                                ELSE 0
+                            END
+                        ) * 100.0
+                    )
+                    /
+                    NULLIF(
+                        SUM(COALESCE(VrEstoque, 0)),
+                        0
+                    ),
+                    0
+                ) AS porcentaje_obsolescencia,
 
                 COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
+                    (
+                        SUM(COALESCE(QtReservada, 0)) * 100.0
+                    )
+                    /
+                    NULLIF(
+                        SUM(COALESCE(QtPedida, 0)),
+                        0
                     ),
                     0
-                ) AS existencia,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtReservada,
-                            0
-                        )
-                    ),
-                    0
-                ) AS reservada,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtPedida,
-                            0
-                        )
-                    ),
-                    0
-                ) AS pedida,
+                ) AS relacion_reservada_pedida,
 
                 COALESCE(
                     AVG(
@@ -440,11 +472,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
             SELECT
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Capa_Obsolescencia
-                            )
-                        ),
+                        LTRIM(RTRIM(Capa_Obsolescencia)),
                         ''
                     ),
                     'Sin capa'
@@ -452,52 +480,53 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS existencia,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque
+                COALESCE(SUM(COALESCE(QtReservada, 0)), 0)
+                    AS reservada,
+
+                COALESCE(SUM(COALESCE(QtPedida, 0)), 0)
+                    AS pedida,
+
+                COALESCE(SUM(COALESCE(QtDisponible, 0)), 0)
+                    AS disponible,
+
+                -- Inventario contable/ERP
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                -- Stock calculado según DAX
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock,
+
+                COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)
+                    AS valor_disponible,
+
+                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)
+                    AS valor_reservado,
+
+                COALESCE(SUM(COALESCE(ValorPendiente, 0)), 0)
+                    AS valor_pendiente
 
             FROM #Base
 
             GROUP BY
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Capa_Obsolescencia
-                            )
-                        ),
+                        LTRIM(RTRIM(Capa_Obsolescencia)),
                         ''
                     ),
                     'Sin capa'
                 )
 
             ORDER BY
-                valor_estoque DESC;
+                valor_inventario DESC;
 
 
             -- =====================================================
@@ -507,11 +536,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
             SELECT
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Categoria_Movimiento
-                            )
-                        ),
+                        LTRIM(RTRIM(Categoria_Movimiento)),
                         ''
                     ),
                     'Sin categoría'
@@ -519,66 +544,43 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS existencia,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock
 
             FROM #Base
 
             GROUP BY
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Categoria_Movimiento
-                            )
-                        ),
+                        LTRIM(RTRIM(Categoria_Movimiento)),
                         ''
                     ),
                     'Sin categoría'
                 )
 
             ORDER BY
-                valor_estoque DESC;
+                valor_inventario DESC;
 
 
             -- =====================================================
-            -- 4. AGENCIAS
+            -- 4. AGENCIA
             -- =====================================================
 
             SELECT
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Agencia
-                            )
-                        ),
+                        LTRIM(RTRIM(Agencia)),
                         ''
                     ),
                     'Sin agencia'
@@ -586,66 +588,50 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS existencia,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock,
+
+                COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)
+                    AS valor_disponible,
+
+                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)
+                    AS valor_reservado
 
             FROM #Base
 
             GROUP BY
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Agencia
-                            )
-                        ),
+                        LTRIM(RTRIM(Agencia)),
                         ''
                     ),
                     'Sin agencia'
                 )
 
             ORDER BY
-                valor_estoque DESC;
+                valor_inventario DESC;
 
 
             -- =====================================================
-            -- 5. GRUPOS PRINCIPALES
+            -- 5. GRUPO PRINCIPAL
+            -- DAX: Valor Stock
             -- =====================================================
 
             SELECT TOP 12
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                GrupoPrincipal
-                            )
-                        ),
+                        LTRIM(RTRIM(GrupoPrincipal)),
                         ''
                     ),
                     'Sin grupo'
@@ -653,66 +639,49 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS existencia,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock,
+
+                COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)
+                    AS valor_disponible,
+
+                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)
+                    AS valor_reservado
 
             FROM #Base
 
             GROUP BY
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                GrupoPrincipal
-                            )
-                        ),
+                        LTRIM(RTRIM(GrupoPrincipal)),
                         ''
                     ),
                     'Sin grupo'
                 )
 
             ORDER BY
-                valor_estoque DESC;
+                valor_stock DESC;
 
 
             -- =====================================================
-            -- 6. CATEGORÍAS
+            -- 6. CATEGORÍA
             -- =====================================================
 
             SELECT TOP 12
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Categoria
-                            )
-                        ),
+                        LTRIM(RTRIM(Categoria)),
                         ''
                     ),
                     'Sin categoría'
@@ -720,52 +689,33 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS existencia,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock
 
             FROM #Base
 
             GROUP BY
                 COALESCE(
                     NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                Categoria
-                            )
-                        ),
+                        LTRIM(RTRIM(Categoria)),
                         ''
                     ),
                     'Sin categoría'
                 )
 
             ORDER BY
-                valor_estoque DESC;
+                valor_inventario DESC;
 
 
             -- =====================================================
@@ -777,76 +727,47 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
                 COUNT(
                     DISTINCT NULLIF(
-                        LTRIM(
-                            RTRIM(
-                                CodProduto
-                            )
-                        ),
+                        LTRIM(RTRIM(CodProduto)),
                         ''
                     )
                 ) AS productos,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtdeEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS existencia,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
+                    AS existencia,
 
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrEstoque,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_estoque
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
+                    AS valor_inventario,
+
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
+                    AS valor_stock
 
             FROM (
                 SELECT
                     CodProduto,
                     QtdeEstoque,
                     VrEstoque,
+                    ValorStock,
 
                     CASE
                         WHEN Dias_Desde_Ultimo_Movimiento IS NULL
                             THEN 'Sin dato'
-
                         WHEN Dias_Desde_Ultimo_Movimiento <= 90
                             THEN '0-90 días'
-
                         WHEN Dias_Desde_Ultimo_Movimiento <= 180
                             THEN '91-180 días'
-
                         WHEN Dias_Desde_Ultimo_Movimiento <= 365
                             THEN '181-365 días'
-
                         WHEN Dias_Desde_Ultimo_Movimiento <= 730
                             THEN '366-730 días'
-
                         ELSE 'Más de 730 días'
                     END AS rango,
 
                     CASE
-                        WHEN Dias_Desde_Ultimo_Movimiento IS NULL
-                            THEN 6
-
-                        WHEN Dias_Desde_Ultimo_Movimiento <= 90
-                            THEN 1
-
-                        WHEN Dias_Desde_Ultimo_Movimiento <= 180
-                            THEN 2
-
-                        WHEN Dias_Desde_Ultimo_Movimiento <= 365
-                            THEN 3
-
-                        WHEN Dias_Desde_Ultimo_Movimiento <= 730
-                            THEN 4
-
+                        WHEN Dias_Desde_Ultimo_Movimiento IS NULL THEN 6
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 90 THEN 1
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 180 THEN 2
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 365 THEN 3
+                        WHEN Dias_Desde_Ultimo_Movimiento <= 730 THEN 4
                         ELSE 5
                     END AS orden
 
@@ -867,86 +788,49 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
             while cursor.description is None:
                 if not cursor.nextset():
                     return False
-
             return True
 
         def leer_resultado(cursor):
-            if not avanzar_hasta_resultado(
-                cursor
-            ):
+            if not avanzar_hasta_resultado(cursor):
                 return []
 
-            columnas = [
-                columna[0]
-                for columna in cursor.description
-            ]
-
-            filas = [
-                dict(
-                    zip(
-                        columnas,
-                        fila,
-                    )
-                )
-                for fila in cursor.fetchall()
-            ]
-
+            columnas = [columna[0] for columna in cursor.description]
+            filas = [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
             cursor.nextset()
-
             return filas
 
         with connections[DB_ALIAS].cursor() as cursor:
-            cursor.execute(
-                consulta,
-                parametros,
-            )
+            cursor.execute(consulta, parametros)
 
-            resultados_totales = leer_resultado(
-                cursor
-            )
+            resultados_totales = leer_resultado(cursor)
+            por_capa = leer_resultado(cursor)
+            por_categoria_movimiento = leer_resultado(cursor)
+            por_agencia = leer_resultado(cursor)
+            por_grupo = leer_resultado(cursor)
+            por_categoria = leer_resultado(cursor)
+            por_antiguedad = leer_resultado(cursor)
 
-            por_capa = leer_resultado(
-                cursor
-            )
-
-            por_categoria_movimiento = leer_resultado(
-                cursor
-            )
-
-            por_agencia = leer_resultado(
-                cursor
-            )
-
-            por_grupo = leer_resultado(
-                cursor
-            )
-
-            por_categoria = leer_resultado(
-                cursor
-            )
-
-            por_antiguedad = leer_resultado(
-                cursor
-            )
-
-        totales = (
-            resultados_totales[0]
-            if resultados_totales
-            else {
-                "registros": 0,
-                "productos": 0,
-                "qt_inventario": 0,
-                "existencia": 0,
-                "valor_estoque": 0,
-                "reservada": 0,
-                "pedida": 0,
-                "promedio_dias_movimiento": 0,
-            }
-        )
+        totales = resultados_totales[0] if resultados_totales else {
+            "registros": 0,
+            "productos": 0,
+            "qt_inventario": 0,
+            "existencia": 0,
+            "reservada": 0,
+            "pedida": 0,
+            "disponible": 0,
+            "valor_inventario": 0,
+            "valor_stock": 0,
+            "valor_reservado": 0,
+            "valor_disponible": 0,
+            "valor_pendiente": 0,
+            "valor_obsoleto": 0,
+            "porcentaje_obsolescencia": 0,
+            "relacion_reservada_pedida": 0,
+            "promedio_dias_movimiento": 0,
+        }
 
         return Response({
             "totales": totales,
-
             "graficas": {
                 "por_capa": por_capa,
                 "por_categoria_movimiento": por_categoria_movimiento,
@@ -956,88 +840,39 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                 "por_antiguedad": por_antiguedad,
             },
         })
-
-
+    
 class InventarioRefaccionesObsolescenciaOpcionesView(APIView):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        opciones_cache = cache.get(
-            CACHE_OPCIONES
-        )
+        opciones_cache = cache.get(CACHE_OPCIONES)
 
         if opciones_cache:
-            return Response(
-                opciones_cache
-            )
+            return Response(opciones_cache)
 
         def valores_distintos(cursor, columna):
             consulta = f"""
                 SELECT DISTINCT
-                    LTRIM(
-                        RTRIM(
-                            {columna}
-                        )
-                    ) AS valor
-
+                    LTRIM(RTRIM({columna})) AS valor
                 FROM {TABLA}
-
                 WHERE {columna} IS NOT NULL
-                  AND LTRIM(
-                        RTRIM(
-                            {columna}
-                        )
-                      ) <> ''
-
-                ORDER BY
-                    valor
+                  AND LTRIM(RTRIM({columna})) <> ''
+                ORDER BY valor
             """
 
-            cursor.execute(
-                consulta
-            )
-
-            return [
-                fila[0]
-                for fila in cursor.fetchall()
-                if fila[0]
-            ]
+            cursor.execute(consulta)
+            return [fila[0] for fila in cursor.fetchall() if fila[0]]
 
         with connections[DB_ALIAS].cursor() as cursor:
             opciones = {
-                "agencias": valores_distintos(
-                    cursor,
-                    "Agencia",
-                ),
-
-                "grupos_principales": valores_distintos(
-                    cursor,
-                    "GrupoPrincipal",
-                ),
-
-                "categorias": valores_distintos(
-                    cursor,
-                    "Categoria",
-                ),
-
-                "capas_obsolescencia": valores_distintos(
-                    cursor,
-                    "Capa_Obsolescencia",
-                ),
-
-                "categorias_movimiento": valores_distintos(
-                    cursor,
-                    "Categoria_Movimiento",
-                ),
+                "agencias": valores_distintos(cursor, "Agencia"),
+                "grupos_principales": valores_distintos(cursor, "GrupoPrincipal"),
+                "categorias": valores_distintos(cursor, "Categoria"),
+                "capas_obsolescencia": valores_distintos(cursor, "Capa_Obsolescencia"),
+                "categorias_movimiento": valores_distintos(cursor, "Categoria_Movimiento"),
             }
 
-        cache.set(
-            CACHE_OPCIONES,
-            opciones,
-            300,
-        )
+        cache.set(CACHE_OPCIONES, opciones, 300)
+        return Response(opciones)
 
-        return Response(
-            opciones
-        )
