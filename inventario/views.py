@@ -1,9 +1,6 @@
 # inventario/views.py
-from datetime import date
-
 from django.db import connections
 from django.http import JsonResponse
-from django.utils import timezone
 
 
 AGENCIAS = {
@@ -38,7 +35,8 @@ ESTATUS_EXCLUIDOS = [
 def _filtros_desde_request(request, solo_activos=False):
     condiciones = [
         "DN_Atual IS NOT NULL",
-        "DN_Atual <> '0'",
+        "LTRIM(RTRIM(DN_Atual)) <> ''",
+        "LTRIM(RTRIM(DN_Atual)) <> '0'",
     ]
 
     parametros = []
@@ -46,15 +44,13 @@ def _filtros_desde_request(request, solo_activos=False):
     agencia = request.GET.get("agencia")
 
     if agencia:
-        condiciones.append("DN_Atual = %s")
+        condiciones.append("LTRIM(RTRIM(DN_Atual)) = %s")
         parametros.append(agencia)
 
     estatus = request.GET.get("estatus")
 
     if estatus:
-        condiciones.append(
-            "LTRIM(RTRIM(StEstoque)) = %s"
-        )
+        condiciones.append("LTRIM(RTRIM(StEstoque)) = %s")
         parametros.append(estatus)
 
     if solo_activos:
@@ -64,128 +60,121 @@ def _filtros_desde_request(request, solo_activos=False):
 
         condiciones.append(
             f"""
-            LTRIM(
-                RTRIM(
-                    COALESCE(StEstoque, '')
-                )
-            ) NOT IN ({placeholders})
+            LTRIM(RTRIM(COALESCE(StEstoque, '')))
+            NOT IN ({placeholders})
             """
         )
 
         parametros.extend(ESTATUS_EXCLUIDOS)
 
-    where_sql = " AND ".join(condiciones)
-
-    return where_sql, parametros
+    return " AND ".join(condiciones), parametros
 
 
 def _agencia_nombre(codigo):
-    return AGENCIAS.get(codigo, codigo)
+    codigo = str(codigo or "").strip()
+    return AGENCIAS.get(codigo, codigo or "Sin agencia")
 
 
 def _estatus_nombre(codigo):
-    if codigo is None:
-        return "Sin estatus"
-
-    codigo = codigo.strip()
-
+    codigo = str(codigo or "").strip()
     return ESTATUS_STOCK.get(
         codigo,
         codigo or "Sin estatus",
     )
 
 
-def _calcular_dias(dt_valor):
+def get_inventario(request):
     """
-    Calcula los días transcurridos desde
-    la fecha de facturación hasta hoy.
+    Regresa el inventario activo.
 
-    Acepta:
-    - datetime
-    - date
+    La antigüedad se calcula directamente en SQL Server porque
+    DtFaturamento está almacenado como nvarchar.
+
+    Soporta:
+    - YYYY-MM-DD HH:MM:SS
     - YYYY-MM-DD
     - YYYYMMDD
     """
 
-    if not dt_valor:
-        return None
-
-    try:
-        texto = (
-            str(dt_valor)
-            .strip()[:10]
-            .replace("-", "")
-        )
-
-        if len(texto) < 8:
-            return None
-
-        fecha = date(
-            int(texto[0:4]),
-            int(texto[4:6]),
-            int(texto[6:8]),
-        )
-
-        # Evita fechas dummy como 0001-01-01.
-        if fecha.year <= 1900:
-            return None
-
-        hoy = timezone.localdate()
-
-        return (hoy - fecha).days
-
-    except Exception:
-        return None
-
-
-def _antiguedad_bucket(dias):
-    if dias is None:
-        return None
-
-    if dias <= 30:
-        return "0-30"
-
-    if dias <= 60:
-        return "31-60"
-
-    if dias <= 90:
-        return "61-90"
-
-    if dias <= 120:
-        return "91-120"
-
-    return "+120"
-
-
-def get_inventario(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
         SELECT
-            DN_Atual,
-            NrChassi,
-            NmFamilia,
-            NmMarca,
-            SitVeiculo,
-            StEstoque,
-            TpNacImp,
-            ModalVda,
-            EdiModelo,
-            CondUso,
-            DtFaturamento,
-            VrNF_Compra
-        FROM dbo.Listado_Vehiculos_VW
+            v.DN_Atual,
+            v.NrChassi,
+            v.NmFamilia,
+            v.NmMarca,
+            v.SitVeiculo,
+            v.StEstoque,
+            v.TpNacImp,
+            v.ModalVda,
+            v.EdiModelo,
+            v.CondUso,
+
+            CASE
+                WHEN f.FechaFacturacion IS NULL
+                    THEN NULL
+                WHEN f.FechaFacturacion < CONVERT(DATE, '19000101', 112)
+                    THEN NULL
+                ELSE CONVERT(
+                    VARCHAR(10),
+                    f.FechaFacturacion,
+                    23
+                )
+            END AS DtFaturamento,
+
+            CASE
+                WHEN f.FechaFacturacion IS NULL
+                    THEN NULL
+                WHEN f.FechaFacturacion < CONVERT(DATE, '19000101', 112)
+                    THEN NULL
+                WHEN f.FechaFacturacion > CAST(GETDATE() AS DATE)
+                    THEN NULL
+                ELSE DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                )
+            END AS diasEnStock,
+
+            v.VrNF_Compra
+
+        FROM dbo.Listado_Vehiculos_VW v
+
+        OUTER APPLY (
+            SELECT
+                COALESCE(
+                    TRY_CONVERT(
+                        DATE,
+                        LEFT(
+                            LTRIM(RTRIM(v.DtFaturamento)),
+                            10
+                        ),
+                        23
+                    ),
+                    TRY_CONVERT(
+                        DATE,
+                        LEFT(
+                            LTRIM(RTRIM(v.DtFaturamento)),
+                            8
+                        ),
+                        112
+                    )
+                ) AS FechaFacturacion
+        ) f
+
         WHERE {where_sql}
+
+        ORDER BY
+            diasEnStock DESC,
+            v.DN_Atual,
+            v.NrChassi
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
 
         columns = [
@@ -199,34 +188,35 @@ def get_inventario(request):
         ]
 
     for row in rows:
-        row["agenciaNombre"] = (
-            _agencia_nombre(
-                row.get("DN_Atual")
+        row["DN_Atual"] = str(
+            row.get("DN_Atual") or ""
+        ).strip()
+
+        row["StEstoque"] = str(
+            row.get("StEstoque") or ""
+        ).strip()
+
+        row["CondUso"] = str(
+            row.get("CondUso") or ""
+        ).strip()
+
+        row["agenciaNombre"] = _agencia_nombre(
+            row.get("DN_Atual")
+        )
+
+        row["estatusNombre"] = _estatus_nombre(
+            row.get("StEstoque")
+        )
+
+        if row.get("VrNF_Compra") is not None:
+            row["VrNF_Compra"] = float(
+                row["VrNF_Compra"]
             )
-        )
 
-        row["estatusNombre"] = (
-            _estatus_nombre(
-                row.get("StEstoque")
+        if row.get("diasEnStock") is not None:
+            row["diasEnStock"] = int(
+                row["diasEnStock"]
             )
-        )
-
-        row["diasEnStock"] = (
-            _calcular_dias(
-                row.get("DtFaturamento")
-            )
-        )
-
-        row["DtFaturamento"] = str(
-            row.get("DtFaturamento") or ""
-        )[:10]
-
-        row["VrNF_Compra"] = (
-            float(row["VrNF_Compra"])
-            if row.get("VrNF_Compra")
-            is not None
-            else None
-        )
 
     return JsonResponse({
         "data": rows
@@ -234,11 +224,9 @@ def get_inventario(request):
 
 
 def get_inventario_costo(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
@@ -247,13 +235,13 @@ def get_inventario_costo(request):
                 SUM(VrNF_Compra),
                 0
             ) AS costo_total
+
         FROM dbo.Listado_Vehiculos_VW
+
         WHERE {where_sql}
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         row = cursor.fetchone()
 
@@ -269,23 +257,122 @@ def get_inventario_costo(request):
 
 
 def get_inventario_antiguedad(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    """
+    Calcula directamente en SQL Server la antigüedad.
+
+    Así evitamos volver a convertir las fechas en Python.
+    """
+
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
         SELECT
-            DtFaturamento
-        FROM dbo.Listado_Vehiculos_VW
+            CASE
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 30
+                    THEN '0-30'
+
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 60
+                    THEN '31-60'
+
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 90
+                    THEN '61-90'
+
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 120
+                    THEN '91-120'
+
+                ELSE '+120'
+            END AS rango,
+
+            COUNT(*) AS total
+
+        FROM dbo.Listado_Vehiculos_VW v
+
+        OUTER APPLY (
+            SELECT
+                COALESCE(
+                    TRY_CONVERT(
+                        DATE,
+                        LEFT(
+                            LTRIM(RTRIM(v.DtFaturamento)),
+                            10
+                        ),
+                        23
+                    ),
+                    TRY_CONVERT(
+                        DATE,
+                        LEFT(
+                            LTRIM(RTRIM(v.DtFaturamento)),
+                            8
+                        ),
+                        112
+                    )
+                ) AS FechaFacturacion
+        ) f
+
         WHERE {where_sql}
+
+          AND f.FechaFacturacion IS NOT NULL
+
+          AND f.FechaFacturacion >=
+              CONVERT(DATE, '19000101', 112)
+
+          AND f.FechaFacturacion <=
+              CAST(GETDATE() AS DATE)
+
+        GROUP BY
+            CASE
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 30
+                    THEN '0-30'
+
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 60
+                    THEN '31-60'
+
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 90
+                    THEN '61-90'
+
+                WHEN DATEDIFF(
+                    DAY,
+                    f.FechaFacturacion,
+                    CAST(GETDATE() AS DATE)
+                ) <= 120
+                    THEN '91-120'
+
+                ELSE '+120'
+            END
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -297,17 +384,9 @@ def get_inventario_antiguedad(request):
         "+120": 0,
     }
 
-    for (dt_faturamento,) in rows:
-        dias = _calcular_dias(
-            dt_faturamento
-        )
-
-        bucket = _antiguedad_bucket(
-            dias
-        )
-
-        if bucket:
-            buckets[bucket] += 1
+    for rango, total in rows:
+        if rango in buckets:
+            buckets[rango] = int(total)
 
     data = [
         {
@@ -323,36 +402,34 @@ def get_inventario_antiguedad(request):
 
 
 def get_inventario_por_agencia(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
         SELECT
             DN_Atual,
             COUNT(*) AS total
+
         FROM dbo.Listado_Vehiculos_VW
+
         WHERE {where_sql}
+
         GROUP BY DN_Atual
+
         ORDER BY total DESC
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
     data = [
         {
-            "agencia": codigo,
-            "agenciaNombre": (
-                _agencia_nombre(codigo)
-            ),
-            "total": total,
+            "agencia": str(codigo or "").strip(),
+            "agenciaNombre": _agencia_nombre(codigo),
+            "total": int(total),
         }
         for codigo, total in rows
     ]
@@ -363,38 +440,34 @@ def get_inventario_por_agencia(request):
 
 
 def get_inventario_por_estatus(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
         SELECT
             StEstoque,
             COUNT(*) AS total
+
         FROM dbo.Listado_Vehiculos_VW
+
         WHERE {where_sql}
+
         GROUP BY StEstoque
+
         ORDER BY total DESC
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
     data = [
         {
-            "estatus": (
-                codigo or ""
-            ).strip(),
-            "estatusNombre": (
-                _estatus_nombre(codigo)
-            ),
-            "total": total,
+            "estatus": str(codigo or "").strip(),
+            "estatusNombre": _estatus_nombre(codigo),
+            "total": int(total),
         }
         for codigo, total in rows
     ]
@@ -405,11 +478,9 @@ def get_inventario_por_estatus(request):
 
 
 def get_inventario_por_marca(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
@@ -417,17 +488,19 @@ def get_inventario_por_marca(request):
             NmMarca,
             NmFamilia,
             COUNT(*) AS total
+
         FROM dbo.Listado_Vehiculos_VW
+
         WHERE {where_sql}
+
         GROUP BY
             NmMarca,
             NmFamilia
+
         ORDER BY total DESC
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -435,7 +508,7 @@ def get_inventario_por_marca(request):
         {
             "marca": marca,
             "familia": familia,
-            "total": total,
+            "total": int(total),
         }
         for marca, familia, total in rows
     ]
@@ -446,11 +519,9 @@ def get_inventario_por_marca(request):
 
 
 def get_inventario_nuevo_usado(request):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
@@ -458,24 +529,26 @@ def get_inventario_nuevo_usado(request):
             DN_Atual,
             CondUso,
             COUNT(*) AS total
+
         FROM dbo.Listado_Vehiculos_VW
+
         WHERE {where_sql}
+
         GROUP BY
             DN_Atual,
             CondUso
+
         ORDER BY DN_Atual
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
     data = []
 
     for codigo, condicion, total in rows:
-        condicion_limpia = (
+        condicion_limpia = str(
             condicion or ""
         ).strip()
 
@@ -492,12 +565,14 @@ def get_inventario_nuevo_usado(request):
             )
 
         data.append({
-            "agencia": codigo,
-            "agenciaNombre": (
-                _agencia_nombre(codigo)
+            "agencia": str(
+                codigo or ""
+            ).strip(),
+            "agenciaNombre": _agencia_nombre(
+                codigo
             ),
             "condicion": condicion_nombre,
-            "total": total,
+            "total": int(total),
         })
 
     return JsonResponse({
@@ -505,29 +580,27 @@ def get_inventario_nuevo_usado(request):
     })
 
 
-def get_inventario_nacional_importado(
-    request
-):
-    where_sql, parametros = (
-        _filtros_desde_request(
-            request,
-            solo_activos=True,
-        )
+def get_inventario_nacional_importado(request):
+    where_sql, parametros = _filtros_desde_request(
+        request,
+        solo_activos=True,
     )
 
     query = f"""
         SELECT
             TpNacImp,
             COUNT(*) AS total
+
         FROM dbo.Listado_Vehiculos_VW
+
         WHERE {where_sql}
+
         GROUP BY TpNacImp
+
         ORDER BY total DESC
     """
 
-    with connections[
-        "sqlserver_inv"
-    ].cursor() as cursor:
+    with connections["sqlserver_inv"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -539,7 +612,7 @@ def get_inventario_nacional_importado(
     data = []
 
     for tipo, total in rows:
-        tipo_limpio = (
+        tipo_limpio = str(
             tipo or ""
         ).strip()
 
@@ -549,7 +622,7 @@ def get_inventario_nacional_importado(
                 tipo_limpio,
                 tipo_limpio or "Sin dato",
             ),
-            "total": total,
+            "total": int(total),
         })
 
     return JsonResponse({
