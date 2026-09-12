@@ -242,6 +242,7 @@ def get_inventario_costo(request):
 
         WHERE {where_sql}
         AND NmMarca = 'VOLKSWAGEN'
+        AND SitVeiculo = 'L'
     """
 
     with connections["sqlserver_inv"].cursor() as cursor:
@@ -341,6 +342,7 @@ def get_inventario_antiguedad(request):
           AND f.FechaFacturacion <=
               CAST(GETDATE() AS DATE)
           AND NmMarca = 'VOLKSWAGEN'
+          AND SitVeiculo = 'L'
 
         GROUP BY
             CASE
@@ -421,7 +423,7 @@ def get_inventario_por_agencia(request):
         WHERE {where_sql}
         AND NmMarca = 'VOLKSWAGEN'
         AND SitVeiculo = 'L'
-        
+
         GROUP BY DN_Atual
 
         ORDER BY total DESC
@@ -460,6 +462,7 @@ def get_inventario_por_estatus(request):
 
         WHERE {where_sql}
         AND NmMarca = 'VOLKSWAGEN'
+        AND SitVeiculo = 'L'
 
         GROUP BY StEstoque
 
@@ -500,6 +503,7 @@ def get_inventario_por_marca(request):
 
         WHERE {where_sql}
         AND NmMarca = 'VOLKSWAGEN'
+        AND SitVeiculo = 'L'
 
         GROUP BY
             NmMarca,
@@ -541,6 +545,8 @@ def get_inventario_nuevo_usado(request):
         FROM dbo.Listado_Vehiculos_VW
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
+        AND SitVeiculo = 'L'
 
         GROUP BY
             DN_Atual,
@@ -602,6 +608,8 @@ def get_inventario_nacional_importado(request):
         FROM dbo.Listado_Vehiculos_VW
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
+        AND SitVeiculo = 'L'
 
         GROUP BY TpNacImp
 
