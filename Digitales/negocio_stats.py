@@ -13,7 +13,8 @@ from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from .lineas_negocio import _canal_normalizado
 from .models import ExpedienteDigital, MensajeWhatsApp
 from .prospectos_stats import _filtro_por_agencia, _mes_anterior, _parse_int, _rango_mes
-
+from django.db.models import Exists, OuterRef, Q
+from citas.models import Cita
 
 CANALES = {
     "whatsapp": "WhatsApp",
@@ -46,6 +47,11 @@ CAMPOS_COHORTE = (
     "business",
 )
 
+def _filtro_cita_digital():
+    return (
+        Q(tipo_cita__iexact="Digital")
+        | Q(tipo_cita__iexact="Digitales")
+    )
 
 def _texto(valor):
     return str(valor or "").strip()
@@ -74,8 +80,7 @@ def _es_descalificado(fila):
 
 
 def _tiene_cita(fila):
-    return bool(fila.get("ultima_cita_id") or fila.get("ultima_cita_agendada"))
-
+    return bool(fila.get("tiene_cita_digital_periodo"))
 
 def _tiene_cotizacion(fila):
     return bool(_texto(fila.get("id_cotizacion")))
@@ -312,14 +317,65 @@ def _resumen_cohorte(filas, incluir_detalle=True):
 
 def _filas_cohorte(año, mes, agencia):
     inicio, fin = _rango_mes(año, mes)
+
+    # Subconsulta de citas digitales creadas
+    # dentro del mismo periodo seleccionado.
+    citas_digitales = (
+        Cita.objects
+        .filter(
+            cliente_id=OuterRef("cliente_id"),
+            creado_en__gte=inicio,
+            creado_en__lt=fin,
+        )
+        .filter(_filtro_cita_digital())
+    )
+
+    if agencia:
+        citas_digitales = (
+            citas_digitales
+            .filter(_filtro_por_agencia(agencia))
+        )
+
+    citas_digitales_efectivas = (
+        citas_digitales
+        .filter(asistencia=True)
+    )
+
     queryset = (
         ExpedienteDigital.objects
-        .filter(creado__gte=inicio, creado__lt=fin)
+        .filter(
+            creado__gte=inicio,
+            creado__lt=fin,
+        )
         .filter(_filtro_por_agencia(agencia))
-        .values(*CAMPOS_COHORTE)
+        .annotate(
+            tiene_cita_digital_periodo=Exists(
+                citas_digitales
+            ),
+            tiene_cita_digital_efectiva_periodo=Exists(
+                citas_digitales_efectivas
+            ),
+        )
+        .values(
+            *CAMPOS_COHORTE,
+            "tiene_cita_digital_periodo",
+            "tiene_cita_digital_efectiva_periodo",
+        )
     )
-    return list(queryset), inicio, fin
 
+    filas = list(queryset)
+
+    # _resumen_cohorte ya utiliza fila["asistencia"].
+    # La sustituimos por la asistencia REAL de una cita
+    # digital creada dentro del periodo.
+    for fila in filas:
+        fila["asistencia"] = bool(
+            fila.get(
+                "tiene_cita_digital_efectiva_periodo"
+            )
+        )
+
+    return filas, inicio, fin
 
 def _ritmo_periodo(total, año, mes):
     hoy = date.today()
