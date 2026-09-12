@@ -13,13 +13,13 @@ AGENCIAS = {
 
 ESTATUS_STOCK = {
     "V": "Vendido",
-    "E": "En Stock",
+    "E": "Entregadas",
     "T": "En Tránsito",
     "P": "Programado",
-    "O": "Otra Localidad",
-    "X": "En Exposición",
+    "O": "Otro",
+    "X": "Canceladas",
     "D": "Devuelto",
-    "C": "En Consignación",
+    "C": "",
 }
 
 ESTATUS_EXCLUIDOS = [
