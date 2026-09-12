@@ -420,7 +420,8 @@ def get_inventario_por_agencia(request):
 
         WHERE {where_sql}
         AND NmMarca = 'VOLKSWAGEN'
-
+        AND SitVeiculo = 'L'
+        
         GROUP BY DN_Atual
 
         ORDER BY total DESC
