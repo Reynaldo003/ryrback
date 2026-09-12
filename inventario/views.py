@@ -167,6 +167,8 @@ def get_inventario(request):
         ) f
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
+        AND SitVeiculo = 'L'
 
         ORDER BY
             diasEnStock DESC,
@@ -239,6 +241,7 @@ def get_inventario_costo(request):
         FROM dbo.Listado_Vehiculos_VW
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
     """
 
     with connections["sqlserver_inv"].cursor() as cursor:
@@ -337,6 +340,7 @@ def get_inventario_antiguedad(request):
 
           AND f.FechaFacturacion <=
               CAST(GETDATE() AS DATE)
+          AND NmMarca = 'VOLKSWAGEN'
 
         GROUP BY
             CASE
@@ -415,6 +419,7 @@ def get_inventario_por_agencia(request):
         FROM dbo.Listado_Vehiculos_VW
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
 
         GROUP BY DN_Atual
 
@@ -453,6 +458,7 @@ def get_inventario_por_estatus(request):
         FROM dbo.Listado_Vehiculos_VW
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
 
         GROUP BY StEstoque
 
@@ -492,6 +498,7 @@ def get_inventario_por_marca(request):
         FROM dbo.Listado_Vehiculos_VW
 
         WHERE {where_sql}
+        AND NmMarca = 'VOLKSWAGEN'
 
         GROUP BY
             NmMarca,
