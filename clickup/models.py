@@ -50,6 +50,7 @@ class MiembroEquipo(models.Model):
         related_name="membresias_equipo",
     )
     rol = models.CharField(max_length=12, choices=ROLES, default="MEMBER")
+    color = models.CharField(max_length=20, blank=True, null=True)
     unido_en = models.DateTimeField(auto_now_add=True)
     activo = models.BooleanField(default=True)
 

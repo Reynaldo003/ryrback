@@ -45,7 +45,7 @@ class MiembroEquipoSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = MiembroEquipo
-        fields = ("id", "equipo", "usuario", "rol", "unido_en", "activo")
+        fields = ("id", "equipo", "usuario", "rol", "color", "unido_en", "activo")
         read_only_fields = ("id", "unido_en")
 
 

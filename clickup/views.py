@@ -1,6 +1,10 @@
 # clickup/views.py
+import os
+import re
+import requests as http_requests  
 from django.db import models, transaction
 from django.db.models import Q
+from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework import status, viewsets
 from rest_framework.views import APIView
@@ -8,8 +12,6 @@ from rest_framework.decorators import action
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
-import os
-import requests as http_requests  
 
 from .authentication import UsuarioJWTAuthentication
 from datetime import date
@@ -195,6 +197,29 @@ class EquipoViewSet(viewsets.ModelViewSet):
             .order_by("id")
         )
         return Response(MiembroEquipoSerializer(qs, many=True).data)
+
+    @action(
+        detail=True,
+        methods=["patch"],
+        url_path=r"miembros/(?P<miembro_id>\d+)/color",
+        permission_classes=[IsAuthenticated, EsMiembroEquipo],
+    )
+    def asignar_color_miembro(self, request, pk=None, miembro_id=None):
+        miembro = get_object_or_404(
+            MiembroEquipo,
+            equipo_id=pk,
+            id=miembro_id,
+            activo=True,
+        )
+        color = str(request.data.get("color") or "").strip()
+        if color and not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+            return Response(
+                {"detail": "Color inválido, usa formato #RRGGBB."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        miembro.color = color or None
+        miembro.save(update_fields=["color"])
+        return Response(MiembroEquipoSerializer(miembro).data)
 
     @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, EsAdminOPropietarioEquipo])
     def invitaciones(self, request, pk=None):

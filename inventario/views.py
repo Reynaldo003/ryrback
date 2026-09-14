@@ -53,6 +53,29 @@ def _filtros_desde_request(request, solo_activos=False):
         condiciones.append("LTRIM(RTRIM(StEstoque)) = %s")
         parametros.append(estatus)
 
+    modelos = request.GET.get("modelos")
+
+    if modelos:
+        lista = [
+            modelo.strip()
+            for modelo in modelos.split(",")
+            if modelo.strip()
+        ]
+
+        if lista:
+            like_clauses = []
+
+            for modelo in lista:
+                like_clauses.append(
+                    "UPPER(LTRIM(RTRIM(NmFamilia))) LIKE UPPER(%s)"
+                )
+
+                parametros.append(f"{modelo}%")
+
+            condiciones.append(
+                f"({' OR '.join(like_clauses)})"
+            )
+
     if solo_activos:
         placeholders = ", ".join(
             ["%s"] * len(ESTATUS_EXCLUIDOS)
