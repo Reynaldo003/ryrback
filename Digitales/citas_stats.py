@@ -31,10 +31,7 @@ def _porcentaje(parte, total):
 
 
 def _filtro_cita_digital():
-    return (
-        Q(tipo_cita__iexact="Digital")
-        | Q(tipo_cita__iexact="Digitales")
-    )
+    return (Q(tipo_cita__iexact="Digital"))
 
 
 @api_view(["GET"])
@@ -79,13 +76,11 @@ def citas_stats_view(request):
     # Además, solamente se consideran citas digitales.
     base = (
         Cita.objects
-        .filter(
-            creado_en__gte=inicio,
-            creado_en__lt=fin,
-        )
+        .filter(creado_en__gte=inicio,creado_en__lt=fin,)
         .filter(filtro_agencia)
         .filter(_filtro_cita_digital())
     )
+    print(f"""citas {base.count()}""")
 
     concertadas = base.count()
 

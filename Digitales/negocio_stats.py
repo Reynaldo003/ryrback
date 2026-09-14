@@ -48,10 +48,7 @@ CAMPOS_COHORTE = (
 )
 
 def _filtro_cita_digital():
-    return (
-        Q(tipo_cita__iexact="Digital")
-        | Q(tipo_cita__iexact="Digitales")
-    )
+    return (Q(tipo_cita__iexact="Digital"))
 
 def _texto(valor):
     return str(valor or "").strip()
@@ -336,17 +333,11 @@ def _filas_cohorte(año, mes, agencia):
             .filter(_filtro_por_agencia(agencia))
         )
 
-    citas_digitales_efectivas = (
-        citas_digitales
-        .filter(asistencia=True)
-    )
+    citas_digitales_efectivas = (citas_digitales.filter(asistencia=True))
 
     queryset = (
         ExpedienteDigital.objects
-        .filter(
-            creado__gte=inicio,
-            creado__lt=fin,
-        )
+        .filter(creado__gte=inicio, creado__lt=fin,)
         .filter(_filtro_por_agencia(agencia))
         .annotate(
             tiene_cita_digital_periodo=Exists(
