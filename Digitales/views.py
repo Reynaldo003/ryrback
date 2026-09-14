@@ -13,15 +13,29 @@ import re
 from django.conf import settings
 from django.db import close_old_connections
 from django.core.files.storage import default_storage
-from django.db.models import Case, Count, IntegerField, OuterRef, Q, Subquery, Value, When
+from django.db.models import (
+    Avg,
+    Case,
+    Count,
+    DurationField,
+    ExpressionWrapper,
+    F,
+    IntegerField,
+    OuterRef,
+    Q,
+    Subquery,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce
 from django.http import HttpResponse
 from django.utils import timezone
-from django.utils.dateparse import parse_datetime
+from django.utils.dateparse import parse_date, parse_datetime
 from django.views.decorators.csrf import csrf_exempt
 
 from requests import request
 from rest_framework import status, viewsets
+from rest_framework.pagination import PageNumberPagination
 from rest_framework.decorators import api_view, permission_classes, parser_classes, authentication_classes, action
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
@@ -102,11 +116,32 @@ _cat_logger = logging.getLogger(__name__)
 
 
 # ── ViewSet ───────────────────────────────────────────────────────────────────
+class ProspectosPagination(PageNumberPagination):
+    page_size = 200
+    page_size_query_param = "page_size"
+    max_page_size = 1000
+
+
 class ProspectosViewSet(viewsets.ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
     serializer_class = ProspectoSerializer
     parser_classes = [JSONParser, MultiPartParser, FormParser]
+    pagination_class = ProspectosPagination
+
+    def paginate_queryset(self, queryset):
+        """
+        Compatibilidad:
+        - Con page/page_size -> paginación real en backend.
+        - Sin page/page_size -> conserva la respuesta completa actual.
+        """
+        if (
+            "page" not in self.request.query_params
+            and "page_size" not in self.request.query_params
+        ):
+            return None
+
+        return super().paginate_queryset(queryset)
 
     CAMPOS_AUDITABLES = (
         "estado",
@@ -212,6 +247,212 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             numero_asesor=numero_asesor,
         )
 
+    def _aplicar_filtros_listado(self, queryset):
+        params = self.request.query_params
+
+        search = (params.get("search") or "").strip()
+        agencia = (params.get("agencia") or "").strip()
+        estado = (params.get("estado") or "").strip()
+        business = (params.get("business") or "").strip()
+
+        buro = (params.get("buro") or "").strip()
+        forma_pago = (params.get("forma_pago") or "").strip()
+        tipo_cliente = (params.get("tipo_cliente") or "").strip()
+
+        fecha_registro_desde = parse_date(
+            (params.get("fecha_registro_desde") or "").strip()
+        )
+        fecha_registro_hasta = parse_date(
+            (params.get("fecha_registro_hasta") or "").strip()
+        )
+        sort_key = (params.get("sort_key") or "").strip()
+        sort_dir = (
+            "desc"
+            if (params.get("sort_dir") or "").strip().lower() == "desc"
+            else "asc"
+        )
+        if search:
+            filtro = (
+                Q(cliente__nombre__icontains=search)
+                | Q(cliente__telefono__icontains=search)
+                | Q(cliente__correo__icontains=search)
+                | Q(agencia__icontains=search)
+                | Q(business__icontains=search)
+                | Q(canal_contacto__icontains=search)
+                | Q(pauta__icontains=search)
+                | Q(estado__icontains=search)
+                | Q(motivo_descalificacion__icontains=search)
+                | Q(comentarios__icontains=search)
+                | Q(asesor_digital__icontains=search)
+                | Q(asesor_ventas__icontains=search)
+                | Q(auto_interes__icontains=search)
+                | Q(buro_estado__icontains=search)
+                | Q(forma_pago__icontains=search)
+                | Q(tipo_cliente__icontains=search)
+                | Q(plazo_compra__icontains=search)
+                | Q(uso_vehiculo__icontains=search)
+                | Q(comprobacion_ingresos__icontains=search)
+            )
+
+            if search.isdigit():
+                filtro |= Q(id=int(search)) | Q(cliente_id=int(search))
+
+            queryset = queryset.filter(filtro)
+
+        if agencia:
+            agencia_normalizada = agencia.casefold()
+
+            if "cordoba" in agencia_normalizada or "córdoba" in agencia_normalizada:
+                queryset = queryset.filter(
+                    Q(agencia__icontains="Cordoba")
+                    | Q(agencia__icontains="Córdoba")
+                )
+            elif "orizaba" in agencia_normalizada:
+                queryset = queryset.filter(agencia__icontains="Orizaba")
+            elif "poza rica" in agencia_normalizada:
+                queryset = queryset.filter(agencia__icontains="Poza Rica")
+            elif "tuxtepec" in agencia_normalizada:
+                queryset = queryset.filter(agencia__icontains="Tuxtepec")
+            elif "tuxpan" in agencia_normalizada:
+                queryset = queryset.filter(agencia__icontains="Tuxpan")
+            else:
+                queryset = queryset.filter(agencia__iexact=agencia)
+
+        if estado:
+            queryset = queryset.filter(estado__iexact=estado)
+
+        if business:
+            queryset = queryset.filter(business__iexact=business)
+
+        if buro:
+            queryset = queryset.filter(buro_estado__iexact=buro)
+
+        if forma_pago:
+            queryset = queryset.filter(forma_pago__iexact=forma_pago)
+
+        if tipo_cliente:
+            queryset = queryset.filter(tipo_cliente__iexact=tipo_cliente)
+
+        if fecha_registro_desde:
+            queryset = queryset.filter(
+                creado__date__gte=fecha_registro_desde
+            )
+
+        if fecha_registro_hasta:
+            queryset = queryset.filter(
+                creado__date__lte=fecha_registro_hasta
+            )
+
+        sort_fields = {
+            "agencia": "agencia",
+            "fecha_reclamacion": "creado",
+            "primer_contacto_at": "primer_mensaje_cliente",
+            "ultimo_contacto_at": "ultimo_contacto_asesor",
+            "estado": "estado",
+        }
+
+        sort_field = sort_fields.get(sort_key)
+
+        if sort_field:
+            if sort_dir == "desc":
+                orden = F(sort_field).desc(
+                    nulls_last=True
+                )
+            else:
+                orden = F(sort_field).asc(
+                    nulls_first=True
+                )
+
+            queryset = queryset.order_by(
+                orden,
+                "id",
+            )
+
+        return queryset
+
+    def _calcular_kpis_listado(self, queryset):
+        perfil_comercial = (
+            Q(enganche_monto__gt=0)
+            | Q(presupuesto_mensual__gt=0)
+            | ~Q(buro_estado="")
+            | ~Q(forma_pago="")
+            | ~Q(tipo_cliente="")
+            | ~Q(uso_vehiculo="")
+            | ~Q(plazo_compra="")
+            | ~Q(comprobacion_ingresos="")
+        )
+
+        pendientes_ia = (
+            Q(cotizacion_pendiente=True)
+            | Q(requiere_asesor=True)
+        )
+
+        financiamiento = (
+            Q(forma_pago__iexact="credito")
+            | Q(forma_pago__iexact="crédito")
+            | Q(forma_pago__iexact="arrendamiento")
+        )
+
+        respuesta_valida = (
+            Q(primer_mensaje_cliente__isnull=False)
+            & Q(primer_mensaje_cliente__gt=F("creado"))
+            & Q(
+                primer_mensaje_cliente__lt=(
+                    F("creado") + timedelta(days=1)
+                )
+            )
+        )
+
+        duracion_respuesta = ExpressionWrapper(
+            F("primer_mensaje_cliente") - F("creado"),
+            output_field=DurationField(),
+        )
+
+        datos = queryset.aggregate(
+            total=Count(
+                "id",
+                distinct=True,
+            ),
+            pendIA=Count(
+                "id",
+                filter=pendientes_ia,
+                distinct=True,
+            ),
+            conPerfil=Count(
+                "id",
+                filter=perfil_comercial,
+                distinct=True,
+            ),
+            financiamiento=Count(
+                "id",
+                filter=financiamiento,
+                distinct=True,
+            ),
+            avgRespDuracion=Avg(
+                duracion_respuesta,
+                filter=respuesta_valida,
+            ),
+        )
+
+        promedio = datos.pop(
+            "avgRespDuracion",
+            None,
+        )
+
+        if promedio is None:
+            datos["avgResp"] = None
+        else:
+            minutos = (
+                promedio.total_seconds()
+                / 60
+            )
+
+            datos["avgResp"] = int(
+                minutos + 0.5
+            )
+
+        return datos
+
     def get_queryset(self):
         user = getattr(
             self.request,
@@ -237,8 +478,18 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 "destroy",
                 "evidencias",
                 "eliminar_evidencia",
-            } or self._solicita_todos():
+            }:
                 return self._base_queryset()
+
+            if self._solicita_todos():
+                queryset = self._base_queryset()
+
+                if accion == "list":
+                    queryset = self._aplicar_filtros_listado(
+                        queryset
+                    )
+
+                return queryset
 
         numero_asesor = (
             _get_numero_asesor_request(
@@ -246,72 +497,52 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             )
         )
 
-        return self._queryset_por_linea(
+        queryset = self._queryset_por_linea(
             numero_asesor
         )
 
-    def get_object(self):
+        if accion == "list":
+            queryset = self._aplicar_filtros_listado(
+                queryset
+            )
+
+        return queryset
+
+    def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(
             self.get_queryset()
         )
 
-        lookup_url_kwarg = (
-            self.lookup_url_kwarg
-            or self.lookup_field
+        page = self.paginate_queryset(
+            queryset
         )
 
-        filter_kwargs = {
-            self.lookup_field: (
-                self.kwargs[lookup_url_kwarg]
+        if page is not None:
+            kpis = self._calcular_kpis_listado(
+                queryset
             )
-        }
 
-        obj = (
-            queryset.filter(
-                **filter_kwargs
-            ).first()
+            serializer = self.get_serializer(
+                page,
+                many=True,
+            )
+
+            response = self.get_paginated_response(
+                serializer.data
+            )
+
+            response.data["kpis"] = kpis
+
+            return response
+
+        serializer = self.get_serializer(
+            queryset,
+            many=True,
         )
 
-        if obj is not None:
-            self.check_object_permissions(
-                self.request,
-                obj,
-            )
-            return obj
-
-        # El expediente no aparece en el queryset restringido por línea,
-        # pero puede estar visible en la conversación (contacto_por_telefono).
-        # Se valida con las mismas reglas de acceso de la conversación antes
-        # de permitir ver o editar el registro.
-        try:
-            obj = self._base_queryset().get(
-                **filter_kwargs
-            )
-        except ExpedienteDigital.DoesNotExist:
-            raise NotFound(
-                "No se encontró el expediente digital "
-                "relacionado. Actualiza la página o "
-                "selecciona nuevamente el registro."
-            )
-
-        numero_asesor = (
-            _get_numero_asesor_request(
-                self.request
-            )
+        return Response(
+            serializer.data
         )
-
-        _validar_acceso_expediente(
-            request=self.request,
-            expediente=obj,
-            numero_asesor=numero_asesor,
-        )
-
-        self.check_object_permissions(
-            self.request,
-            obj,
-        )
-
-        return obj
 
     def perform_create(self, serializer):
         expediente = serializer.save()
