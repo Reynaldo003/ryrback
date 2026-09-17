@@ -624,55 +624,59 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
 
 
             -- =====================================================
-            -- 5. GRUPO PRINCIPAL
-            -- DAX: Valor Stock
+            -- 5. GRUPO PRINCIPAL (top 12)
             -- =====================================================
 
+            IF OBJECT_ID('tempdb..#TopGrupos') IS NOT NULL
+                DROP TABLE #TopGrupos;
+
             SELECT TOP 12
-                COALESCE(
-                    NULLIF(
-                        LTRIM(RTRIM(GrupoPrincipal)),
-                        ''
-                    ),
-                    'Sin grupo'
-                ) AS grupo_principal,
-
-                COUNT(
-                    DISTINCT NULLIF(
-                        LTRIM(RTRIM(CodProduto)),
-                        ''
-                    )
-                ) AS productos,
-
-                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)
-                    AS existencia,
-
-                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)
-                    AS valor_inventario,
-
-                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)
-                    AS valor_stock,
-
-                COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)
-                    AS valor_disponible,
-
-                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)
-                    AS valor_reservado
-
+                COALESCE(NULLIF(LTRIM(RTRIM(GrupoPrincipal)), ''), 'Sin grupo') AS grupo_principal,
+                COUNT(DISTINCT NULLIF(LTRIM(RTRIM(CodProduto)), '')) AS productos,
+                COALESCE(SUM(COALESCE(QtdeEstoque, 0)), 0)      AS existencia,
+                COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)        AS valor_inventario,
+                COALESCE(SUM(COALESCE(ValorStock, 0)), 0)       AS valor_stock,
+                COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)  AS valor_disponible,
+                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)   AS valor_reservado
+            INTO #TopGrupos
             FROM #Base
+            GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(GrupoPrincipal)), ''), 'Sin grupo')
+            ORDER BY valor_stock DESC;
+
+            SELECT *
+            FROM #TopGrupos
+            ORDER BY valor_stock DESC;
+
+
+            -- =====================================================
+            -- 5b. GRUPO PRINCIPAL x CAPA DE OBSOLESCENCIA
+            -- =====================================================
+
+            SELECT
+                t.grupo_principal,
+
+                COALESCE(NULLIF(LTRIM(RTRIM(b.Capa_Obsolescencia)), ''), 'Sin capa')
+                    AS capa_obsolescencia,
+
+                COUNT(DISTINCT NULLIF(LTRIM(RTRIM(b.CodProduto)), '')) AS productos,
+                COALESCE(SUM(COALESCE(b.QtdeEstoque, 0)), 0)      AS existencia,
+                COALESCE(SUM(COALESCE(b.VrEstoque, 0)), 0)        AS valor_inventario,
+                COALESCE(SUM(COALESCE(b.ValorStock, 0)), 0)       AS valor_stock,
+                COALESCE(SUM(COALESCE(b.ValorDisponible, 0)), 0)  AS valor_disponible,
+                COALESCE(SUM(COALESCE(b.ValorReservado, 0)), 0)   AS valor_reservado
+
+            FROM #Base AS b
+            INNER JOIN #TopGrupos AS t
+                ON t.grupo_principal =
+                COALESCE(NULLIF(LTRIM(RTRIM(b.GrupoPrincipal)), ''), 'Sin grupo')
 
             GROUP BY
-                COALESCE(
-                    NULLIF(
-                        LTRIM(RTRIM(GrupoPrincipal)),
-                        ''
-                    ),
-                    'Sin grupo'
-                )
+                t.grupo_principal,
+                COALESCE(NULLIF(LTRIM(RTRIM(b.Capa_Obsolescencia)), ''), 'Sin capa')
 
             ORDER BY
-                valor_stock DESC;
-
+                MAX(t.valor_stock) DESC,
+                capa_obsolescencia;
 
             -- =====================================================
             -- 6. CATEGORÍA
