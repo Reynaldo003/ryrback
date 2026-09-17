@@ -7,6 +7,7 @@ from .views import (
 
 from .productos_estoque import ProductosEstoqueListView
 from .inventario_refacciones import InventarioRefaccionesListView
+from .compra_ref_tipificada import CompraRefTipificadaListView
 from .piezas_tipificadas import (
     PiezasJerarquiaListView,
     PiezasObsolescenciaListView,
@@ -25,28 +26,33 @@ urlpatterns = [
         name="ventas-vn-dashboard",
     ),
     path(
-    "api/productos/",
-    ProductosEstoqueListView.as_view(),
-    name="productos-estoque-list",
+        "api/productos/",
+        ProductosEstoqueListView.as_view(),
+        name="productos-estoque-list",
     ),
     path(
-    "api/piezas/",
-    InventarioRefaccionesListView.as_view(),
-    name="inventario-refacciones-list",
-),
+        "api/piezas/",
+        InventarioRefaccionesListView.as_view(),
+        name="inventario-refacciones-list",
+    ),
     path(
-    "api/piezas-tipificadas/",
-    PiezasTipificadasListView.as_view(),
-    name="piezas-tipificadas-list",
-),
+        "api/piezas-tipificadas/",
+        PiezasTipificadasListView.as_view(),
+        name="piezas-tipificadas-list",
+    ),
     path(
-    "api/piezas-tipificadas/obsolescencia/",
-    PiezasObsolescenciaListView.as_view(),
-    name="piezas-tipificadas-obsolescencia",
-),
+        "api/piezas-tipificadas/obsolescencia/",
+        PiezasObsolescenciaListView.as_view(),
+        name="piezas-tipificadas-obsolescencia",
+    ),
     path(
-    "api/piezas-tipificadas/jerarquia/",
-    PiezasJerarquiaListView.as_view(),
-    name="piezas-tipificadas-jerarquia",
-),
+        "api/piezas-tipificadas/jerarquia/",
+        PiezasJerarquiaListView.as_view(),
+        name="piezas-tipificadas-jerarquia",
+    ),
+    path(
+        "api/compra-ref-tipificada/",
+        CompraRefTipificadaListView.as_view(),
+        name="compra-ref-tipificada-list",
+    ),
 ]
