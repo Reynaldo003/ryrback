@@ -811,6 +811,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
             por_categoria_movimiento = leer_resultado(cursor)
             por_agencia = leer_resultado(cursor)
             por_grupo = leer_resultado(cursor)
+            por_grupo_capa = leer_resultado(cursor)
             por_categoria = leer_resultado(cursor)
             por_antiguedad = leer_resultado(cursor)
 
@@ -840,6 +841,7 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                 "por_categoria_movimiento": por_categoria_movimiento,
                 "por_agencia": por_agencia,
                 "por_grupo": por_grupo,
+                "por_grupo_capa": por_grupo_capa,
                 "por_categoria": por_categoria,
                 "por_antiguedad": por_antiguedad,
             },
