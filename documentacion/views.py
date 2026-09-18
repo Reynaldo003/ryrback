@@ -1,7 +1,12 @@
 # documentacion/views.py
 import json
 import unicodedata
+import os
+import re
+import tempfile
+import zipfile
 
+from django.http import FileResponse
 from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -77,19 +82,150 @@ def queryset_expedientes_usuario(usuario):
 
 
 def puede_editar_expediente(usuario, expediente):
-    """
-    Mientras los asesores no tengan cuentas:
-    - Administrador puede editar cualquier expediente.
-    - Usuarios internos pueden editar expedientes de sus Dealers asignados.
-
-    Más adelante, cuando cada asesor tenga Login, aquí podremos restringir
-    nuevamente por usuario/asesor.
-    """
     if es_admin(usuario): return True
 
     agencias = obtener_agencias_usuario(usuario)
     return expediente.agencia in agencias
 
+def limpiar_nombre_archivo(nombre, nombre_default="archivo.pdf"):
+    """
+    Limpia un nombre para poder utilizarlo de forma segura
+    dentro del archivo ZIP.
+    """
+    nombre = os.path.basename(str(nombre or nombre_default)).strip()
+    nombre = re.sub(r'[<>:"/\\|?*\x00-\x1F]',"_",nombre,)
+
+    return nombre or nombre_default
+
+def limpiar_nombre_zip(nombre):
+    """
+    Limpia el nombre final del archivo ZIP.
+    """
+    nombre = str(nombre or "expediente").strip()
+    nombre = re.sub(r'[<>:"/\\|?*\x00-\x1F]',"_",nombre,)
+    nombre = re.sub(r"\s+","_",nombre,)
+
+    return nombre.strip("._") or "expediente"
+
+class ExpedienteDownloadZipView(APIView):
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request, expediente_id):
+        expediente = get_object_or_404(queryset_expedientes_usuario(request.user),pk=expediente_id,)
+        documentos = list(expediente.documentos.all())
+        tiene_solicitud = bool(expediente.solicitud_pdf)
+
+        if not documentos and not tiene_solicitud:
+            return Response(
+                {
+                    "detail": (
+                        "El expediente no tiene archivos "
+                        "disponibles para descargar."
+                    )
+                },
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        archivo_temporal = tempfile.SpooledTemporaryFile(
+            max_size=20 * 1024 * 1024,
+            mode="w+b",
+        )
+
+        archivos_agregados = 0
+
+        try:
+            with zipfile.ZipFile(archivo_temporal,mode="w",compression=zipfile.ZIP_DEFLATED,) as archivo_zip:
+                # ==========================================
+                # DOCUMENTOS CARGADOS AL EXPEDIENTE
+                # ==========================================
+                for documento in documentos:
+                    if not documento.archivo:
+                        continue
+
+                    nombre_original = limpiar_nombre_archivo(
+                        documento.nombre_original,
+                        f"{documento.requisito_id}.pdf",
+                    )
+
+                    requisito_id = limpiar_nombre_archivo(
+                        documento.requisito_id,
+                        f"documento_{documento.id_documento}",
+                    )
+
+                    nombre_dentro_zip = (
+                        f"documentos/"
+                        f"{requisito_id} - {nombre_original}"
+                    )
+
+                    try:
+                        documento.archivo.open("rb")
+
+                        archivo_zip.writestr(
+                            nombre_dentro_zip,
+                            documento.archivo.read(),
+                        )
+
+                        archivos_agregados += 1
+
+                    except (FileNotFoundError, OSError):
+                        continue
+
+                    finally:
+                        try:
+                            documento.archivo.close()
+                        except Exception:
+                            pass
+
+                # ==========================================
+                # SOLICITUD PDF GENERADA
+                # ==========================================
+                if expediente.solicitud_pdf:
+                    try:
+                        expediente.solicitud_pdf.open("rb")
+
+                        nombre_solicitud = limpiar_nombre_archivo(os.path.basename(expediente.solicitud_pdf.name),"solicitud.pdf",)
+                        archivo_zip.writestr(f"solicitud/{nombre_solicitud}",expediente.solicitud_pdf.read(),)
+                        archivos_agregados += 1
+
+                    except (FileNotFoundError, OSError):
+                        pass
+
+                    finally:
+                        try:
+                            expediente.solicitud_pdf.close()
+                        except Exception:
+                            pass
+
+            if archivos_agregados == 0:
+                archivo_temporal.close()
+
+                return Response(
+                    {
+                        "detail": (
+                            "Los archivos del expediente no "
+                            "se encuentran disponibles."
+                        )
+                    },
+                    status=status.HTTP_404_NOT_FOUND,
+                )
+
+            archivo_temporal.seek(0)
+
+            folio = limpiar_nombre_zip(expediente.folio)
+            cliente = limpiar_nombre_zip(expediente.cliente)
+            nombre_zip = (f"{folio}_{cliente}.zip")
+
+            return FileResponse(
+                archivo_temporal,
+                as_attachment=True,
+                filename=nombre_zip,
+                content_type="application/zip",
+            )
+
+        except Exception:
+            archivo_temporal.close()
+            raise
 
 class ExpedienteViewSet(
     mixins.ListModelMixin,
