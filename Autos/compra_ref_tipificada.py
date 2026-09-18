@@ -1,4 +1,6 @@
 # Autos/compra_ref_tipificada.py
+import time
+
 from django.db import connections
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -14,35 +16,51 @@ CATEGORIAS_PROVEEDOR_MAIN = (
     "OTROS",
 )
 
-COLUMNAS_TABLA = """
-    Agencia,
-    NrNota,
-    Serie,
-    DtEntrada,
-    HrEntrada,
-    TpCompra,
-    NrPedCompra,
-    ProdServ,
-    CodProducto,
-    DescrProd,
-    NombreEstandarizado,
-    GrupoPrincipal,
-    Subgrupo,
-    Categoria,
-    EstadoTipificacion,
-    TpProduto,
-    Unidade,
-    QtProdutos,
-    VrUnitLiq,
-    VrUnitBruto,
-    VrDescontos,
-    VrLiqTotal,
-    VrMovEstoq,
-    Cant_pzas_recib,
-    Proveedor,
-    CategoriaProveedor,
-    rowid__
-"""
+_TIPOS_NUMERICOS = {"float", "bigint", "decimal", "int", "smallint", "tinyint", "bit", "money", "smallmoney", "numeric", "real"}
+
+_CACHE_COLUMNAS = {"ts": 0.0, "cols": None}
+
+
+def columnas_tabla(cursor):
+    cursor.execute(
+        """
+        SELECT COLUMN_NAME, DATA_TYPE
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_NAME = %s
+        ORDER BY ORDINAL_POSITION
+        """,
+        [TABLA_COMPRA_REF_TIPIFICADA],
+    )
+    return [(fila[0], fila[1]) for fila in cursor.fetchall()]
+
+
+def columnas_con_datos(cursor):
+    """Devuelve las columnas de la tabla ordenadas, excluyendo las que no
+    tienen ningun valor real (nulas, vacias, o todo ceros). El resultado se
+    cachea en memoria por corto tiempo para no escanear la tabla completa en
+    cada peticion."""
+    if _CACHE_COLUMNAS["cols"] is not None and time.time() - _CACHE_COLUMNAS["ts"] < 600:
+        return _CACHE_COLUMNAS["cols"]
+
+    columnas = columnas_tabla(cursor)
+    expr = []
+    for nombre, tipo in columnas:
+        if tipo.lower() in _TIPOS_NUMERICOS:
+            expr.append(
+                f"SUM(CASE WHEN {nombre} IS NOT NULL AND {nombre} <> 0 THEN 1 ELSE 0 END)"
+            )
+        else:
+            expr.append(
+                f"SUM(CASE WHEN LTRIM(RTRIM(COALESCE(CAST({nombre} AS varchar(4000)), N''))) NOT IN (N'', N'0', N'00000000') THEN 1 ELSE 0 END)"
+            )
+    cursor.execute(
+        f"SELECT {', '.join(expr)} FROM dbo.{TABLA_COMPRA_REF_TIPIFICADA}"
+    )
+    fila = cursor.fetchone()
+    cols = [nombre for nombre, valor in zip((n for n, _ in columnas), fila) if (valor or 0) > 0]
+    _CACHE_COLUMNAS["ts"] = time.time()
+    _CACHE_COLUMNAS["cols"] = cols
+    return cols
 
 
 def dictfetchall(cursor):
@@ -55,9 +73,15 @@ def dictfetchall(cursor):
 
 
 def _fecha_entrada(value):
+    if hasattr(value, "strftime"):
+        return value.strftime("%Y-%m-%d")
     texto = String_or_vacio(value)
     if len(texto) == 8 and texto.isdigit():
+        if texto == "00000000":
+            return None
         return f"{texto[:4]}-{texto[4:6]}-{texto[6:]}"
+    if len(texto) >= 10 and texto[4] == "-" and texto[7] == "-":
+        return texto[:10]
     return texto or None
 
 
@@ -91,6 +115,8 @@ class CompraRefTipificadaListView(APIView):
         q = (request.GET.get("q") or "").strip()
         proveedor = (request.GET.get("proveedor") or "").strip()
         proveedor_nombre = (request.GET.get("proveedor_nombre") or "").strip()
+        anio = (request.GET.get("anio") or "").strip()
+        mes = (request.GET.get("mes") or "").strip()
 
         try:
             page = max(int(request.GET.get("page", 1)), 1)
@@ -110,6 +136,8 @@ class CompraRefTipificadaListView(APIView):
         params = []
 
         with connections["sqlserver_inv"].cursor() as cursor:
+            lista_columnas = columnas_con_datos(cursor)
+
             cursor.execute(
                 f"SELECT DISTINCT Agencia FROM dbo.{TABLA_COMPRA_REF_TIPIFICADA} "
                 "WHERE NULLIF(Agencia, N'') IS NOT NULL ORDER BY Agencia"
@@ -134,6 +162,18 @@ class CompraRefTipificadaListView(APIView):
         if serie and serie != "Todos":
             condiciones.append("Serie = %s")
             params.append(serie)
+
+        if len(anio) == 4 and anio.isdigit():
+            if len(mes) == 2 and mes.isdigit() and 1 <= int(mes) <= 12:
+                condiciones.append(
+                    "SUBSTRING(REPLACE(CAST(DtEntrada AS varchar), '-', ''), 1, 6) = %s"
+                )
+                params.append(f"{anio}{mes}")
+            else:
+                condiciones.append(
+                    "SUBSTRING(REPLACE(CAST(DtEntrada AS varchar), '-', ''), 1, 4) = %s"
+                )
+                params.append(anio)
 
         if q:
             like = f"%{q}%"
@@ -170,16 +210,28 @@ class CompraRefTipificadaListView(APIView):
         """
 
         data_sql = f"""
-            SELECT {COLUMNAS_TABLA}
-            FROM dbo.{TABLA_COMPRA_REF_TIPIFICADA}
-            {where_sql}
+            SELECT {", ".join("t." + c for c in lista_columnas)}
+            FROM dbo.{TABLA_COMPRA_REF_TIPIFICADA} AS t
+            INNER JOIN (
+                SELECT NrNota, Serie, DtEntrada, HrEntrada, rowid__
+                FROM dbo.{TABLA_COMPRA_REF_TIPIFICADA}
+                {where_sql}
+                ORDER BY
+                    DtEntrada DESC,
+                    HrEntrada DESC,
+                    NrNota DESC,
+                    rowid__ DESC
+                OFFSET %s ROWS
+                FETCH NEXT %s ROWS ONLY
+            ) AS p
+                ON t.NrNota = p.NrNota
+                AND t.Serie = p.Serie
+                AND t.rowid__ = p.rowid__
             ORDER BY
-                DtEntrada DESC,
-                HrEntrada DESC,
-                NrNota DESC,
-                rowid__ DESC
-            OFFSET %s ROWS
-            FETCH NEXT %s ROWS ONLY
+                t.DtEntrada DESC,
+                t.HrEntrada DESC,
+                t.NrNota DESC,
+                t.rowid__ DESC
         """
 
         opciones_sql = {
@@ -205,7 +257,6 @@ class CompraRefTipificadaListView(APIView):
 
             cursor.execute(data_sql, params + [offset, page_size])
             resultados = dictfetchall(cursor)
-            columnas = [col[0] for col in cursor.description]
 
             opciones = {"agencias": lista_agencias}
             for clave, plantilla in opciones_sql.items():
@@ -236,7 +287,9 @@ class CompraRefTipificadaListView(APIView):
             ]
 
         for fila in resultados:
-            fila["DtEntrada"] = _fecha_entrada(fila.get("DtEntrada"))
+            for clave in lista_columnas:
+                if clave.startswith(("Dt", "DT_")):
+                    fila[clave] = _fecha_entrada(fila.get(clave))
             fila["HrEntrada"] = _hora_entrada(fila.get("HrEntrada"))
 
         return Response(
@@ -249,7 +302,7 @@ class CompraRefTipificadaListView(APIView):
                     if total
                     else 0
                 ),
-                "columns": columnas,
+                "columns": lista_columnas,
                 "results": resultados,
                 "opciones": opciones,
             }

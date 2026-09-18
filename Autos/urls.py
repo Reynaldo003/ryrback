@@ -8,6 +8,7 @@ from .views import (
 from .productos_estoque import ProductosEstoqueListView
 from .inventario_refacciones import InventarioRefaccionesListView
 from .compra_ref_tipificada import CompraRefTipificadaListView
+from .costo_venta import CostoVentaView
 from .piezas_tipificadas import (
     PiezasJerarquiaListView,
     PiezasObsolescenciaListView,
@@ -54,5 +55,10 @@ urlpatterns = [
         "api/compra-ref-tipificada/",
         CompraRefTipificadaListView.as_view(),
         name="compra-ref-tipificada-list",
+    ),
+    path(
+        "api/costo-venta/",
+        CostoVentaView.as_view(),
+        name="costo-venta",
     ),
 ]
