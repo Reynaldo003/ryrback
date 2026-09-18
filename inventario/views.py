@@ -31,51 +31,122 @@ ESTATUS_EXCLUIDOS = [
     "T",
 ]
 
+MODELOS_COMERCIALES = [
+    "E-CRAFTER",
+    "CRAFTER",
+    "AMAROK",
+    "TRANSPORTER",
+    "CADDY",
+]
 
 def _filtros_desde_request(request, solo_activos=False):
     condiciones = [
         "DN_Atual IS NOT NULL",
         "LTRIM(RTRIM(DN_Atual)) <> ''",
         "LTRIM(RTRIM(DN_Atual)) <> '0'",
+        "LTRIM(RTRIM(COALESCE(CondUso, ''))) = 'N'",
     ]
-
     parametros = []
 
+    # ---------------------------------------------------------
+    # AGENCIA
+    # ---------------------------------------------------------
     agencia = request.GET.get("agencia")
 
     if agencia:
-        condiciones.append("LTRIM(RTRIM(DN_Atual)) = %s")
+        agencia = agencia.strip()
+
+        condiciones.append(
+            "LTRIM(RTRIM(DN_Atual)) = %s"
+        )
         parametros.append(agencia)
 
+        # Córdoba = 2923
+        # Excluir vehículos comerciales.
+        if agencia == "2923":
+            condiciones_comerciales = []
+
+            for modelo in MODELOS_COMERCIALES:
+                condiciones_comerciales.append(
+                    """
+                    UPPER(
+                        LTRIM(
+                            RTRIM(
+                                COALESCE(NmFamilia, '')
+                            )
+                        )
+                    ) LIKE UPPER(%s)
+                    """
+                )
+
+                parametros.append(
+                    f"%{modelo}%"
+                )
+
+            condiciones.append(
+                f"""
+                NOT (
+                    {' OR '.join(condiciones_comerciales)}
+                )
+                """
+            )
+
+    # ---------------------------------------------------------
+    # ESTATUS
+    # ---------------------------------------------------------
     estatus = request.GET.get("estatus")
 
     if estatus:
-        condiciones.append("LTRIM(RTRIM(StEstoque)) = %s")
-        parametros.append(estatus)
+        condiciones.append(
+            "LTRIM(RTRIM(StEstoque)) = %s"
+        )
+        parametros.append(
+            estatus.strip()
+        )
 
+    # ---------------------------------------------------------
+    # R&R VEHÍCULOS COMERCIALES
+    # ---------------------------------------------------------
     modelos = request.GET.get("modelos")
 
     if modelos:
-        lista = [
+        lista_modelos = [
             modelo.strip()
             for modelo in modelos.split(",")
             if modelo.strip()
         ]
 
-        if lista:
-            like_clauses = []
+        if lista_modelos:
+            condiciones_modelos = []
 
-            for modelo in lista:
-                like_clauses.append(
-                    "UPPER(LTRIM(RTRIM(NmFamilia))) LIKE UPPER(%s)"
+            for modelo in lista_modelos:
+                condiciones_modelos.append(
+                    """
+                    UPPER(
+                        LTRIM(
+                            RTRIM(
+                                COALESCE(NmFamilia, '')
+                            )
+                        )
+                    ) LIKE UPPER(%s)
+                    """
                 )
 
-                parametros.append(f"{modelo}%")
+                parametros.append(
+                    f"%{modelo}%"
+                )
 
             condiciones.append(
-                f"({' OR '.join(like_clauses)})"
+                f"""
+                (
+                    {' OR '.join(condiciones_modelos)}
+                )
+                """
             )
 
+    # ---------------------------------------------------------
+    # SOLO INVENTARIO ACTIVO
+    # ---------------------------------------------------------
     if solo_activos:
         placeholders = ", ".join(
             ["%s"] * len(ESTATUS_EXCLUIDOS)
@@ -83,15 +154,20 @@ def _filtros_desde_request(request, solo_activos=False):
 
         condiciones.append(
             f"""
-            LTRIM(RTRIM(COALESCE(StEstoque, '')))
+            LTRIM(
+                RTRIM(
+                    COALESCE(StEstoque, '')
+                )
+            )
             NOT IN ({placeholders})
             """
         )
 
-        parametros.extend(ESTATUS_EXCLUIDOS)
+        parametros.extend(
+            ESTATUS_EXCLUIDOS
+        )
 
     return " AND ".join(condiciones), parametros
-
 
 def _agencia_nombre(codigo):
     codigo = str(codigo or "").strip()
