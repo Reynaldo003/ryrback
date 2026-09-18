@@ -1,3 +1,4 @@
+#refacciones_obsolescencia/views.py
 from django.core.cache import cache
 from django.db import connections
 from django.utils.dateparse import parse_date
