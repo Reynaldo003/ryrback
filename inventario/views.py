@@ -41,41 +41,113 @@ def _filtros_desde_request(request, solo_activos=False):
 
     parametros = []
 
+    # ---------------------------------------------------------
+    # AGENCIA
+    # ---------------------------------------------------------
     agencia = request.GET.get("agencia")
 
     if agencia:
-        condiciones.append("LTRIM(RTRIM(DN_Atual)) = %s")
+        condiciones.append(
+            "LTRIM(RTRIM(DN_Atual)) = %s"
+        )
         parametros.append(agencia)
 
+    # ---------------------------------------------------------
+    # ESTATUS
+    # ---------------------------------------------------------
     estatus = request.GET.get("estatus")
 
     if estatus:
-        condiciones.append("LTRIM(RTRIM(StEstoque)) = %s")
+        condiciones.append(
+            "LTRIM(RTRIM(StEstoque)) = %s"
+        )
         parametros.append(estatus)
 
+    # ---------------------------------------------------------
+    # INCLUIR MODELOS / FAMILIAS
+    #
+    # Ejemplo:
+    # ?modelos=E-CRAFTER,CRAFTER,AMAROK,TRANSPORTER,CADDY
+    #
+    # Se usa para R&R Vehículos Comerciales.
+    # ---------------------------------------------------------
     modelos = request.GET.get("modelos")
 
     if modelos:
-        lista = [
+        lista_modelos = [
             modelo.strip()
             for modelo in modelos.split(",")
             if modelo.strip()
         ]
 
-        if lista:
-            like_clauses = []
+        if lista_modelos:
+            condiciones_modelos = []
 
-            for modelo in lista:
-                like_clauses.append(
-                    "UPPER(LTRIM(RTRIM(NmFamilia))) LIKE UPPER(%s)"
+            for modelo in lista_modelos:
+                condiciones_modelos.append(
+                    """
+                    UPPER(LTRIM(RTRIM(NmFamilia)))
+                    LIKE UPPER(%s)
+                    """
                 )
 
-                parametros.append(f"{modelo}%")
+                parametros.append(
+                    f"{modelo}%"
+                )
 
             condiciones.append(
-                f"({' OR '.join(like_clauses)})"
+                f"""
+                (
+                    {' OR '.join(condiciones_modelos)}
+                )
+                """
             )
 
+    # ---------------------------------------------------------
+    # EXCLUIR MODELOS / FAMILIAS
+    #
+    # Ejemplo:
+    # ?excluir_modelos=E-CRAFTER,CRAFTER,AMAROK,TRANSPORTER,CADDY
+    #
+    # Se usa para Córdoba.
+    # ---------------------------------------------------------
+    excluir_modelos = request.GET.get(
+        "excluir_modelos"
+    )
+
+    if excluir_modelos:
+        lista_excluir = [
+            modelo.strip()
+            for modelo in excluir_modelos.split(",")
+            if modelo.strip()
+        ]
+
+        if lista_excluir:
+            condiciones_excluir = []
+
+            for modelo in lista_excluir:
+                condiciones_excluir.append(
+                    """
+                    UPPER(LTRIM(RTRIM(NmFamilia)))
+                    LIKE UPPER(%s)
+                    """
+                )
+
+                parametros.append(
+                    f"{modelo}%"
+                )
+
+            condiciones.append(
+                f"""
+                NOT (
+                    {' OR '.join(condiciones_excluir)}
+                )
+                """
+            )
+
+    # ---------------------------------------------------------
+    # SOLO INVENTARIO ACTIVO
+    # ---------------------------------------------------------
     if solo_activos:
         placeholders = ", ".join(
             ["%s"] * len(ESTATUS_EXCLUIDOS)
@@ -88,10 +160,11 @@ def _filtros_desde_request(request, solo_activos=False):
             """
         )
 
-        parametros.extend(ESTATUS_EXCLUIDOS)
+        parametros.extend(
+            ESTATUS_EXCLUIDOS
+        )
 
     return " AND ".join(condiciones), parametros
-
 
 def _agencia_nombre(codigo):
     codigo = str(codigo or "").strip()
