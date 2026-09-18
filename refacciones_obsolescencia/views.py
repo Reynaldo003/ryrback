@@ -638,7 +638,8 @@ class InventarioRefaccionesObsolescenciaDashboardView(APIView):
                 COALESCE(SUM(COALESCE(VrEstoque, 0)), 0)        AS valor_inventario,
                 COALESCE(SUM(COALESCE(ValorStock, 0)), 0)       AS valor_stock,
                 COALESCE(SUM(COALESCE(ValorDisponible, 0)), 0)  AS valor_disponible,
-                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)   AS valor_reservado
+                COALESCE(SUM(COALESCE(ValorReservado, 0)), 0)   AS valor_reservado,
+                COALESCE(AVG(CAST(Dias_Desde_Ultimo_Movimiento AS DECIMAL(18, 2))), 0) AS promedioDias
             INTO #TopGrupos
             FROM #Base
             GROUP BY COALESCE(NULLIF(LTRIM(RTRIM(GrupoPrincipal)), ''), 'Sin grupo')
