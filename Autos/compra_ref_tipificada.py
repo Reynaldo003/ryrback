@@ -166,12 +166,12 @@ class CompraRefTipificadaListView(APIView):
         if len(anio) == 4 and anio.isdigit():
             if len(mes) == 2 and mes.isdigit() and 1 <= int(mes) <= 12:
                 condiciones.append(
-                    "SUBSTRING(REPLACE(CAST(DtEntrada AS varchar), '-', ''), 1, 6) = %s"
+                    "SUBSTRING(REPLACE(CAST(DtEmissao AS varchar), '-', ''), 1, 6) = %s"
                 )
                 params.append(f"{anio}{mes}")
             else:
                 condiciones.append(
-                    "SUBSTRING(REPLACE(CAST(DtEntrada AS varchar), '-', ''), 1, 4) = %s"
+                    "SUBSTRING(REPLACE(CAST(DtEmissao AS varchar), '-', ''), 1, 4) = %s"
                 )
                 params.append(anio)
 
@@ -217,7 +217,7 @@ class CompraRefTipificadaListView(APIView):
                 FROM dbo.{TABLA_COMPRA_REF_TIPIFICADA}
                 {where_sql}
                 ORDER BY
-                    DtEntrada DESC,
+                    DtEmissao DESC,
                     HrEntrada DESC,
                     NrNota DESC,
                     rowid__ DESC
@@ -228,7 +228,7 @@ class CompraRefTipificadaListView(APIView):
                 AND t.Serie = p.Serie
                 AND t.rowid__ = p.rowid__
             ORDER BY
-                t.DtEntrada DESC,
+                t.DtEmissao DESC,
                 t.HrEntrada DESC,
                 t.NrNota DESC,
                 t.rowid__ DESC
