@@ -31,14 +31,21 @@ ESTATUS_EXCLUIDOS = [
     "T",
 ]
 
+MODELOS_COMERCIALES = [
+    "E-CRAFTER",
+    "CRAFTER",
+    "AMAROK",
+    "TRANSPORTER",
+    "CADDY",
+]
 
 def _filtros_desde_request(request, solo_activos=False):
     condiciones = [
         "DN_Atual IS NOT NULL",
         "LTRIM(RTRIM(DN_Atual)) <> ''",
         "LTRIM(RTRIM(DN_Atual)) <> '0'",
+        "LTRIM(RTRIM(COALESCE(CondUso, ''))) = 'N'",
     ]
-
     parametros = []
 
     # ---------------------------------------------------------
@@ -47,10 +54,42 @@ def _filtros_desde_request(request, solo_activos=False):
     agencia = request.GET.get("agencia")
 
     if agencia:
+        agencia = agencia.strip()
+
         condiciones.append(
             "LTRIM(RTRIM(DN_Atual)) = %s"
         )
         parametros.append(agencia)
+
+        # Córdoba = 2923
+        # Excluir vehículos comerciales.
+        if agencia == "2923":
+            condiciones_comerciales = []
+
+            for modelo in MODELOS_COMERCIALES:
+                condiciones_comerciales.append(
+                    """
+                    UPPER(
+                        LTRIM(
+                            RTRIM(
+                                COALESCE(NmFamilia, '')
+                            )
+                        )
+                    ) LIKE UPPER(%s)
+                    """
+                )
+
+                parametros.append(
+                    f"%{modelo}%"
+                )
+
+            condiciones.append(
+                f"""
+                NOT (
+                    {' OR '.join(condiciones_comerciales)}
+                )
+                """
+            )
 
     # ---------------------------------------------------------
     # ESTATUS
@@ -61,15 +100,12 @@ def _filtros_desde_request(request, solo_activos=False):
         condiciones.append(
             "LTRIM(RTRIM(StEstoque)) = %s"
         )
-        parametros.append(estatus)
+        parametros.append(
+            estatus.strip()
+        )
 
     # ---------------------------------------------------------
-    # INCLUIR MODELOS / FAMILIAS
-    #
-    # Ejemplo:
-    # ?modelos=E-CRAFTER,CRAFTER,AMAROK,TRANSPORTER,CADDY
-    #
-    # Se usa para R&R Vehículos Comerciales.
+    # R&R VEHÍCULOS COMERCIALES
     # ---------------------------------------------------------
     modelos = request.GET.get("modelos")
 
@@ -86,61 +122,24 @@ def _filtros_desde_request(request, solo_activos=False):
             for modelo in lista_modelos:
                 condiciones_modelos.append(
                     """
-                    UPPER(LTRIM(RTRIM(NmFamilia)))
-                    LIKE UPPER(%s)
+                    UPPER(
+                        LTRIM(
+                            RTRIM(
+                                COALESCE(NmFamilia, '')
+                            )
+                        )
+                    ) LIKE UPPER(%s)
                     """
                 )
 
                 parametros.append(
-                    f"{modelo}%"
+                    f"%{modelo}%"
                 )
 
             condiciones.append(
                 f"""
                 (
                     {' OR '.join(condiciones_modelos)}
-                )
-                """
-            )
-
-    # ---------------------------------------------------------
-    # EXCLUIR MODELOS / FAMILIAS
-    #
-    # Ejemplo:
-    # ?excluir_modelos=E-CRAFTER,CRAFTER,AMAROK,TRANSPORTER,CADDY
-    #
-    # Se usa para Córdoba.
-    # ---------------------------------------------------------
-    excluir_modelos = request.GET.get(
-        "excluir_modelos"
-    )
-
-    if excluir_modelos:
-        lista_excluir = [
-            modelo.strip()
-            for modelo in excluir_modelos.split(",")
-            if modelo.strip()
-        ]
-
-        if lista_excluir:
-            condiciones_excluir = []
-
-            for modelo in lista_excluir:
-                condiciones_excluir.append(
-                    """
-                    UPPER(LTRIM(RTRIM(NmFamilia)))
-                    LIKE UPPER(%s)
-                    """
-                )
-
-                parametros.append(
-                    f"{modelo}%"
-                )
-
-            condiciones.append(
-                f"""
-                NOT (
-                    {' OR '.join(condiciones_excluir)}
                 )
                 """
             )
@@ -155,7 +154,11 @@ def _filtros_desde_request(request, solo_activos=False):
 
         condiciones.append(
             f"""
-            LTRIM(RTRIM(COALESCE(StEstoque, '')))
+            LTRIM(
+                RTRIM(
+                    COALESCE(StEstoque, '')
+                )
+            )
             NOT IN ({placeholders})
             """
         )
