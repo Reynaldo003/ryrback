@@ -44,8 +44,8 @@ def _filtros_desde_request(request, solo_activos=False):
         "DN_Atual IS NOT NULL",
         "LTRIM(RTRIM(DN_Atual)) <> ''",
         "LTRIM(RTRIM(DN_Atual)) <> '0'",
+        "LTRIM(RTRIM(COALESCE(CondUso, ''))) = 'N'",
     ]
-
     parametros = []
 
     # ---------------------------------------------------------
@@ -62,8 +62,7 @@ def _filtros_desde_request(request, solo_activos=False):
         parametros.append(agencia)
 
         # Córdoba = 2923
-        #
-        # Córdoba NO debe incluir vehículos comerciales.
+        # Excluir vehículos comerciales.
         if agencia == "2923":
             condiciones_comerciales = []
 
@@ -101,16 +100,12 @@ def _filtros_desde_request(request, solo_activos=False):
         condiciones.append(
             "LTRIM(RTRIM(StEstoque)) = %s"
         )
-        parametros.append(estatus.strip())
+        parametros.append(
+            estatus.strip()
+        )
 
     # ---------------------------------------------------------
-    # VEHÍCULOS COMERCIALES
-    #
-    # Se usa cuando el frontend manda:
-    #
-    # ?modelos=E-CRAFTER,CRAFTER,AMAROK,TRANSPORTER,CADDY
-    #
-    # En este caso SOLO se incluyen esas familias.
+    # R&R VEHÍCULOS COMERCIALES
     # ---------------------------------------------------------
     modelos = request.GET.get("modelos")
 
