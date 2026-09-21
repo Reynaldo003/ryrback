@@ -10,10 +10,14 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+<<<<<<< HEAD
 
 import os
 import socket
 
+=======
+import os
+>>>>>>> 6d1b4c891b1d4d3088508709d307fadf78d3fff6
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -338,11 +342,17 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
 DEFAULT_FROM_EMAIL = "no-reply@crm.local"
 PUBLIC_API_BASE_URL = "https://crm.grupoautomotrizryr.com"
-OPENAI_API_KEY = ""
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
 OPENAI_MODEL = "gpt-5.6-luna"
 OPENAI_MEDIA_MODEL = "gpt-5.6-luna"
 OPENAI_TRANSCRIBE_MODEL = "gpt-transcribe"
 OPENAI_RESULTS_TIMEOUT_SECONDS = 30
+
+IA_PROVIDER = os.getenv("IA_PROVIDER", "openai").strip().lower()
+
+XAI_API_KEY = os.getenv("XAI_API_KEY", "")
+XAI_MODEL = "grok-4.3"
+XAI_BASE_URL = "https://api.x.ai/v1"
 
 GEMINI_API_KEY = ""
 GEMINI_MULTIMODAL_MODEL = "gemini-2.5-flash"

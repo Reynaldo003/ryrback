@@ -1199,6 +1199,65 @@ def _get_openai_client() -> OpenAI:
         raise RuntimeError("Falta OPENAI_API_KEY")
     return OpenAI(api_key=api_key, timeout=25.0, max_retries=2)
 
+@lru_cache(maxsize=1)
+def _get_grok_client() -> OpenAI:
+    api_key = getattr(settings, "XAI_API_KEY", "") or ""
+
+    if not api_key:
+        raise RuntimeError("Falta XAI_API_KEY")
+
+    return OpenAI(
+        api_key=api_key,
+        base_url=getattr(
+            settings,
+            "XAI_BASE_URL",
+            "https://api.x.ai/v1",
+        ),
+        timeout=25.0,
+        max_retries=2,
+    )
+
+def _get_ia_provider_model() -> tuple[str, str]:
+    provider = (
+        getattr(settings, "IA_PROVIDER", "openai")
+        or "openai"
+    ).strip().lower()
+
+    if provider == "xai":
+        return (
+            "xai",
+            getattr(
+                settings,
+                "XAI_MODEL",
+                "grok-4.3",
+            ),
+        )
+
+    if provider == "openai":
+        return (
+            "openai",
+            getattr(
+                settings,
+                "OPENAI_MODEL",
+                "gpt-5.6-luna",
+            ),
+        )
+
+    raise RuntimeError(
+        f"IA_PROVIDER no soportado: {provider}"
+    )
+
+
+def _get_ia_decision_client():
+    provider, modelo = _get_ia_provider_model()
+
+    if provider == "xai":
+        client = _get_grok_client()
+    else:
+        client = _get_openai_client()
+
+    return provider, client, modelo
+
 PREGUNTAS_PERFIL_VALIDAS = {
     "nombre",
     "vehiculo_interes",
@@ -1913,12 +1972,7 @@ def _decision_conversacional_ia(
         },
     }
 
-    client = _get_openai_client()
-    modelo = getattr(
-        settings,
-        "OPENAI_MODEL",
-        "gpt-5.6-luna",
-    )
+    ia_provider, client, modelo = _get_ia_decision_client()
 
     try:
         salida = _llamar_openai_decision(
@@ -4885,6 +4939,8 @@ def responder_mensaje_automatico(
     wa_res = None
     wa_message_id_salida = ""
 
+    ia_provider_actual, ia_model_actual = _get_ia_provider_model()
+
     for index, parte in enumerate(partes_respuesta):
         reply_context_id = wa_message_id_entrante if index == 0 else ""
 
@@ -4913,12 +4969,8 @@ def responder_mensaje_automatico(
             wa_message_id=wa_message_id_parte,
             raw={
                 "reply_to": wa_message_id_entrante,
-                "ia_provider": "openai",
-                "ia_model": getattr(
-                    settings,
-                    "OPENAI_MODEL",
-                    "gpt-5.6-luna",
-                ),
+                "ia_provider": ia_provider_actual,
+                "ia_model": ia_model_actual,
                 "numero_asesor": numero_asesor,
                 "version_contexto": version_contexto,
                 "requiere_asesor": requiere_asesor,
