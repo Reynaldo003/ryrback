@@ -1,5 +1,6 @@
 # notificaciones/consumers.py
 import re
+import unicodedata
 from urllib.parse import parse_qs
 
 from channels.db import database_sync_to_async
@@ -39,6 +40,144 @@ def obtener_numeros_telefono(raw_telefono):
             numeros.append(numero)
 
     return numeros
+
+
+AGENCIAS_CONOCIDAS = (
+    ("cordoba", "VW Cordoba"),
+    ("orizaba", "VW Orizaba"),
+    ("poza rica", "VW Poza Rica"),
+    ("tuxtepec", "VW Tuxtepec"),
+    ("tuxpan", "VW Tuxpan"),
+    ("automotriz r&r", "Automotriz R&R"),
+)
+
+
+def _texto(valor):
+    return str(valor or "").strip()
+
+
+def _normaliza_agencia(valor):
+    texto = _texto(valor).lower()
+    texto = unicodedata.normalize("NFD", texto)
+    texto = "".join(
+        c for c in texto if unicodedata.category(c) != "Mn"
+    )
+    return re.sub(r"[^a-z0-9]+", " ", texto).strip()
+
+
+def _grupo_agencia(valor):
+    """
+    Unifica variantes de agencia en un grupo canónico.
+
+    "VW Cordoba Usados" y "VW Cordoba" -> "VW Cordoba"
+    """
+    texto = _normaliza_agencia(valor)
+
+    for token, label in AGENCIAS_CONOCIDAS:
+        if _normaliza_agencia(token) in texto:
+            return label
+
+    return _texto(valor)
+
+
+def _agencias_usuario(raw_agencias):
+    agencias = set()
+
+    for parte in re.split(r"[|,;\n]+", str(raw_agencias or "")):
+        agencia = _grupo_agencia(parte)
+
+        if agencia:
+            agencias.add(agencia)
+
+    return agencias
+
+
+def _agencia_coincide(agencia_linea, agencias_usuario):
+    grupo_linea = _grupo_agencia(agencia_linea)
+
+    return any(
+        _grupo_agencia(agencia) == grupo_linea
+        for agencia in agencias_usuario
+    )
+
+
+def _es_asesor_digital(rol):
+    return _texto(rol).lower() == "asesor digital"
+
+
+# Logins con acceso total a todas las líneas WhatsApp,
+# independientemente de su rol (p. ej. dirección).
+USUARIOS_ACCESO_TOTAL = frozenset({
+    "rey",
+})
+
+
+def _usuario_con_acceso_total(contexto):
+    return (
+        _texto(contexto.get("usuario")).casefold()
+        in USUARIOS_ACCESO_TOTAL
+    )
+
+
+def _detalle_lineas_asesor(contexto):
+    """
+    Detalle de cada línea de WHATSAPP_LINES contra el usuario.
+
+    Regla de negocio:
+      - Usuarios en USUARIOS_ACCESO_TOTAL (p. ej. "rey"): todas las líneas.
+      - Solo rol "asesor digital".
+      - Solo las líneas propias (usuario.telefono o usuario listado
+        en WHATSAPP_LINES[].asesores[].usuario).
+      - Solo dentro de su(s) agencia(s): un asesor de Córdoba nunca
+        recibe notificaciones de Tuxtepec.
+    """
+    acceso_total = _usuario_con_acceso_total(contexto)
+
+    if not acceso_total and not _es_asesor_digital(contexto.get("rol")):
+        return []
+
+    agencias_usuario = _agencias_usuario(contexto.get("agencia"))
+    numeros_propios = obtener_numeros_telefono(contexto.get("telefono"))
+    usuario_login = _texto(contexto.get("usuario")).casefold()
+
+    detalle = []
+
+    for numero, cfg in WHATSAPP_LINES.items():
+        agencia_linea = cfg.get("agencia", "")
+        agencia_ok = _agencia_coincide(agencia_linea, agencias_usuario)
+
+        es_suya = numero in numeros_propios
+
+        if not es_suya:
+            for item in cfg.get("asesores") or []:
+                if (
+                    isinstance(item, dict)
+                    and _texto(item.get("usuario")).casefold() == usuario_login
+                ):
+                    es_suya = True
+                    break
+
+        if acceso_total:
+            agencia_ok = True
+            es_suya = True
+
+        detalle.append({
+            "numero": numero,
+            "agencia_linea": agencia_linea,
+            "agencia_ok": agencia_ok,
+            "es_suya": es_suya,
+            "permitida": agencia_ok and es_suya,
+        })
+
+    return detalle
+
+
+def _lineas_del_asesor(contexto):
+    return [
+        linea["numero"]
+        for linea in _detalle_lineas_asesor(contexto)
+        if linea["permitida"]
+    ]
 
 
 def obtener_token_scope(scope):
@@ -92,6 +231,7 @@ def obtener_contexto_usuario_desde_jwt(token):
                 "nombre",
                 "",
             ) or "",
+            "agencia": getattr(usuario, "agencia", "") or "",
             "telefono": getattr(usuario, "telefono", "") or "",
         }
 
@@ -122,12 +262,6 @@ class WhatsAppNotificacionesConsumer(AsyncJsonWebsocketConsumer):
 
         params = parse_qs(query_string)
 
-        numero_param = normalizar_numero(
-            params.get("numero_asesor", [""])[0]
-        )
-
-        todas = params.get("todas", ["0"])[0] == "1"
-
         contexto = await obtener_contexto_usuario_desde_jwt(token)
 
         if not contexto:
@@ -139,56 +273,39 @@ class WhatsAppNotificacionesConsumer(AsyncJsonWebsocketConsumer):
 
         self.usuario = contexto["usuario"]
 
-        rol = str(contexto["rol"] or "").strip().lower()
-        es_admin = rol == "administrador"
+        lineas = _lineas_del_asesor(contexto)
 
-        numeros_usuario = obtener_numeros_telefono(
-            contexto["telefono"]
+        if not lineas:
+            await self.aceptar_y_cerrar(
+                4403,
+                subprotocol=subprotocol,
+            )
+            return
+
+        numero_param = normalizar_numero(
+            params.get("numero_asesor", [""])[0]
         )
 
-        if todas:
-            if not es_admin:
+        if numero_param:
+            if numero_param not in lineas:
                 await self.aceptar_y_cerrar(
                     4403,
                     subprotocol=subprotocol,
                 )
                 return
 
-            self.numero_asesor = "TODAS"
-            self.grupos = [
-                "whatsapp_todas_las_lineas"
-            ]
+            lineas = [numero_param]
 
-        else:
-            if es_admin and numero_param in WHATSAPP_LINES:
-                numeros = [numero_param]
+        self.numero_asesor = (
+            lineas[0]
+            if len(lineas) == 1
+            else "|".join(lineas)
+        )
 
-            elif (
-                numero_param
-                and numero_param in numeros_usuario
-            ):
-                numeros = [numero_param]
-
-            else:
-                numeros = numeros_usuario
-
-            if not numeros:
-                await self.aceptar_y_cerrar(
-                    4403,
-                    subprotocol=subprotocol,
-                )
-                return
-
-            self.numero_asesor = (
-                numeros[0]
-                if len(numeros) == 1
-                else "|".join(numeros)
-            )
-
-            self.grupos = [
-                f"whatsapp_linea_{numero}"
-                for numero in numeros
-            ]
+        self.grupos = [
+            f"whatsapp_linea_{numero}"
+            for numero in lineas
+        ]
 
         if subprotocol:
             await self.accept(subprotocol=subprotocol)

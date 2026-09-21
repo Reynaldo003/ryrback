@@ -165,15 +165,28 @@ def notificar_mensaje_whatsapp(
                 "wa_message_id": payload_ws["wa_message_id"],
             }, flush=True)
 
-            async_to_sync(channel_layer.group_send)(
-                grupo,
-                payload_ws,
-            )
+            try:
+                async_to_sync(channel_layer.group_send)(
+                    grupo,
+                    payload_ws,
+                )
 
-            print("NOTIFICACION WS ENVIADA:", {
-                "grupo": grupo,
-                "wa_message_id": wa_message_id,
-            }, flush=True)
+                print("NOTIFICACION WS ENVIADA:", {
+                    "grupo": grupo,
+                    "wa_message_id": wa_message_id,
+                }, flush=True)
+            except Exception as e:
+                # No se debe romper el webhook por un fallo del
+                # channel layer (p. ej. Redis caído): se registra
+                # y se continúa con el push.
+                print(
+                    "NOTIFICACION WS ERROR:",
+                    {
+                        "grupo": grupo,
+                        "exception": f"{type(e).__name__}: {e}",
+                    },
+                    flush=True,
+                )
 
     # 2. Push notification para app cerrada / segundo plano.
     try:
