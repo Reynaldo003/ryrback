@@ -17,6 +17,7 @@ from django.db.models import (
     Avg,
     Case,
     Count,
+    Exists,
     DurationField,
     ExpressionWrapper,
     F,
@@ -2298,6 +2299,18 @@ def media_descargar_mp3_view(request, media_id: str):
 def chats_list(request):
     numero_asesor = _get_numero_asesor_request(request)
     paginado = str(request.query_params.get("paginado", "0") or "").strip().casefold() in {"1", "true", "yes", "si", "sí", "on"}
+    solo_no_leidos = (
+        str(
+            request.query_params.get(
+                "solo_no_leidos",
+                "0",
+            )
+            or ""
+        )
+        .strip()
+        .casefold()
+        in {"1", "true", "yes", "si", "sí", "on"}
+    )
     limit = _int_param(request, "limit", 30, 10, 60) if paginado else 200
     busqueda = str(request.query_params.get("q", "") or "").strip()[:120]
     scope = str(request.query_params.get("scope", "recientes") or "recientes").strip().casefold()
@@ -2348,6 +2361,52 @@ def chats_list(request):
     ).annotate(
         last_time_eff=Coalesce("last_time", "creado"),
     ).distinct()
+
+    if solo_no_leidos:
+        lectura_qs = (
+            LecturaWhatsApp.objects
+            .filter(
+                expediente_id=OuterRef("pk"),
+                numero_asesor=numero_asesor,
+            )
+            .values("last_read_at")[:1]
+        )
+
+        qs = qs.annotate(
+            last_read_at_chat=Subquery(lectura_qs),
+        )
+
+        mensajes_entrantes_qs = (
+            MensajeWhatsApp.objects
+            .filter(
+                telefono=OuterRef("cliente__telefono"),
+                numero_asesor=numero_asesor,
+                direction=MensajeWhatsApp.Direccion.IN,
+            )
+        )
+
+        qs = qs.annotate(
+            tiene_entrante=Exists(
+                mensajes_entrantes_qs
+            ),
+            tiene_entrante_nuevo=Exists(
+                mensajes_entrantes_qs.filter(
+                    created_at__gt=OuterRef(
+                        "last_read_at_chat"
+                    )
+                )
+            ),
+        ).filter(
+            Q(
+                last_read_at_chat__isnull=True,
+                tiene_entrante=True,
+            )
+            |
+            Q(
+                last_read_at_chat__isnull=False,
+                tiene_entrante_nuevo=True,
+            )
+        )
 
     if busqueda:
         digitos = re.sub(r"\D", "", busqueda)
