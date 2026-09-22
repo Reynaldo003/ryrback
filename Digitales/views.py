@@ -2311,6 +2311,7 @@ def chats_list(request):
         .casefold()
         in {"1", "true", "yes", "si", "sí", "on"}
     )
+    filtro_chat = str(request.query_params.get("filtro_chat", "") or "").strip()
     limit = _int_param(request, "limit", 30, 10, 60) if paginado else 200
     busqueda = str(request.query_params.get("q", "") or "").strip()[:120]
     scope = str(request.query_params.get("scope", "recientes") or "recientes").strip().casefold()
@@ -2355,6 +2356,101 @@ def chats_list(request):
         .distinct()
     )
     qs = _filtrar_expedientes_por_asignacion(request=request, queryset=qs, numero_asesor=numero_asesor)
+    conteo_estados = qs.aggregate(
+        todos=Count("id", distinct=True),
+        pendiente_cotizacion=Count(
+            "id",
+            filter=Q(estado__icontains="cotizaci"),
+            distinct=True,
+        ),
+        seguimiento=Count(
+            "id",
+            filter=Q(estado__icontains="seguimiento"),
+            distinct=True,
+        ),
+        calificado=Count(
+            "id",
+            filter=Q(estado__icontains="calificado") & ~Q(estado__icontains="descalificado"),
+            distinct=True,
+        ),
+    )
+
+    sub_lectura = (
+        LecturaWhatsApp.objects
+        .filter(
+            expediente_id=OuterRef("pk"),
+            numero_asesor=numero_asesor,
+        )
+        .values("last_read_at")[:1]
+    )
+
+    sub_entrantes = (
+        MensajeWhatsApp.objects
+        .filter(
+            telefono=OuterRef("cliente__telefono"),
+            numero_asesor=numero_asesor,
+            direction=MensajeWhatsApp.Direccion.IN,
+        )
+    )
+
+    total_no_leidos = qs.annotate(
+        _last_read=Subquery(sub_lectura),
+        _tiene_in=Exists(sub_entrantes),
+        _tiene_in_nuevo=Exists(
+            sub_entrantes.filter(created_at__gt=OuterRef("_last_read"))
+        ),
+    ).filter(
+        Q(_last_read__isnull=True, _tiene_in=True)
+        | Q(_last_read__isnull=False, _tiene_in_nuevo=True)
+    ).count()
+
+    conteos = {
+        "todos": conteo_estados["todos"] or 0,
+        "no_leidos": total_no_leidos or 0,
+        "pendiente_cotizacion": conteo_estados["pendiente_cotizacion"] or 0,
+        "seguimiento": conteo_estados["seguimiento"] or 0,
+        "calificado": conteo_estados["calificado"] or 0,
+    }
+
+    if filtro_chat == "pendiente_cotizacion":
+        qs = qs.filter(estado__icontains="cotizaci")
+    elif filtro_chat == "seguimiento":
+        qs = qs.filter(estado__icontains="seguimiento")
+    elif filtro_chat == "calificado":
+        qs = qs.filter(estado__icontains="calificado").exclude(estado__icontains="descalificado")
+    elif filtro_chat.startswith("estado:"):
+        nom_estado = filtro_chat.split("estado:", 1)[1]
+        qs = qs.filter(estado__icontains=nom_estado)
+
+    tiene_filtro_activo = bool(busqueda or solo_no_leidos or (filtro_chat and filtro_chat != "todos"))
+
+    if busqueda:
+        digitos = re.sub(r"\D", "", busqueda)
+        filtro_busqueda = Q(cliente__nombre__icontains=busqueda)
+        if digitos:
+            telefono_busqueda = digitos[-10:] if len(digitos) >= 10 else digitos
+            filtro_busqueda |= Q(cliente__telefono__icontains=telefono_busqueda)
+        qs = qs.filter(filtro_busqueda)
+        scope = "busqueda"
+    elif paginado and not tiene_filtro_activo:
+        if scope == "historico":
+            qs = qs.filter(
+                last_time_eff__lt=limite_recientes,
+            ).filter(
+                Q(ultima_cita_agendada__isnull=True)
+                | Q(ultima_cita_agendada__lt=ahora)
+                | Q(ultima_cita_agendada__gt=limite_cita_prioritaria)
+            )
+        else:
+            scope = "recientes"
+            qs = qs.filter(
+                Q(last_time_eff__gte=limite_recientes)
+                | Q(
+                    ultima_cita_agendada__gte=ahora,
+                    ultima_cita_agendada__lte=limite_cita_prioritaria,
+                )
+            )
+
     qs = qs.annotate(
         last_text=Subquery(last_msg_qs.values("body")[:1]),
         last_time=Subquery(last_msg_qs.values("created_at")[:1]),
@@ -2512,14 +2608,22 @@ def chats_list(request):
         })
 
     if not paginado:
-        return Response(data, status=status.HTTP_200_OK)
+        return Response({
+            "results": data,
+            "conteos": conteos,
+        }, status=status.HTTP_200_OK)
 
     ultimo = expedientes[-1] if expedientes else None
     next_scope = "historico" if not busqueda and scope == "recientes" and not has_more else ""
     return Response({
-        "ok": True, "results": data,
+        "ok": True, 
+        "results": data, 
+        "conteos": conteos,
         "paginacion": {
-            "limit": limit, "has_more": has_more, "scope": scope, "next_scope": next_scope,
+            "limit": limit, 
+            "has_more": has_more, 
+            "scope": scope, 
+            "next_scope": next_scope,
             "before": ultimo.last_time_eff.isoformat() if ultimo and ultimo.last_time_eff else "",
             "before_id": ultimo.id if ultimo else 0,
             "before_prioridad": ultimo.tiene_cita_futura if ultimo else 0,
