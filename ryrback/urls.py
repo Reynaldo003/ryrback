@@ -30,6 +30,7 @@ urlpatterns = [
     path("ventas-vn/",include("Autos.urls"),),
     path("refacciones-obsolescencia/", include("refacciones_obsolescencia.urls")),
     path("presupuestos/", include("presupuestos.urls"),),
+    path("compra-refacciones/",include("CompraRefacciones.urls"),),
 ]
 
 if settings.DEBUG:

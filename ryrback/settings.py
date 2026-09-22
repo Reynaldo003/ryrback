@@ -134,6 +134,7 @@ INSTALLED_APPS = [
     "Autos",
     "refacciones_obsolescencia",
     "presupuestos",
+    "CompraRefacciones",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
