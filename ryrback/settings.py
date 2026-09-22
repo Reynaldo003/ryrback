@@ -10,7 +10,9 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
+
 import os
+import socket
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
@@ -188,6 +190,35 @@ CHANNEL_LAYERS = {
         }
     },
 }
+
+# Modo local sin Redis: python manage.py runserver usa un solo proceso,
+# así que un channel layer en memoria alcanza para probar notificaciones.
+# En producción (daphne/uvicorn, Redis accesible) se usa Redis.
+#
+# Comportamiento:
+#   - CHANNEL_LAYER_BACKEND=memory : fuerza memoria.
+#   - CHANNEL_LAYER_BACKEND=redis  : fuerza Redis.
+#   - sin variable                  : detecta si Redis responde en 6380.
+def _redis_disponible():
+    try:
+        with socket.create_connection(("127.0.0.1", 6380), timeout=0.4):
+            return True
+    except OSError:
+        return False
+
+
+_channel_layer_backend = os.environ.get(
+    "CHANNEL_LAYER_BACKEND", ""
+).strip().lower()
+
+if _channel_layer_backend == "memory" or (
+    _channel_layer_backend == "" and not _redis_disponible()
+):
+    CHANNEL_LAYERS = {
+        "default": {
+            "BACKEND": "channels.layers.InMemoryChannelLayer",
+        }
+    }
 
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",

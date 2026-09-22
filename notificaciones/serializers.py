@@ -1,6 +1,25 @@
 # notificaciones/serializers.py
 from rest_framework import serializers
 from CrmConformidad.models import FirebaseToken
+from .models import Notificacion
+
+
+class NotificacionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Notificacion
+        fields = [
+            "id",
+            "numero_asesor",
+            "telefono",
+            "nombre",
+            "mensaje",
+            "wa_message_id",
+            "expediente_id",
+            "url",
+            "leida",
+            "creado",
+        ]
+
 
 class FirebaseTokenSerializer(serializers.ModelSerializer):
     token = serializers.CharField(validators=[])
