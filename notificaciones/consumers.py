@@ -105,6 +105,21 @@ def _es_asesor_digital(rol):
     return _texto(rol).lower() == "asesor digital"
 
 
+# Roles que pueden recibir notificaciones de WhatsApp por WebSocket.
+# Los asesores generales/coordinadores siguen la misma regla de líneas
+# (agencia + teléfonos propios / WHATSAPP_LINES.asesores): nadie
+# amplía su alcance por el solo hecho de tener el rol.
+ROLES_NOTIFICACIONES = frozenset({
+    "asesor digital",
+    "asesor general",
+    "coordinador digital",
+})
+
+
+def _es_rol_con_notificaciones(rol):
+    return _texto(rol).lower() in ROLES_NOTIFICACIONES
+
+
 # Logins con acceso total a todas las líneas WhatsApp,
 # independientemente de su rol (p. ej. dirección).
 USUARIOS_ACCESO_TOTAL = frozenset({
@@ -125,7 +140,8 @@ def _detalle_lineas_asesor(contexto):
 
     Regla de negocio:
       - Usuarios en USUARIOS_ACCESO_TOTAL (p. ej. "rey"): todas las líneas.
-      - Solo rol "asesor digital".
+      - Roles con notificaciones: "asesor digital", "asesor general"
+        y "coordinador digital".
       - Solo las líneas propias (usuario.telefono o usuario listado
         en WHATSAPP_LINES[].asesores[].usuario).
       - Solo dentro de su(s) agencia(s): un asesor de Córdoba nunca
@@ -133,7 +149,7 @@ def _detalle_lineas_asesor(contexto):
     """
     acceso_total = _usuario_con_acceso_total(contexto)
 
-    if not acceso_total and not _es_asesor_digital(contexto.get("rol")):
+    if not acceso_total and not _es_rol_con_notificaciones(contexto.get("rol")):
         return []
 
     agencias_usuario = _agencias_usuario(contexto.get("agencia"))
@@ -224,7 +240,7 @@ def obtener_contexto_usuario_desde_jwt(token):
         if not usuario:
             return None
 
-        return {
+        contexto = {
             "usuario": getattr(usuario, "usuario", "") or "",
             "rol": getattr(
                 getattr(usuario, "rol", None),
@@ -235,7 +251,16 @@ def obtener_contexto_usuario_desde_jwt(token):
             "telefono": getattr(usuario, "telefono", "") or "",
         }
 
-    except Exception:
+        print("WS CONTEXTO:", contexto, flush=True)
+
+        return contexto
+
+    except Exception as e:
+        print(
+            "WS ERROR obteniendo contexto JWT:",
+            f"{type(e).__name__}: {e}",
+            flush=True,
+        )
         return None
 
 
@@ -274,6 +299,17 @@ class WhatsAppNotificacionesConsumer(AsyncJsonWebsocketConsumer):
         self.usuario = contexto["usuario"]
 
         lineas = _lineas_del_asesor(contexto)
+
+        print(
+            "WS LINEAS:",
+            {
+                "usuario": self.usuario,
+                "subprotocol": subprotocol,
+                "lineas": lineas,
+                "detalle": _detalle_lineas_asesor(contexto),
+            },
+            flush=True,
+        )
 
         if not lineas:
             await self.aceptar_y_cerrar(
@@ -317,6 +353,15 @@ class WhatsAppNotificacionesConsumer(AsyncJsonWebsocketConsumer):
                 grupo,
                 self.channel_name,
             )
+
+        print(
+            "WS CONECTADO:",
+            {
+                "usuario": self.usuario,
+                "grupos": self.grupos,
+            },
+            flush=True,
+        )
 
         await self.send_json({
             "tipo": "conexion_establecida",

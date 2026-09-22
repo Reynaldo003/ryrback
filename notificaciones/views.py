@@ -9,14 +9,15 @@ from rest_framework.permissions import IsAuthenticated
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from .consumers import (
     _detalle_lineas_asesor,
-    _es_asesor_digital,
+    _es_rol_con_notificaciones,
     _agencias_usuario,
     _usuario_con_acceso_total,
     _lineas_del_asesor,
     _texto,
     obtener_numeros_telefono,
 )
-from .serializers import FirebaseTokenSerializer
+from .models import Notificacion
+from .serializers import FirebaseTokenSerializer, NotificacionSerializer
 from .services import notificar_mensaje_whatsapp
 
 
@@ -78,9 +79,10 @@ class DiagnosticarNotificacionesView(APIView):
 
         motivos = []
 
-        if not acceso_total and not _es_asesor_digital(contexto["rol"]):
+        if not acceso_total and not _es_rol_con_notificaciones(contexto["rol"]):
             motivos.append(
-                "El rol del usuario no es 'asesor digital' "
+                "El rol del usuario no es 'asesor digital', 'asesor general' "
+                "ni 'coordinador digital' "
                 f"(actual: '{contexto['rol'] or 'vacío'}')."
             )
 
@@ -108,7 +110,7 @@ class DiagnosticarNotificacionesView(APIView):
             "rol": contexto["rol"],
             "agencia": contexto["agencia"],
             "telefono": contexto["telefono"],
-            "es_asesor_digital": _es_asesor_digital(contexto["rol"]),
+            "es_asesor_digital": _es_rol_con_notificaciones(contexto["rol"]),
             "es_acceso_total": acceso_total,
             "lineas": lineas,
             "lineas_permitidas": permitidas,
@@ -162,4 +164,131 @@ class ProbarNotificacionesView(APIView):
         return Response({
             "ok": True,
             "lineas_enviadas": enviadas,
+        })
+
+
+class ListadoNotificacionesView(APIView):
+    """
+    Lista las notificaciones del usuario autenticado (más recientes
+    primero) e incluye el conteo global de no leídas.
+
+    Query params:
+      - limite (por defecto 50, máx. 200)
+      - solo_no_leidas=1  (filtrar solo no leídas)
+
+    Uso: GET /api/notificaciones/
+    """
+
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        qs = Notificacion.objects.filter(usuario=request.user)
+
+        if request.GET.get("solo_no_leidas") == "1":
+            qs = qs.filter(leida=False)
+
+        try:
+            limite = int(request.GET.get("limite", "50") or "50")
+        except (TypeError, ValueError):
+            limite = 50
+
+        limite = max(1, min(limite, 200))
+
+        items = qs.order_by("-creado")[:limite]
+
+        return Response({
+            "items": NotificacionSerializer(items, many=True).data,
+            "no_leidas": Notificacion.objects.filter(
+                usuario=request.user,
+                leida=False,
+            ).count(),
+            "total": Notificacion.objects.filter(
+                usuario=request.user,
+            ).count(),
+        })
+
+
+class ConteoNoLeidasView(APIView):
+    """
+    Conteo de notificaciones no leídas.
+    Uso: GET /api/notificaciones/no-leidas/
+    """
+
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        return Response({
+            "no_leidas": Notificacion.objects.filter(
+                usuario=request.user,
+                leida=False,
+            ).count(),
+            "total": Notificacion.objects.filter(
+                usuario=request.user,
+            ).count(),
+        })
+
+
+class MarcarLeidaView(APIView):
+    """
+    Marca notificaciones como leídas.
+
+    Body:
+      {"ids": [1, 2, 3]}   → marca las indicadas.
+      {"todas": true}       → marca todas las no leídas del usuario.
+    """
+
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def post(self, request):
+        data = request.data or {}
+
+        usuario_qs = Notificacion.objects.filter(usuario=request.user)
+
+        if data.get("todas"):
+            marcadas = (
+                usuario_qs
+                .filter(leida=False)
+                .update(leida=True)
+            )
+        else:
+            ids_raw = data.get("ids")
+
+            if ids_raw is None and data.get("id") is not None:
+                ids_raw = [data.get("id")]
+
+            if not ids_raw:
+                return Response(
+                    {
+                        "ok": False,
+                        "error": (
+                            "Indica los ids a marcar como leídas "
+                            "o envía {\"todas\": true}."
+                        ),
+                    },
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            if isinstance(ids_raw, (int, str)):
+                ids_raw = [ids_raw]
+
+            try:
+                ids_int = [int(i) for i in ids_raw]
+            except (TypeError, ValueError):
+                ids_int = []
+
+            marcadas = (
+                usuario_qs
+                .filter(pk__in=ids_int)
+                .update(leida=True)
+            )
+
+        return Response({
+            "ok": True,
+            "marcadas": marcadas,
+            "no_leidas": (
+                usuario_qs.filter(leida=False).count()
+            ),
         })

@@ -8,6 +8,55 @@ from channels.layers import get_channel_layer
 
 from citas.models import normaliza_tel_mx
 from CrmConformidad.models import FirebaseToken, Usuario
+from Digitales.sett import WHATSAPP_LINES
+
+
+def _texto(valor):
+    return str(valor or "").strip()
+
+
+def _usuarios_receptores_linea(numero_asesor):
+    """
+    Quiénes reciben la notificación persistida de una línea.
+
+    Reúne a todos los usuarios que 'manejan' esa línea:
+      1. Usuario cuyo campo Usuario.telefono contiene el número
+         (buscar_usuario_por_numero_asesor).
+      2. Usuarios listados en WHATSAPP_LINES[numero]["asesores"]
+         (por ejemplo la línea de Tuxtepec tiene 2 asesores).
+    """
+    numero = normalizar_numero_asesor(numero_asesor)
+
+    if not numero:
+        return []
+
+    receptores = []
+    vistos = set()
+
+    usuario = buscar_usuario_por_numero_asesor(numero)
+
+    if usuario:
+        receptores.append(usuario)
+        vistos.add(usuario.id_usuario)
+
+    cfg = WHATSAPP_LINES.get(numero) or {}
+
+    for item in cfg.get("asesores") or []:
+        login = _texto(item.get("usuario"))
+
+        if not login:
+            continue
+
+        try:
+            asesor = Usuario.objects.filter(usuario=login).first()
+        except Exception:
+            asesor = None
+
+        if asesor and asesor.id_usuario not in vistos:
+            vistos.add(asesor.id_usuario)
+            receptores.append(asesor)
+
+    return receptores
 
 
 def normalizar_numero_asesor(numero):
@@ -187,6 +236,44 @@ def notificar_mensaje_whatsapp(
                     },
                     flush=True,
                 )
+
+    # 2. Persistencia para la campana / bandeja de notificaciones:
+    # queda disponible marcada como no leída aunque el navegador
+    # estuviera cerrado o el WebSocket se haya caído.
+    try:
+        from .models import Notificacion
+
+        receptores = _usuarios_receptores_linea(numero_asesor)
+
+        for notificado in receptores:
+            Notificacion.objects.create(
+                usuario=notificado,
+                numero_asesor=numero_asesor,
+                telefono=telefono,
+                nombre=payload_ws["nombre"],
+                mensaje=payload_ws["mensaje"],
+                wa_message_id=wa_message_id or "",
+                expediente_id=(
+                    str(expediente_id)
+                    if expediente_id is not None
+                    else None
+                ),
+                url=payload_ws["url"],
+            )
+
+        print("NOTIFICACION BD:", {
+            "linea": numero_asesor,
+            "receptores": [
+                getattr(u, "usuario", str(u))
+                for u in receptores
+            ],
+        }, flush=True)
+    except Exception as e:
+        print(
+            "NOTIFICACION BD ERROR:",
+            f"{type(e).__name__}: {e}",
+            flush=True,
+        )
 
     # 2. Push notification para app cerrada / segundo plano.
     try:

@@ -10,14 +10,9 @@ https://docs.djangoproject.com/en/5.2/topics/settings/
 For the full list of settings and their values, see
 https://docs.djangoproject.com/en/5.2/ref/settings/
 """
-<<<<<<< HEAD
 
 import os
 import socket
-
-=======
-import os
->>>>>>> 6d1b4c891b1d4d3088508709d307fadf78d3fff6
 from pathlib import Path
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
