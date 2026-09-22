@@ -25,6 +25,10 @@ SERIES_VALIDAS = [
     "VWM",
     "AAP40",
     "AN",
+    'F', 
+    'PR', 
+    'TX', 
+    'EA'
 ]
 
 
@@ -151,7 +155,12 @@ def construir_filtros(request):
             'AP',
             'VWM',
             'AAP40',
-            'AN'
+            'AN',
+            'F', 
+            'PR', 
+            'TX', 
+            'EA'
+            OR (Serie = 'IN' AND Proveedor = 'AUTOMOTRIZ R&R'))
         )
         """
     ]
@@ -699,7 +708,12 @@ class CompraRefaccionesOpcionesView(APIView):
                     'AP',
                     'VWM',
                     'AAP40',
-                    'AN'
+                    'AN',
+                    'F', 
+                    'PR', 
+                    'TX', 
+                    'EA'
+                     OR (Serie = 'IN' AND Proveedor = 'AUTOMOTRIZ R&R'))
               )
 
             ORDER BY
