@@ -2298,82 +2298,195 @@ def media_descargar_mp3_view(request, media_id: str):
 @permission_classes([IsAuthenticated])
 def chats_list(request):
     numero_asesor = _get_numero_asesor_request(request)
-    paginado = str(request.query_params.get("paginado", "0") or "").strip().casefold() in {"1", "true", "yes", "si", "sí", "on"}
-    solo_no_leidos = (
-        str(
-            request.query_params.get(
-                "solo_no_leidos",
-                "0",
-            )
-            or ""
-        )
+
+    paginado = (
+        str(request.query_params.get("paginado", "0") or "")
         .strip()
         .casefold()
         in {"1", "true", "yes", "si", "sí", "on"}
     )
-    filtro_chat = str(request.query_params.get("filtro_chat", "") or "").strip()
-    limit = _int_param(request, "limit", 30, 10, 60) if paginado else 200
-    busqueda = str(request.query_params.get("q", "") or "").strip()[:120]
-    scope = str(request.query_params.get("scope", "recientes") or "recientes").strip().casefold()
-    dias = _int_param(request, "dias", 3, 1, 30)
-    before = _parse_dt_param(request.query_params.get("before", ""))
+
+    solo_no_leidos = (
+        str(request.query_params.get("solo_no_leidos", "0") or "")
+        .strip()
+        .casefold()
+        in {"1", "true", "yes", "si", "sí", "on"}
+    )
+
+    filtro_chat = str(
+        request.query_params.get("filtro_chat", "") or ""
+    ).strip()
+
+    limit = (
+        _int_param(request, "limit", 30, 10, 60)
+        if paginado
+        else 200
+    )
+
+    busqueda = str(
+        request.query_params.get("q", "") or ""
+    ).strip()[:120]
+
+    scope = str(
+        request.query_params.get("scope", "recientes") or "recientes"
+    ).strip().casefold()
+
+    dias = _int_param(
+        request,
+        "dias",
+        3,
+        1,
+        30,
+    )
+
+    before = _parse_dt_param(
+        request.query_params.get("before", "")
+    )
 
     try:
-        before_id = int(request.query_params.get("before_id", "") or 0)
+        before_id = int(
+            request.query_params.get("before_id", "") or 0
+        )
     except (TypeError, ValueError):
         before_id = 0
 
     try:
-        before_prioridad = int(request.query_params.get("before_prioridad", "") or 0)
+        before_prioridad = int(
+            request.query_params.get("before_prioridad", "") or 0
+        )
     except (TypeError, ValueError):
         before_prioridad = 0
+
     ahora = timezone.now()
-    limite_recientes = ahora - timedelta(days=dias)
-    limite_cita_prioritaria = ahora + timedelta(days=5)
+
+    limite_recientes = ahora - timedelta(
+        days=dias
+    )
+
+    limite_cita_prioritaria = ahora + timedelta(
+        days=5
+    )
+
+    # ---------------------------------------------------------
+    # ÚLTIMO MENSAJE DE CADA CHAT
+    # ---------------------------------------------------------
+
     last_msg_qs = (
         MensajeWhatsApp.objects
-        .filter(telefono=OuterRef("cliente__telefono"), numero_asesor=numero_asesor)
-        .order_by("-created_at", "-id")
+        .filter(
+            telefono=OuterRef("cliente__telefono"),
+            numero_asesor=numero_asesor,
+        )
+        .order_by(
+            "-created_at",
+            "-id",
+        )
     )
-    cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
-    agencia_linea = str(cfg_linea.get("agencia") or "").strip()
-    asesor_linea = str(cfg_linea.get("asesor_digital") or "").strip()
 
-    filtro_linea = Q(cliente__mensajes_whatsapp__numero_asesor=numero_asesor)
+    # ---------------------------------------------------------
+    # CONFIGURACIÓN DE LA LÍNEA
+    # ---------------------------------------------------------
+
+    cfg_linea = WHATSAPP_LINES.get(
+        numero_asesor,
+        {},
+    )
+
+    agencia_linea = str(
+        cfg_linea.get("agencia") or ""
+    ).strip()
+
+    asesor_linea = str(
+        cfg_linea.get("asesor_digital") or ""
+    ).strip()
+
+    filtro_linea = Q(
+        cliente__mensajes_whatsapp__numero_asesor=numero_asesor
+    )
 
     if agencia_linea:
         filtro_manual = (
-            Q(cliente__mensajes_whatsapp__isnull=True)
-            & Q(agencia__iexact=agencia_linea)
+            Q(
+                cliente__mensajes_whatsapp__isnull=True
+            )
+            & Q(
+                agencia__iexact=agencia_linea
+            )
         )
-        if not linea_tiene_reparto(numero_asesor) and asesor_linea:
-            filtro_manual &= Q(asesor_digital__iexact=asesor_linea)
+
+        if (
+            not linea_tiene_reparto(numero_asesor)
+            and asesor_linea
+        ):
+            filtro_manual &= Q(
+                asesor_digital__iexact=asesor_linea
+            )
+
         filtro_linea |= filtro_manual
 
+    # ---------------------------------------------------------
+    # QUERYSET BASE
+    # ---------------------------------------------------------
+
     qs = (
-        ExpedienteDigital.objects.select_related("cliente")
+        ExpedienteDigital.objects
+        .select_related("cliente")
         .filter(filtro_linea)
         .distinct()
     )
-    qs = _filtrar_expedientes_por_asignacion(request=request, queryset=qs, numero_asesor=numero_asesor)
+
+    qs = _filtrar_expedientes_por_asignacion(
+        request=request,
+        queryset=qs,
+        numero_asesor=numero_asesor,
+    )
+
+    # ---------------------------------------------------------
+    # CONTEOS DE LOS FILTROS
+    # ---------------------------------------------------------
+
     conteo_estados = qs.aggregate(
-        todos=Count("id", distinct=True),
+        todos=Count(
+            "id",
+            distinct=True,
+        ),
         pendiente_cotizacion=Count(
             "id",
-            filter=Q(estado__icontains="pendiente de cotizaci") | Q(estado__icontains="pendiente cotizaci"),
+            filter=(
+                Q(
+                    estado__icontains="pendiente de cotizaci"
+                )
+                |
+                Q(
+                    estado__icontains="pendiente cotizaci"
+                )
+            ),
             distinct=True,
         ),
         seguimiento=Count(
             "id",
-            filter=Q(estado__icontains="seguimiento"),
+            filter=Q(
+                estado__icontains="seguimiento"
+            ),
             distinct=True,
         ),
         calificado=Count(
             "id",
-            filter=Q(estado__icontains="calificado") & ~Q(estado__icontains="descalificado"),
+            filter=(
+                Q(
+                    estado__icontains="calificado"
+                )
+                & ~Q(
+                    estado__icontains="descalificado"
+                )
+            ),
             distinct=True,
         ),
     )
+
+    # ---------------------------------------------------------
+    # TOTAL NO LEÍDOS
+    # ---------------------------------------------------------
 
     sub_lectura = (
         LecturaWhatsApp.objects
@@ -2381,85 +2494,139 @@ def chats_list(request):
             expediente_id=OuterRef("pk"),
             numero_asesor=numero_asesor,
         )
-        .values("last_read_at")[:1]
+        .values(
+            "last_read_at"
+        )[:1]
     )
 
     sub_entrantes = (
         MensajeWhatsApp.objects
         .filter(
-            telefono=OuterRef("cliente__telefono"),
+            telefono=OuterRef(
+                "cliente__telefono"
+            ),
             numero_asesor=numero_asesor,
             direction=MensajeWhatsApp.Direccion.IN,
         )
     )
 
-    total_no_leidos = qs.annotate(
-        _last_read=Subquery(sub_lectura),
-        _tiene_in=Exists(sub_entrantes),
-        _tiene_in_nuevo=Exists(
-            sub_entrantes.filter(created_at__gt=OuterRef("_last_read"))
-        ),
-    ).filter(
-        Q(_last_read__isnull=True, _tiene_in=True)
-        | Q(_last_read__isnull=False, _tiene_in_nuevo=True)
-    ).count()
+    total_no_leidos = (
+        qs.annotate(
+            _last_read=Subquery(
+                sub_lectura
+            ),
+            _tiene_in=Exists(
+                sub_entrantes
+            ),
+            _tiene_in_nuevo=Exists(
+                sub_entrantes.filter(
+                    created_at__gt=OuterRef(
+                        "_last_read"
+                    )
+                )
+            ),
+        )
+        .filter(
+            Q(
+                _last_read__isnull=True,
+                _tiene_in=True,
+            )
+            |
+            Q(
+                _last_read__isnull=False,
+                _tiene_in_nuevo=True,
+            )
+        )
+        .count()
+    )
 
     conteos = {
         "todos": conteo_estados["todos"] or 0,
         "no_leidos": total_no_leidos or 0,
-        "pendiente_cotizacion": conteo_estados["pendiente_cotizacion"] or 0,
-        "seguimiento": conteo_estados["seguimiento"] or 0,
-        "calificado": conteo_estados["calificado"] or 0,
+        "pendiente_cotizacion":
+            conteo_estados["pendiente_cotizacion"] or 0,
+        "seguimiento":
+            conteo_estados["seguimiento"] or 0,
+        "calificado":
+            conteo_estados["calificado"] or 0,
     }
+
+    # ---------------------------------------------------------
+    # FILTROS DE CHAT
+    # ---------------------------------------------------------
 
     if filtro_chat == "pendiente_cotizacion":
         qs = qs.filter(
-            Q(estado__icontains="pendiente de cotizaci") | 
-            Q(estado__icontains="pendiente cotizaci")
+            Q(
+                estado__icontains="pendiente de cotizaci"
+            )
+            |
+            Q(
+                estado__icontains="pendiente cotizaci"
+            )
         )
-    elif filtro_chat == "seguimiento":
-        qs = qs.filter(estado__icontains="seguimiento")
-    elif filtro_chat == "calificado":
-        qs = qs.filter(estado__icontains="calificado").exclude(estado__icontains="descalificado")
-    elif filtro_chat.startswith("estado:"):
-        nom_estado = filtro_chat.split("estado:", 1)[1]
-        qs = qs.filter(estado__icontains=nom_estado)
-        
-    tiene_filtro_activo = bool(busqueda or solo_no_leidos or (filtro_chat and filtro_chat != "todos"))
 
-    if busqueda:
-        digitos = re.sub(r"\D", "", busqueda)
-        filtro_busqueda = Q(cliente__nombre__icontains=busqueda)
-        if digitos:
-            telefono_busqueda = digitos[-10:] if len(digitos) >= 10 else digitos
-            filtro_busqueda |= Q(cliente__telefono__icontains=telefono_busqueda)
-        qs = qs.filter(filtro_busqueda)
-        scope = "busqueda"
-    elif paginado and not tiene_filtro_activo:
-        if scope == "historico":
-            qs = qs.filter(
-                last_time_eff__lt=limite_recientes,
-            ).filter(
-                Q(ultima_cita_agendada__isnull=True)
-                | Q(ultima_cita_agendada__lt=ahora)
-                | Q(ultima_cita_agendada__gt=limite_cita_prioritaria)
+    elif filtro_chat == "seguimiento":
+        qs = qs.filter(
+            estado__icontains="seguimiento"
+        )
+
+    elif filtro_chat == "calificado":
+        qs = (
+            qs.filter(
+                estado__icontains="calificado"
             )
-        else:
-            scope = "recientes"
-            qs = qs.filter(
-                Q(last_time_eff__gte=limite_recientes)
-                | Q(
-                    ultima_cita_agendada__gte=ahora,
-                    ultima_cita_agendada__lte=limite_cita_prioritaria,
-                )
+            .exclude(
+                estado__icontains="descalificado"
             )
+        )
+
+    elif filtro_chat.startswith("estado:"):
+        nom_estado = filtro_chat.split(
+            "estado:",
+            1,
+        )[1]
+
+        qs = qs.filter(
+            estado__icontains=nom_estado
+        )
+
+    tiene_filtro_activo = bool(
+        busqueda
+        or solo_no_leidos
+        or (
+            filtro_chat
+            and filtro_chat != "todos"
+        )
+    )
+
+    # ---------------------------------------------------------
+    # IMPORTANTE:
+    # Primero creamos last_time_eff.
+    # Después podemos usarlo en filtros.
+    # ---------------------------------------------------------
 
     qs = qs.annotate(
-        last_text=Subquery(last_msg_qs.values("body")[:1]),
-        last_time=Subquery(last_msg_qs.values("created_at")[:1]),
+        last_text=Subquery(
+            last_msg_qs.values(
+                "body"
+            )[:1]
+        ),
+        last_time=Subquery(
+            last_msg_qs.values(
+                "created_at"
+            )[:1]
+        ),
     ).annotate(
-        last_time_eff=Coalesce("last_time", "creado"),
+        last_time_eff=Coalesce(
+            "last_time",
+            "creado",
+        ),
     ).distinct()
+
+    # ---------------------------------------------------------
+    # FILTRO SOLO NO LEÍDOS
+    # ---------------------------------------------------------
 
     if solo_no_leidos:
         lectura_qs = (
@@ -2468,17 +2635,23 @@ def chats_list(request):
                 expediente_id=OuterRef("pk"),
                 numero_asesor=numero_asesor,
             )
-            .values("last_read_at")[:1]
+            .values(
+                "last_read_at"
+            )[:1]
         )
 
         qs = qs.annotate(
-            last_read_at_chat=Subquery(lectura_qs),
+            last_read_at_chat=Subquery(
+                lectura_qs
+            ),
         )
 
         mensajes_entrantes_qs = (
             MensajeWhatsApp.objects
             .filter(
-                telefono=OuterRef("cliente__telefono"),
+                telefono=OuterRef(
+                    "cliente__telefono"
+                ),
                 numero_asesor=numero_asesor,
                 direction=MensajeWhatsApp.Direccion.IN,
             )
@@ -2507,32 +2680,78 @@ def chats_list(request):
             )
         )
 
+    # ---------------------------------------------------------
+    # BÚSQUEDA / RECIENTES / HISTÓRICO
+    # ---------------------------------------------------------
+
     if busqueda:
-        digitos = re.sub(r"\D", "", busqueda)
-        filtro_busqueda = Q(cliente__nombre__icontains=busqueda)
+        digitos = re.sub(
+            r"\D",
+            "",
+            busqueda,
+        )
+
+        filtro_busqueda = Q(
+            cliente__nombre__icontains=busqueda
+        )
+
         if digitos:
-            telefono_busqueda = digitos[-10:] if len(digitos) >= 10 else digitos
-            filtro_busqueda |= Q(cliente__telefono__icontains=telefono_busqueda)
-        qs = qs.filter(filtro_busqueda)
-        scope = "busqueda"
-    elif paginado:
-        if scope == "historico":
-            qs = qs.filter(
-                last_time_eff__lt=limite_recientes,
-            ).filter(
-                Q(ultima_cita_agendada__isnull=True)
-                | Q(ultima_cita_agendada__lt=ahora)
-                | Q(ultima_cita_agendada__gt=limite_cita_prioritaria)
+            telefono_busqueda = (
+                digitos[-10:]
+                if len(digitos) >= 10
+                else digitos
             )
+
+            filtro_busqueda |= Q(
+                cliente__telefono__icontains=telefono_busqueda
+            )
+
+        qs = qs.filter(
+            filtro_busqueda
+        )
+
+        scope = "busqueda"
+
+    elif paginado and not tiene_filtro_activo:
+
+        if scope == "historico":
+            qs = (
+                qs.filter(
+                    last_time_eff__lt=limite_recientes,
+                )
+                .filter(
+                    Q(
+                        ultima_cita_agendada__isnull=True
+                    )
+                    |
+                    Q(
+                        ultima_cita_agendada__lt=ahora
+                    )
+                    |
+                    Q(
+                        ultima_cita_agendada__gt=limite_cita_prioritaria
+                    )
+                )
+            )
+
         else:
             scope = "recientes"
+
             qs = qs.filter(
-                Q(last_time_eff__gte=limite_recientes)
-                | Q(
+                Q(
+                    last_time_eff__gte=limite_recientes
+                )
+                |
+                Q(
                     ultima_cita_agendada__gte=ahora,
                     ultima_cita_agendada__lte=limite_cita_prioritaria,
                 )
             )
+
+    # ---------------------------------------------------------
+    # PRIORIDAD DE CITAS
+    # ---------------------------------------------------------
+
     qs = qs.annotate(
         tiene_cita_futura=Case(
             When(
@@ -2546,94 +2765,227 @@ def chats_list(request):
         )
     )
 
+    # ---------------------------------------------------------
+    # CURSOR DE PAGINACIÓN
+    # ---------------------------------------------------------
+
     if paginado and before:
         if before_id:
             qs = qs.filter(
-                Q(tiene_cita_futura__lt=before_prioridad)
-                | Q(
+                Q(
+                    tiene_cita_futura__lt=before_prioridad
+                )
+                |
+                Q(
                     tiene_cita_futura=before_prioridad,
                     last_time_eff__lt=before,
                 )
-                | Q(
+                |
+                Q(
                     tiene_cita_futura=before_prioridad,
                     last_time_eff=before,
                     id__lt=before_id,
                 )
             )
+
         else:
             qs = qs.filter(
-                Q(tiene_cita_futura__lt=before_prioridad)
-                | Q(
+                Q(
+                    tiene_cita_futura__lt=before_prioridad
+                )
+                |
+                Q(
                     tiene_cita_futura=before_prioridad,
                     last_time_eff__lt=before,
                 )
             )
+
+    # ---------------------------------------------------------
+    # ORDEN
+    # ---------------------------------------------------------
 
     consulta = qs.order_by(
         "-tiene_cita_futura",
         "-last_time_eff",
         "-id",
     )
+
     if paginado:
-        pagina = list(consulta[:limit + 1])
-        has_more = len(pagina) > limit
+        pagina = list(
+            consulta[:limit + 1]
+        )
+
+        has_more = (
+            len(pagina) > limit
+        )
+
         expedientes = pagina[:limit]
+
     else:
-        expedientes = list(consulta[:limit])
+        expedientes = list(
+            consulta[:limit]
+        )
+
         has_more = False
 
-    no_leidos = _contar_no_leidos_chats(expedientes, numero_asesor)
+    # ---------------------------------------------------------
+    # NO LEÍDOS DE LOS RESULTADOS
+    # ---------------------------------------------------------
+
+    no_leidos = _contar_no_leidos_chats(
+        expedientes,
+        numero_asesor,
+    )
+
     data = []
+
+    # ---------------------------------------------------------
+    # RESPUESTA
+    # ---------------------------------------------------------
+
     for exp in expedientes:
         dt_original = exp.last_time
         dt_ui = dt_original
-        if dt_ui and settings.USE_TZ and timezone.is_aware(dt_ui):
-            dt_ui = timezone.localtime(dt_ui)
-        telefono = normaliza_tel_mx(exp.cliente.telefono)
+
+        if (
+            dt_ui
+            and settings.USE_TZ
+            and timezone.is_aware(dt_ui)
+        ):
+            dt_ui = timezone.localtime(
+                dt_ui
+            )
+
+        telefono = normaliza_tel_mx(
+            exp.cliente.telefono
+        )
+
         estado_ia = obtener_estado_ia_conversacion(
             numero_asesor=numero_asesor,
             expediente=exp,
         )
+
         data.append({
-            "id": exp.id, "telefono": telefono, "nombre": exp.cliente.nombre or "Prospecto",
-            "agencia": exp.agencia or "", "linea": exp.business or "", "estado": exp.estado or "",
-            "unread": int(no_leidos.get(telefono, 0)), "last_text": exp.last_text or "",
-            "last_time": dt_ui.strftime("%I:%M %p").lower() if dt_ui else "",
-            "last_message_at": dt_original.isoformat() if dt_original else None, "numero_asesor": numero_asesor,
-            "asesor_digital": exp.asesor_digital or "", "usuario_crm_asignado": exp.usuario_crm_asignado or "",
-            # En la lista paginada el detalle de IA se obtiene al abrir el chat; el modo legacy conserva su respuesta anterior.
+            "id": exp.id,
+            "telefono": telefono,
+            "nombre": exp.cliente.nombre or "Prospecto",
+            "agencia": exp.agencia or "",
+            "linea": exp.business or "",
+            "estado": exp.estado or "",
+            "unread": int(
+                no_leidos.get(
+                    telefono,
+                    0,
+                )
+            ),
+            "last_text": exp.last_text or "",
+            "last_time": (
+                dt_ui.strftime(
+                    "%I:%M %p"
+                ).lower()
+                if dt_ui
+                else ""
+            ),
+            "last_message_at": (
+                dt_original.isoformat()
+                if dt_original
+                else None
+            ),
+            "numero_asesor": numero_asesor,
+            "asesor_digital": exp.asesor_digital or "",
+            "usuario_crm_asignado":
+                exp.usuario_crm_asignado or "",
             "ia_estado": estado_ia,
-            "ia_pausada": estado_ia.get("expediente", {}).get("ia_pausada", False) if estado_ia else bool(exp.ia_pausada),
-            "ia_bloqueos": estado_ia.get("bloqueos", []) if estado_ia else [],
-            "whatsapp_bloqueado": bool(exp.whatsapp_bloqueado),
-            "whatsapp_bloqueado_at": exp.whatsapp_bloqueado_at.isoformat() if exp.whatsapp_bloqueado_at else None,
-            "whatsapp_bloqueado_motivo": exp.whatsapp_bloqueado_motivo or "",
+            "ia_pausada": (
+                estado_ia
+                .get("expediente", {})
+                .get("ia_pausada", False)
+                if estado_ia
+                else bool(exp.ia_pausada)
+            ),
+            "ia_bloqueos": (
+                estado_ia.get(
+                    "bloqueos",
+                    [],
+                )
+                if estado_ia
+                else []
+            ),
+            "whatsapp_bloqueado":
+                bool(exp.whatsapp_bloqueado),
+            "whatsapp_bloqueado_at": (
+                exp.whatsapp_bloqueado_at.isoformat()
+                if exp.whatsapp_bloqueado_at
+                else None
+            ),
+            "whatsapp_bloqueado_motivo":
+                exp.whatsapp_bloqueado_motivo or "",
         })
 
+    # ---------------------------------------------------------
+    # RESPUESTA SIN PAGINACIÓN
+    # ---------------------------------------------------------
+
     if not paginado:
-        return Response({
+        return Response(
+            {
+                "results": data,
+                "conteos": conteos,
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    ultimo = (
+        expedientes[-1]
+        if expedientes
+        else None
+    )
+
+    next_scope = (
+        "historico"
+        if (
+            not busqueda
+            and scope == "recientes"
+            and not has_more
+        )
+        else ""
+    )
+
+    return Response(
+        {
+            "ok": True,
             "results": data,
             "conteos": conteos,
-        }, status=status.HTTP_200_OK)
-
-    ultimo = expedientes[-1] if expedientes else None
-    next_scope = "historico" if not busqueda and scope == "recientes" and not has_more else ""
-    return Response({
-        "ok": True, 
-        "results": data, 
-        "conteos": conteos,
-        "paginacion": {
-            "limit": limit, 
-            "has_more": has_more, 
-            "scope": scope, 
-            "next_scope": next_scope,
-            "before": ultimo.last_time_eff.isoformat() if ultimo and ultimo.last_time_eff else "",
-            "before_id": ultimo.id if ultimo else 0,
-            "before_prioridad": ultimo.tiene_cita_futura if ultimo else 0,
-            "dias_recientes": dias,
-            "query": busqueda,
+            "paginacion": {
+                "limit": limit,
+                "has_more": has_more,
+                "scope": scope,
+                "next_scope": next_scope,
+                "before": (
+                    ultimo.last_time_eff.isoformat()
+                    if (
+                        ultimo
+                        and ultimo.last_time_eff
+                    )
+                    else ""
+                ),
+                "before_id": (
+                    ultimo.id
+                    if ultimo
+                    else 0
+                ),
+                "before_prioridad": (
+                    ultimo.tiene_cita_futura
+                    if ultimo
+                    else 0
+                ),
+                "dias_recientes": dias,
+                "query": busqueda,
+            },
         },
-    }, status=status.HTTP_200_OK)
+        status=status.HTTP_200_OK,
+    )
+
 
 def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
     """

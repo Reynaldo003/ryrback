@@ -1,25 +1,17 @@
 from datetime import timedelta
-
 from django.core.cache import cache
 from django.db import connections
 from django.utils.dateparse import parse_date
-
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-
 from .serializers import CompraRefaccionesSerializer
 
-
 DB_ALIAS = "sqlserver_inv"
-
 TABLA = "dbo.Matriz_FacturasRef"
-
 CACHE_OPCIONES = "compra_refacciones_facturas_opciones_v1"
-
 
 # ============================================================
 # HELPERS
@@ -33,7 +25,6 @@ def texto_parametro(request, nombre):
         )
         or ""
     ).strip()
-
 
 def entero_parametro(
     request,
