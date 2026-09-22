@@ -2360,7 +2360,7 @@ def chats_list(request):
         todos=Count("id", distinct=True),
         pendiente_cotizacion=Count(
             "id",
-            filter=Q(estado__icontains="cotizaci"),
+            filter=Q(estado__icontains="pendiente de cotizaci") | Q(estado__icontains="pendiente cotizaci"),
             distinct=True,
         ),
         seguimiento=Count(
@@ -2413,7 +2413,10 @@ def chats_list(request):
     }
 
     if filtro_chat == "pendiente_cotizacion":
-        qs = qs.filter(estado__icontains="cotizaci")
+        qs = qs.filter(
+            Q(estado__icontains="pendiente de cotizaci") | 
+            Q(estado__icontains="pendiente cotizaci")
+        )
     elif filtro_chat == "seguimiento":
         qs = qs.filter(estado__icontains="seguimiento")
     elif filtro_chat == "calificado":
@@ -2421,7 +2424,7 @@ def chats_list(request):
     elif filtro_chat.startswith("estado:"):
         nom_estado = filtro_chat.split("estado:", 1)[1]
         qs = qs.filter(estado__icontains=nom_estado)
-
+        
     tiene_filtro_activo = bool(busqueda or solo_no_leidos or (filtro_chat and filtro_chat != "todos"))
 
     if busqueda:
