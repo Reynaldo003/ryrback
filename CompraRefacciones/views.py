@@ -160,7 +160,6 @@ def construir_filtros(request):
             'PR', 
             'TX', 
             'EA'
-            OR (Serie = 'IN' AND Proveedor = 'AUTOMOTRIZ R&R'))
         )
         """
     ]
@@ -713,8 +712,8 @@ class CompraRefaccionesOpcionesView(APIView):
                     'PR', 
                     'TX', 
                     'EA'
-                     OR (Serie = 'IN' AND Proveedor = 'AUTOMOTRIZ R&R'))
               )
+              OR (Serie = 'IN' AND Proveedor = 'AUTOMOTRIZ R&R')
 
             ORDER BY
                 agencia
