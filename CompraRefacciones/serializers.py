@@ -24,30 +24,24 @@ class CompraRefaccionesSerializer(serializers.Serializer):
         required=False,
     )
 
+    nrpedunpar = serializers.CharField(
+        allow_null=True,
+        allow_blank=True,
+        required=False,
+    )
+
     qtprodutos = serializers.FloatField(
         allow_null=True,
         required=False,
     )
 
-    unidade = serializers.CharField(
+    proveedor = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,
     )
 
-    prodserv = serializers.CharField(
-        allow_null=True,
-        allow_blank=True,
-        required=False,
-    )
-
-    descrprod = serializers.CharField(
-        allow_null=True,
-        allow_blank=True,
-        required=False,
-    )
-
-    vrunitliq = serializers.FloatField(
+    dtemissao = serializers.DateField(
         allow_null=True,
         required=False,
     )
@@ -57,12 +51,12 @@ class CompraRefaccionesSerializer(serializers.Serializer):
         required=False,
     )
 
-    dtemissao = serializers.DateField(
+    subtotal = serializers.FloatField(
         allow_null=True,
         required=False,
     )
 
-    vrunitbruto = serializers.FloatField(
+    total = serializers.FloatField(
         allow_null=True,
         required=False,
     )

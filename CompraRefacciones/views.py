@@ -1,7 +1,9 @@
+from datetime import timedelta
+
 from django.core.cache import cache
 from django.db import connections
 from django.utils.dateparse import parse_date
-from datetime import datetime, timedelta
+
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -14,65 +16,14 @@ from .serializers import CompraRefaccionesSerializer
 
 DB_ALIAS = "sqlserver_inv"
 
-TABLA = "dbo.Matriz_CompraRef_Tipificada"
+TABLA = "dbo.Matriz_FacturasRef"
 
-CACHE_OPCIONES = "compra_refacciones_opciones_v2"
-
-
-SERIES_VALIDAS = [
-    "P",
-    "AP",
-    "VWM",
-    "AAP40",
-    "AN",
-    'F', 
-    'PR', 
-    'TX', 
-    'EA'
-]
+CACHE_OPCIONES = "compra_refacciones_facturas_opciones_v1"
 
 
 # ============================================================
-# EXPRESIONES DE FECHA
-#
-# Las columnas originales son VARCHAR(MAX).
-#
-# Ejemplo esperado:
-# 2026-08-31
-# 2026-08-31 10:35:00
-#
-# Tomamos los primeros 10 caracteres y los convertimos
-# explícitamente como YYYY-MM-DD.
+# HELPERS
 # ============================================================
-
-SQL_DT_EMISSAO = """
-TRY_CONVERT(
-    DATE,
-    LEFT(
-        NULLIF(
-            LTRIM(RTRIM(DtEmissao)),
-            ''
-        ),
-        10
-    ),
-    23
-)
-"""
-
-SQL_DT_ENTRADA = """
-TRY_CONVERT(
-    DATE,
-    LEFT(
-        NULLIF(
-            LTRIM(RTRIM(DtEntrada)),
-            ''
-        ),
-        10
-    ),
-    23
-)
-"""
-
 
 def texto_parametro(request, nombre):
     return str(
@@ -84,17 +35,62 @@ def texto_parametro(request, nombre):
     ).strip()
 
 
-def validar_fecha(valor, nombre):
-    if valor and not parse_date(valor):
+def entero_parametro(
+    request,
+    nombre,
+    default,
+    minimo=None,
+    maximo=None,
+):
+    try:
+        valor = int(
+            request.query_params.get(
+                nombre,
+                default,
+            )
+        )
+    except (TypeError, ValueError):
+        valor = default
+
+    if minimo is not None:
+        valor = max(
+            minimo,
+            valor,
+        )
+
+    if maximo is not None:
+        valor = min(
+            maximo,
+            valor,
+        )
+
+    return valor
+
+
+def validar_fecha(
+    valor,
+    nombre,
+):
+    if not valor:
+        return None
+
+    fecha = parse_date(
+        valor
+    )
+
+    if not fecha:
         raise ValueError(
             f"El parámetro '{nombre}' debe tener formato YYYY-MM-DD."
         )
+
+    return fecha
 
 
 def cursor_a_dicts(cursor):
     columnas = [
         columna[0]
-        for columna in cursor.description
+        for columna
+        in cursor.description
     ]
 
     return [
@@ -104,38 +100,48 @@ def cursor_a_dicts(cursor):
                 fila,
             )
         )
-        for fila in cursor.fetchall()
+        for fila
+        in cursor.fetchall()
     ]
 
 
-def construir_filtros(request):
-    busqueda = texto_parametro(
-        request,
-        "q",
-    )
+# ============================================================
+# FILTROS
+#
+# TpItensNFE = '1' y SitNF = 'V'
+# SIEMPRE se aplican.
+#
+# El frontend NO puede cambiarlos.
+# ============================================================
 
+def construir_filtros(request):
     agencia = texto_parametro(
         request,
         "agencia",
     )
 
-    fecha_desde = texto_parametro(
+    fecha_desde_texto = texto_parametro(
         request,
         "fecha_desde",
     )
 
-    fecha_hasta = texto_parametro(
+    fecha_hasta_texto = texto_parametro(
         request,
         "fecha_hasta",
     )
 
-    validar_fecha(
-        fecha_desde,
+    busqueda = texto_parametro(
+        request,
+        "q",
+    )
+
+    fecha_desde = validar_fecha(
+        fecha_desde_texto,
         "fecha_desde",
     )
 
-    validar_fecha(
-        fecha_hasta,
+    fecha_hasta = validar_fecha(
+        fecha_hasta_texto,
         "fecha_hasta",
     )
 
@@ -148,28 +154,25 @@ def construir_filtros(request):
             "'fecha_desde' no puede ser mayor que 'fecha_hasta'."
         )
 
+    # ========================================================
+    # FILTROS OBLIGATORIOS
+    # ========================================================
+
     condiciones = [
-        """
-        Serie IN (
-            'P',
-            'AP',
-            'VWM',
-            'AAP40',
-            'AN',
-            'F', 
-            'PR', 
-            'TX', 
-            'EA'
-        )
-        """
+        "TpItensNFE = %s",
+        "SitNF = %s",
     ]
 
-    parametros = []
+    parametros = [
+        "1",
+        "V",
+    ]
 
-    # =========================================================
+    # ========================================================
     # AGENCIA
-    # Solo se aplica si el frontend la envía.
-    # =========================================================
+    #
+    # Solo si viene desde React.
+    # ========================================================
 
     if agencia:
         condiciones.append(
@@ -180,9 +183,9 @@ def construir_filtros(request):
             agencia
         )
 
-    # =========================================================
+    # ========================================================
     # FECHA DESDE
-    # =========================================================
+    # ========================================================
 
     if fecha_desde:
         condiciones.append(
@@ -193,29 +196,23 @@ def construir_filtros(request):
             fecha_desde
         )
 
-    # =========================================================
+    # ========================================================
     # FECHA HASTA
     #
-    # Utilizamos el día siguiente con <
-    # para incluir correctamente todo el último día si
-    # DtEmissao contiene hora.
+    # El usuario selecciona una fecha inclusiva.
     #
     # Ejemplo:
-    #
-    # fecha_hasta = 2026-08-31
+    # 2026-08-31
     #
     # SQL:
     # DtEmissao < 2026-09-01
-    # =========================================================
+    #
+    # Esto replica exactamente la lógica de tu consulta.
+    # ========================================================
 
     if fecha_hasta:
-        fecha_hasta_date = datetime.strptime(
-            fecha_hasta,
-            "%Y-%m-%d",
-        ).date()
-
-        siguiente_dia = (
-            fecha_hasta_date
+        fecha_hasta_exclusiva = (
+            fecha_hasta
             + timedelta(days=1)
         )
 
@@ -224,34 +221,29 @@ def construir_filtros(request):
         )
 
         parametros.append(
-            siguiente_dia.strftime(
-                "%Y-%m-%d"
-            )
+            fecha_hasta_exclusiva
         )
 
-    # =========================================================
+    # ========================================================
     # BUSCADOR
-    # =========================================================
+    # ========================================================
 
     if busqueda:
-        termino = f"%{busqueda}%"
+        termino = (
+            f"%{busqueda}%"
+        )
 
-        condiciones.append("""
+        condiciones.append(
+            """
             (
                 Agencia LIKE %s
-
-                OR CONVERT(
-                    VARCHAR(50),
-                    NrNota
-                ) LIKE %s
-
-                OR ProdServ LIKE %s
-
-                OR DescrProd LIKE %s
-
-                OR Unidade LIKE %s
+                OR CONVERT(VARCHAR(50), NrNota) LIKE %s
+                OR Serie LIKE %s
+                OR NrPedUnPar LIKE %s
+                OR Proveedor LIKE %s
             )
-        """)
+            """
+        )
 
         parametros.extend([
             termino,
@@ -272,65 +264,46 @@ def construir_filtros(request):
         where_sql,
         parametros,
     )
+
+
 # ============================================================
 # LISTADO
 # ============================================================
 
 class CompraRefaccionesListView(APIView):
     authentication_classes = [
-        CRMJWTAuthentication
+        CRMJWTAuthentication,
     ]
 
     permission_classes = [
-        IsAuthenticated
+        IsAuthenticated,
     ]
 
     def get(self, request):
-        # =====================================================
-        # PAGINACIÓN
-        # =====================================================
-
-        try:
-            pagina = max(
-                int(
-                    request.query_params.get(
-                        "page",
-                        1,
-                    )
-                ),
-                1,
-            )
-        except (TypeError, ValueError):
-            pagina = 1
-
-        try:
-            tamano_pagina = int(
-                request.query_params.get(
-                    "page_size",
-                    50,
-                )
-            )
-        except (TypeError, ValueError):
-            tamano_pagina = 50
-
-        tamano_pagina = max(
+        pagina = entero_parametro(
+            request,
+            "page",
             1,
-            min(
-                tamano_pagina,
-                500,
-            ),
+            minimo=1,
+        )
+
+        tamano_pagina = entero_parametro(
+            request,
+            "page_size",
+            50,
+            minimo=1,
+            maximo=500,
         )
 
         offset = (
             pagina - 1
         ) * tamano_pagina
 
-        # =====================================================
-        # FILTROS
-        # =====================================================
-
         try:
-            where_sql, parametros = construir_filtros(
+            (
+                where_sql,
+                parametros,
+            ) = construir_filtros(
                 request
             )
 
@@ -342,18 +315,12 @@ class CompraRefaccionesListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # =====================================================
-        # CONSULTA
+        # ====================================================
+        # UNA SOLA CONSULTA
         #
-        # Las métricas se calculan con funciones de ventana.
-        #
-        # Esto evita hacer una segunda consulta para obtener:
-        #
-        # - registros
-        # - cantidad total
-        # - valor líquido
-        # - valor bruto
-        # =====================================================
+        # COUNT y SUM se calculan sobre todos los registros
+        # filtrados, aunque únicamente regresemos una página.
+        # ====================================================
 
         consulta = f"""
             SELECT
@@ -365,37 +332,19 @@ class CompraRefaccionesListView(APIView):
 
                 Serie AS serie,
 
+                NrPedUnPar AS nrpedunpar,
+
                 QtProdutos AS qtprodutos,
 
-                Unidade AS unidade,
+                Proveedor AS proveedor,
 
-                ProdServ AS prodserv,
+                DtEmissao AS dtemissao,
 
-                DescrProd AS descrprod,
+                DtEntrada AS dtentrada,
 
-                VrUnitLiq AS vrunitliq,
+                Subtotal AS subtotal,
 
-                NULLIF(
-                    LEFT(
-                        LTRIM(
-                            RTRIM(DtEntrada)
-                        ),
-                        10
-                    ),
-                    ''
-                ) AS dtentrada,
-
-                NULLIF(
-                    LEFT(
-                        LTRIM(
-                            RTRIM(DtEmissao)
-                        ),
-                        10
-                    ),
-                    ''
-                ) AS dtemissao,
-
-                VrUnitBruto AS vrunitbruto,
+                Total AS total,
 
                 COUNT(*) OVER ()
                     AS total_registros,
@@ -413,32 +362,22 @@ class CompraRefaccionesListView(APIView):
                 COALESCE(
                     SUM(
                         COALESCE(
-                            VrUnitLiq,
-                            0
-                        )
-                        *
-                        COALESCE(
-                            QtProdutos,
+                            Subtotal,
                             0
                         )
                     ) OVER (),
                     0
-                ) AS valor_unitario_liq,
+                ) AS subtotal_general,
 
                 COALESCE(
                     SUM(
                         COALESCE(
-                            VrUnitBruto,
-                            0
-                        )
-                        *
-                        COALESCE(
-                            QtProdutos,
+                            Total,
                             0
                         )
                     ) OVER (),
                     0
-                ) AS valor_unitario_bruto
+                ) AS total_general
 
             FROM {TABLA}
 
@@ -454,34 +393,33 @@ class CompraRefaccionesListView(APIView):
             FETCH NEXT %s ROWS ONLY
         """
 
-        with connections[DB_ALIAS].cursor() as cursor:
+        parametros_consulta = [
+            *parametros,
+            offset,
+            tamano_pagina,
+        ]
+
+        with connections[
+            DB_ALIAS
+        ].cursor() as cursor:
             cursor.execute(
                 consulta,
-                [
-                    *parametros,
-                    offset,
-                    tamano_pagina,
-                ],
+                parametros_consulta,
             )
 
             registros = cursor_a_dicts(
                 cursor
             )
 
-        # =====================================================
+        # ====================================================
         # MÉTRICAS
-        #
-        # Las columnas calculadas vienen repetidas en cada fila,
-        # porque son funciones OVER().
-        #
-        # Tomamos únicamente la primera fila.
-        # =====================================================
+        # ====================================================
 
         if registros:
-            primer_registro = registros[0]
+            primero = registros[0]
 
-            total = int(
-                primer_registro.get(
+            total_registros = int(
+                primero.get(
                     "total_registros",
                     0,
                 )
@@ -489,43 +427,47 @@ class CompraRefaccionesListView(APIView):
             )
 
             metricas = {
-                "registros": total,
+                "registros":
+                    total_registros,
 
-                "cantidad_total": primer_registro.get(
-                    "cantidad_total",
-                    0,
-                )
-                or 0,
+                "cantidad_total":
+                    primero.get(
+                        "cantidad_total",
+                        0,
+                    )
+                    or 0,
 
-                "valor_unitario_liq": primer_registro.get(
-                    "valor_unitario_liq",
-                    0,
-                )
-                or 0,
+                "subtotal":
+                    primero.get(
+                        "subtotal_general",
+                        0,
+                    )
+                    or 0,
 
-                "valor_unitario_bruto": primer_registro.get(
-                    "valor_unitario_bruto",
-                    0,
-                )
-                or 0,
+                "total":
+                    primero.get(
+                        "total_general",
+                        0,
+                    )
+                    or 0,
             }
 
         else:
-            total = 0
+            total_registros = 0
 
             metricas = {
                 "registros": 0,
                 "cantidad_total": 0,
-                "valor_unitario_liq": 0,
-                "valor_unitario_bruto": 0,
+                "subtotal": 0,
+                "total": 0,
             }
 
-        # =====================================================
-        # QUITAR CAMPOS INTERNOS
+        # ====================================================
+        # CAMPOS INTERNOS
         #
-        # No necesitamos enviar las métricas repetidas dentro
-        # de cada registro.
-        # =====================================================
+        # No necesitamos repetir las métricas dentro de
+        # cada fila.
+        # ====================================================
 
         for registro in registros:
             registro.pop(
@@ -539,207 +481,122 @@ class CompraRefaccionesListView(APIView):
             )
 
             registro.pop(
-                "valor_unitario_liq",
+                "subtotal_general",
                 None,
             )
 
             registro.pop(
-                "valor_unitario_bruto",
+                "total_general",
                 None,
             )
 
-        serializer = CompraRefaccionesSerializer(
-            registros,
-            many=True,
+        serializer = (
+            CompraRefaccionesSerializer(
+                registros,
+                many=True,
+            )
         )
 
-        return Response({
-            "count": total,
-            "page": pagina,
-            "page_size": tamano_pagina,
+        return Response(
+            {
+                "count":
+                    total_registros,
 
-            "metricas": metricas,
+                "page":
+                    pagina,
 
-            "results": serializer.data,
-        })
+                "page_size":
+                    tamano_pagina,
 
-# ============================================================
-# DASHBOARD
-# ============================================================
+                "metricas":
+                    metricas,
 
-class CompraRefaccionesDashboardView(APIView):
-    authentication_classes = [
-        CRMJWTAuthentication
-    ]
-
-    permission_classes = [
-        IsAuthenticated
-    ]
-
-    def get(self, request):
-        try:
-            where_sql, parametros = construir_filtros(
-                request
-            )
-
-        except ValueError as exc:
-            return Response(
-                {
-                    "detail": str(exc),
-                },
-                status=status.HTTP_400_BAD_REQUEST,
-            )
-
-        consulta = f"""
-            SELECT
-                COUNT(*) AS registros,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            QtProdutos,
-                            0
-                        )
-                    ),
-                    0
-                ) AS cantidad_total,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrUnitLiq,
-                            0
-                        )
-                        *
-                        COALESCE(
-                            QtProdutos,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_unitario_liq,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrUnitBruto,
-                            0
-                        )
-                        *
-                        COALESCE(
-                            QtProdutos,
-                            0
-                        )
-                    ),
-                    0
-                ) AS valor_unitario_bruto
-
-            FROM {TABLA}
-
-            {where_sql}
-        """
-
-        with connections[DB_ALIAS].cursor() as cursor:
-            cursor.execute(
-                consulta,
-                parametros,
-            )
-
-            resultados = cursor_a_dicts(
-                cursor
-            )
-
-        if resultados:
-            metricas = resultados[0]
-
-        else:
-            metricas = {
-                "registros": 0,
-                "cantidad_total": 0,
-                "valor_unitario_liq": 0,
-                "valor_unitario_bruto": 0,
+                "results":
+                    serializer.data,
             }
-
-        return Response({
-            "metricas": metricas,
-        })
+        )
 
 
 # ============================================================
-# OPCIONES DE FILTROS
+# OPCIONES
+#
+# Solo necesitamos agencias.
+#
+# Incluso para obtener agencias aplicamos:
+#
+# TpItensNFE = '1'
+# SitNF = 'V'
 # ============================================================
+
 class CompraRefaccionesOpcionesView(APIView):
     authentication_classes = [
-        CRMJWTAuthentication
+        CRMJWTAuthentication,
     ]
 
     permission_classes = [
-        IsAuthenticated
+        IsAuthenticated,
     ]
 
     def get(self, request):
-        opciones_cache = cache.get(
+        resultado_cache = cache.get(
             CACHE_OPCIONES
         )
 
-        if opciones_cache:
+        if resultado_cache:
             return Response(
-                opciones_cache
+                resultado_cache
             )
 
         consulta = f"""
             SELECT DISTINCT
-                CONVERT(
-                    VARCHAR(255),
-                    Agencia
-                ) AS agencia
+                Agencia
 
             FROM {TABLA}
 
-            WHERE Agencia IS NOT NULL
+            WHERE
+                TpItensNFE = %s
 
-              AND LTRIM(
+                AND SitNF = %s
+
+                AND Agencia IS NOT NULL
+
+                AND LTRIM(
                     RTRIM(Agencia)
-                  ) <> ''
-
-              AND Serie IN (
-                    'P',
-                    'AP',
-                    'VWM',
-                    'AAP40',
-                    'AN',
-                    'F', 
-                    'PR', 
-                    'TX', 
-                    'EA'
-              )
-              OR (Serie = 'IN' AND Proveedor = 'AUTOMOTRIZ R&R')
+                ) <> ''
 
             ORDER BY
-                agencia
+                Agencia
         """
 
-        with connections[DB_ALIAS].cursor() as cursor:
+        with connections[
+            DB_ALIAS
+        ].cursor() as cursor:
             cursor.execute(
-                consulta
+                consulta,
+                [
+                    "1",
+                    "V",
+                ],
             )
 
             agencias = [
                 fila[0]
-                for fila in cursor.fetchall()
+                for fila
+                in cursor.fetchall()
                 if fila[0]
             ]
 
-        opciones = {
-            "agencias": agencias,
+        resultado = {
+            "agencias":
+                agencias,
         }
 
         cache.set(
             CACHE_OPCIONES,
-            opciones,
+            resultado,
             3600,
         )
 
         return Response(
-            opciones
+            resultado
         )
