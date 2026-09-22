@@ -189,26 +189,12 @@ def construir_filtros(request):
 
     if fecha_desde:
         condiciones.append(
-            "DtEmissao >= %s"
+            "DtEntrada >= %s"
         )
 
         parametros.append(
             fecha_desde
         )
-
-    # ========================================================
-    # FECHA HASTA
-    #
-    # El usuario selecciona una fecha inclusiva.
-    #
-    # Ejemplo:
-    # 2026-08-31
-    #
-    # SQL:
-    # DtEmissao < 2026-09-01
-    #
-    # Esto replica exactamente la lógica de tu consulta.
-    # ========================================================
 
     if fecha_hasta:
         fecha_hasta_exclusiva = (
@@ -217,7 +203,7 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            "DtEmissao < %s"
+            "DtEntrada < %s"
         )
 
         parametros.append(
@@ -384,7 +370,7 @@ class CompraRefaccionesListView(APIView):
             {where_sql}
 
             ORDER BY
-                DtEmissao DESC,
+                DtEntrada DESC,
                 NrNota DESC,
                 rowid__ DESC
 
@@ -462,13 +448,6 @@ class CompraRefaccionesListView(APIView):
                 "total": 0,
             }
 
-        # ====================================================
-        # CAMPOS INTERNOS
-        #
-        # No necesitamos repetir las métricas dentro de
-        # cada fila.
-        # ====================================================
-
         for registro in registros:
             registro.pop(
                 "total_registros",
@@ -515,18 +494,6 @@ class CompraRefaccionesListView(APIView):
                     serializer.data,
             }
         )
-
-
-# ============================================================
-# OPCIONES
-#
-# Solo necesitamos agencias.
-#
-# Incluso para obtener agencias aplicamos:
-#
-# TpItensNFE = '1'
-# SitNF = 'V'
-# ============================================================
 
 class CompraRefaccionesOpcionesView(APIView):
     authentication_classes = [
