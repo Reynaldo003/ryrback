@@ -1,7 +1,7 @@
 from django.core.cache import cache
 from django.db import connections
 from django.utils.dateparse import parse_date
-
+from datetime import datetime, timedelta
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -115,11 +115,6 @@ def construir_filtros(request):
         "agencia",
     )
 
-    serie = texto_parametro(
-        request,
-        "serie",
-    )
-
     fecha_desde = texto_parametro(
         request,
         "fecha_desde",
@@ -149,48 +144,24 @@ def construir_filtros(request):
             "'fecha_desde' no puede ser mayor que 'fecha_hasta'."
         )
 
-    if (
-        serie
-        and serie not in SERIES_VALIDAS
-    ):
-        raise ValueError(
-            f"La serie '{serie}' no es válida."
+    condiciones = [
+        """
+        Serie IN (
+            'P',
+            'AP',
+            'VWM',
+            'AAP40',
+            'AN'
         )
+        """
+    ]
 
-    condiciones = []
     parametros = []
 
-    # ========================================================
-    # SERIE
-    #
-    # ESTE ES EL ÚNICO FILTRO POR DEFECTO.
-    #
-    # Siempre limita la información a:
-    #
-    # P
-    # AP
-    # VWM
-    # AAP40
-    # AN
-    # ========================================================
-
-    placeholders_series = ", ".join(
-        ["%s"] * len(SERIES_VALIDAS)
-    )
-
-    condiciones.append(
-        f"Serie IN ({placeholders_series})"
-    )
-
-    parametros.extend(
-        SERIES_VALIDAS
-    )
-
-    # ========================================================
+    # =========================================================
     # AGENCIA
-    #
-    # Solo se agrega si React la envía.
-    # ========================================================
+    # Solo se aplica si el frontend la envía.
+    # =========================================================
 
     if agencia:
         condiciones.append(
@@ -201,58 +172,58 @@ def construir_filtros(request):
             agencia
         )
 
-    # ========================================================
-    # SERIE ESPECÍFICA
-    #
-    # Si React no manda serie:
-    # se utilizan las 5 permitidas.
-    #
-    # Si manda P:
-    # además se agrega Serie = P.
-    # ========================================================
-
-    if serie:
-        condiciones.append(
-            "Serie = %s"
-        )
-
-        parametros.append(
-            serie
-        )
-
-    # ========================================================
+    # =========================================================
     # FECHA DESDE
-    #
-    # Solo existe si React envía fecha_desde.
-    # ========================================================
+    # =========================================================
 
     if fecha_desde:
         condiciones.append(
-            f"{SQL_DT_EMISSAO} >= %s"
+            "DtEmissao >= %s"
         )
 
         parametros.append(
             fecha_desde
         )
 
-    # ========================================================
+    # =========================================================
     # FECHA HASTA
     #
-    # Solo existe si React envía fecha_hasta.
-    # ========================================================
+    # Utilizamos el día siguiente con <
+    # para incluir correctamente todo el último día si
+    # DtEmissao contiene hora.
+    #
+    # Ejemplo:
+    #
+    # fecha_hasta = 2026-08-31
+    #
+    # SQL:
+    # DtEmissao < 2026-09-01
+    # =========================================================
 
     if fecha_hasta:
+        fecha_hasta_date = datetime.strptime(
+            fecha_hasta,
+            "%Y-%m-%d",
+        ).date()
+
+        siguiente_dia = (
+            fecha_hasta_date
+            + timedelta(days=1)
+        )
+
         condiciones.append(
-            f"{SQL_DT_EMISSAO} <= %s"
+            "DtEmissao < %s"
         )
 
         parametros.append(
-            fecha_hasta
+            siguiente_dia.strftime(
+                "%Y-%m-%d"
+            )
         )
 
-    # ========================================================
+    # =========================================================
     # BUSCADOR
-    # ========================================================
+    # =========================================================
 
     if busqueda:
         termino = f"%{busqueda}%"
@@ -265,8 +236,6 @@ def construir_filtros(request):
                     VARCHAR(50),
                     NrNota
                 ) LIKE %s
-
-                OR Serie LIKE %s
 
                 OR ProdServ LIKE %s
 
@@ -282,23 +251,19 @@ def construir_filtros(request):
             termino,
             termino,
             termino,
-            termino,
         ])
 
-    where_sql = ""
-
-    if condiciones:
-        where_sql = (
-            "WHERE "
-            + " AND ".join(condiciones)
+    where_sql = (
+        "WHERE "
+        + " AND ".join(
+            condiciones
         )
+    )
 
     return (
         where_sql,
         parametros,
     )
-
-
 # ============================================================
 # LISTADO
 # ============================================================
@@ -313,9 +278,9 @@ class CompraRefaccionesListView(APIView):
     ]
 
     def get(self, request):
-        # ====================================================
+        # =====================================================
         # PAGINACIÓN
-        # ====================================================
+        # =====================================================
 
         try:
             pagina = max(
@@ -352,9 +317,9 @@ class CompraRefaccionesListView(APIView):
             pagina - 1
         ) * tamano_pagina
 
-        # ====================================================
+        # =====================================================
         # FILTROS
-        # ====================================================
+        # =====================================================
 
         try:
             where_sql, parametros = construir_filtros(
@@ -369,26 +334,22 @@ class CompraRefaccionesListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ====================================================
-        # TOTAL
-        # ====================================================
-
-        consulta_total = f"""
-            SELECT
-                COUNT(*)
-
-            FROM {TABLA}
-
-            {where_sql}
-        """
-
-        # ====================================================
-        # DATOS
-        # ====================================================
+        # =====================================================
+        # CONSULTA
+        #
+        # Las métricas se calculan con funciones de ventana.
+        #
+        # Esto evita hacer una segunda consulta para obtener:
+        #
+        # - registros
+        # - cantidad total
+        # - valor líquido
+        # - valor bruto
+        # =====================================================
 
         consulta = f"""
             SELECT
-                rowid__ AS rowid__,
+                rowid__,
 
                 Agencia AS agencia,
 
@@ -406,18 +367,77 @@ class CompraRefaccionesListView(APIView):
 
                 VrUnitLiq AS vrunitliq,
 
-                {SQL_DT_ENTRADA} AS dtentrada,
+                NULLIF(
+                    LEFT(
+                        LTRIM(
+                            RTRIM(DtEntrada)
+                        ),
+                        10
+                    ),
+                    ''
+                ) AS dtentrada,
 
-                {SQL_DT_EMISSAO} AS dtemissao,
+                NULLIF(
+                    LEFT(
+                        LTRIM(
+                            RTRIM(DtEmissao)
+                        ),
+                        10
+                    ),
+                    ''
+                ) AS dtemissao,
 
-                VrUnitBruto AS vrunitbruto
+                VrUnitBruto AS vrunitbruto,
+
+                COUNT(*) OVER ()
+                    AS total_registros,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(
+                            QtProdutos,
+                            0
+                        )
+                    ) OVER (),
+                    0
+                ) AS cantidad_total,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(
+                            VrUnitLiq,
+                            0
+                        )
+                        *
+                        COALESCE(
+                            QtProdutos,
+                            0
+                        )
+                    ) OVER (),
+                    0
+                ) AS valor_unitario_liq,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(
+                            VrUnitBruto,
+                            0
+                        )
+                        *
+                        COALESCE(
+                            QtProdutos,
+                            0
+                        )
+                    ) OVER (),
+                    0
+                ) AS valor_unitario_bruto
 
             FROM {TABLA}
 
             {where_sql}
 
             ORDER BY
-                {SQL_DT_EMISSAO} DESC,
+                DtEmissao DESC,
                 NrNota DESC,
                 rowid__ DESC
 
@@ -427,13 +447,6 @@ class CompraRefaccionesListView(APIView):
         """
 
         with connections[DB_ALIAS].cursor() as cursor:
-            cursor.execute(
-                consulta_total,
-                parametros,
-            )
-
-            total = cursor.fetchone()[0]
-
             cursor.execute(
                 consulta,
                 [
@@ -447,6 +460,86 @@ class CompraRefaccionesListView(APIView):
                 cursor
             )
 
+        # =====================================================
+        # MÉTRICAS
+        #
+        # Las columnas calculadas vienen repetidas en cada fila,
+        # porque son funciones OVER().
+        #
+        # Tomamos únicamente la primera fila.
+        # =====================================================
+
+        if registros:
+            primer_registro = registros[0]
+
+            total = int(
+                primer_registro.get(
+                    "total_registros",
+                    0,
+                )
+                or 0
+            )
+
+            metricas = {
+                "registros": total,
+
+                "cantidad_total": primer_registro.get(
+                    "cantidad_total",
+                    0,
+                )
+                or 0,
+
+                "valor_unitario_liq": primer_registro.get(
+                    "valor_unitario_liq",
+                    0,
+                )
+                or 0,
+
+                "valor_unitario_bruto": primer_registro.get(
+                    "valor_unitario_bruto",
+                    0,
+                )
+                or 0,
+            }
+
+        else:
+            total = 0
+
+            metricas = {
+                "registros": 0,
+                "cantidad_total": 0,
+                "valor_unitario_liq": 0,
+                "valor_unitario_bruto": 0,
+            }
+
+        # =====================================================
+        # QUITAR CAMPOS INTERNOS
+        #
+        # No necesitamos enviar las métricas repetidas dentro
+        # de cada registro.
+        # =====================================================
+
+        for registro in registros:
+            registro.pop(
+                "total_registros",
+                None,
+            )
+
+            registro.pop(
+                "cantidad_total",
+                None,
+            )
+
+            registro.pop(
+                "valor_unitario_liq",
+                None,
+            )
+
+            registro.pop(
+                "valor_unitario_bruto",
+                None,
+            )
+
         serializer = CompraRefaccionesSerializer(
             registros,
             many=True,
@@ -456,9 +549,11 @@ class CompraRefaccionesListView(APIView):
             "count": total,
             "page": pagina,
             "page_size": tamano_pagina,
+
+            "metricas": metricas,
+
             "results": serializer.data,
         })
-
 
 # ============================================================
 # DASHBOARD
@@ -565,7 +660,6 @@ class CompraRefaccionesDashboardView(APIView):
 # ============================================================
 # OPCIONES DE FILTROS
 # ============================================================
-
 class CompraRefaccionesOpcionesView(APIView):
     authentication_classes = [
         CRMJWTAuthentication
@@ -585,14 +679,11 @@ class CompraRefaccionesOpcionesView(APIView):
                 opciones_cache
             )
 
-        placeholders_series = ", ".join(
-            ["%s"] * len(SERIES_VALIDAS)
-        )
-
-        consulta_agencias = f"""
+        consulta = f"""
             SELECT DISTINCT
-                LTRIM(
-                    RTRIM(Agencia)
+                CONVERT(
+                    VARCHAR(255),
+                    Agencia
                 ) AS agencia
 
             FROM {TABLA}
@@ -604,7 +695,11 @@ class CompraRefaccionesOpcionesView(APIView):
                   ) <> ''
 
               AND Serie IN (
-                    {placeholders_series}
+                    'P',
+                    'AP',
+                    'VWM',
+                    'AAP40',
+                    'AN'
               )
 
             ORDER BY
@@ -613,8 +708,7 @@ class CompraRefaccionesOpcionesView(APIView):
 
         with connections[DB_ALIAS].cursor() as cursor:
             cursor.execute(
-                consulta_agencias,
-                SERIES_VALIDAS,
+                consulta
             )
 
             agencias = [
@@ -625,13 +719,12 @@ class CompraRefaccionesOpcionesView(APIView):
 
         opciones = {
             "agencias": agencias,
-            "series": SERIES_VALIDAS,
         }
 
         cache.set(
             CACHE_OPCIONES,
             opciones,
-            300,
+            3600,
         )
 
         return Response(
