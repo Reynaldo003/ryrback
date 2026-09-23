@@ -196,7 +196,7 @@ def generar_resumen_con_openai(*, mensajes, telefono: str = "") -> str:
     )
 
     client = _get_openai_client()
-    modelo = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
+    modelo = getattr(settings, "OPENAI_MODEL", "gpt-5.6-luna")
 
     try:
         response = client.chat.completions.create(
@@ -206,7 +206,7 @@ def generar_resumen_con_openai(*, mensajes, telefono: str = "") -> str:
                 {"role": "user", "content": contenido_usuario},
             ],
             response_format={"type": "json_schema", "json_schema": OPENAI_RESUMEN_SCHEMA},
-            temperature=0.2,
+            temperature=1,
             timeout=getattr(settings, "OPENAI_RESULTS_TIMEOUT_SECONDS", 30),
         )
 
@@ -460,7 +460,7 @@ def generar_resumen_atencion_con_openai(
     )
 
     client = _get_openai_client()
-    modelo = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
+    modelo = getattr(settings, "OPENAI_MODEL", "gpt-5.6-luna")
 
     try:
         response = client.chat.completions.create(
@@ -473,7 +473,7 @@ def generar_resumen_atencion_con_openai(
                 },
             ],
             response_format={"type": "json_schema", "json_schema": OPENAI_ATENCION_SCHEMA},
-            temperature=0.15,
+            temperature=1,
             timeout=getattr(settings, "OPENAI_RESULTS_TIMEOUT_SECONDS", 30),
         )
 
