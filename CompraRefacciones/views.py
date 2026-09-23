@@ -7,10 +7,11 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-from .serializers import CompraRefaccionesSerializer
+from .serializers import CompraRefaccionesSerializer, CompraRefaccionPiezaSerializer
 
 DB_ALIAS = "sqlserver_inv"
 TABLA = "dbo.Matriz_FacturasRef"
+TABLA_PIEZAS = "dbo.Matriz_CompraRef"
 CACHE_OPCIONES = "compra_refacciones_facturas_opciones_v1"
 
 # ============================================================
@@ -557,4 +558,105 @@ class CompraRefaccionesOpcionesView(APIView):
 
         return Response(
             resultado
+        )
+
+class CompraRefaccionesPiezasView(APIView):
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        agencia = texto_parametro(request,"agencia",)
+        nrnota_texto = texto_parametro(request,"nrnota",)
+        if not agencia:
+            return Response({"detail": "El parámetro 'agencia' es obligatorio."},status=status.HTTP_400_BAD_REQUEST,)
+
+        if not nrnota_texto:
+            return Response({"detail": "El parámetro 'nrnota' es obligatorio."},status=status.HTTP_400_BAD_REQUEST,)
+
+        try:
+            nrnota = int(nrnota_texto)
+        except (TypeError,ValueError,):
+            return Response({"detail": "El parámetro 'nrnota' debe ser numérico."},status=status.HTTP_400_BAD_REQUEST,)
+
+        consulta = f"""
+            SELECT
+                cr.rowid__ AS rowid__,
+                cr.Agencia AS agencia,
+                cr.NrNota AS nrnota,
+                cr.Serie AS serie,
+                cr.SeqItem AS seqitem,
+                cr.ProdServ AS prodserv,
+                cr.DescrProd AS descrprod,
+                cr.Unidade AS unidade,
+                cr.QtProdutos AS qtprodutos,
+                cr.VrUnitLiq AS vrunitliq,
+                cr.VrUnitBruto AS vrunitbruto,
+                cr.VrLiqTotal AS vrliqtotal,
+                cr.DtEntrada AS dtentrada,
+                cr.NrPedCompra AS nrpedcompra,
+                COUNT(*) OVER ()
+                    AS total_partidas,
+                COALESCE(SUM(COALESCE(cr.QtProdutos,0)) OVER (), 0) AS cantidad_total,
+                COALESCE(SUM(COALESCE(cr.VrLiqTotal,0)) OVER (),0) AS importe_total
+
+            FROM {TABLA_PIEZAS} cr
+
+            WHERE
+                cr.Agencia = %s
+                AND cr.NrNota = %s
+                AND (cr.Unidade <> 'UN' OR cr.QtProdutos <> 1)
+
+                AND EXISTS (
+                SELECT
+                        1
+                    FROM {TABLA} fr
+                    WHERE
+                        fr.Agencia = cr.Agencia
+                        AND fr.NrNota = cr.NrNota
+                        AND fr.TpItensNFE = '1'
+                        AND fr.SitNF = 'V'
+                )
+            ORDER BY
+                cr.SeqItem ASC,
+                cr.rowid__ ASC
+        """
+
+        with connections[DB_ALIAS].cursor() as cursor:
+            cursor.execute(
+                consulta,[agencia, nrnota],
+            )
+            registros = cursor_a_dicts(cursor)
+
+        # ====================================================
+        # TOTALES
+        # ====================================================
+
+        if registros:
+            primero = registros[0]
+
+            resumen = {
+                "partidas": int(primero.get("total_partidas",0,)or 0),
+                "cantidad_total": float(primero.get("cantidad_total",0,)or 0),
+                "importe_total": float(primero.get("importe_total",0,)or 0),
+            }
+
+        else:
+            resumen = {"partidas": 0,"cantidad_total": 0,"importe_total": 0,}
+
+
+        for registro in registros:
+            registro.pop("total_partidas",None,)
+            registro.pop("cantidad_total",None,)
+            registro.pop("importe_total",None,)
+        serializer = (CompraRefaccionPiezaSerializer(registros,many=True,))
+
+        return Response(
+            {
+                "factura": {
+                    "agencia": agencia,
+                    "nrnota": nrnota,
+                },
+                "resumen": resumen,
+                "results": serializer.data,
+            }
         )
