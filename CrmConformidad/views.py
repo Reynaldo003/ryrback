@@ -36,6 +36,7 @@ def permisos_por_rol(nombre_rol: str):
             "CRM_CALL_CENTER",
             "CRM_COORDINADOR_DIGITAL",
             "CRM_ASESOR_PISO",
+            "CRM_VALUADOR",
         ]
 
     if r == "asesor general":
@@ -70,6 +71,9 @@ def permisos_por_rol(nombre_rol: str):
 
     if r == "asesor piso":
         return ["CRM_ASESOR_PISO"]
+    
+    if r == "valuador":
+        return ["CRM_VALUADOR"]
     
     return []
 
@@ -370,6 +374,10 @@ class AdminPermisosCatalogView(APIView):
             {
                 "clave": "CRM_ASESOR_PISO",
                 "descripcion": "CRM ASESOR PISO",
+            },
+            {
+                "clave": "CRM_VALUADOR",
+                "descripcion": "CRM VALUADOR",
             },
         ]
 
