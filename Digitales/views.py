@@ -2582,14 +2582,39 @@ def chats_list(request):
         )
 
     elif filtro_chat.startswith("estado:"):
-        nom_estado = filtro_chat.split(
-            "estado:",
-            1,
-        )[1]
+        clave_estado = filtro_chat.split("estado:", 1)[1].strip().lower()
 
-        qs = qs.filter(
-            estado__icontains=nom_estado
-        )
+        # Mapeo exacto entre las claves del frontend y los valores de base de datos
+        MAPEO_ESTADOS = {
+            "sin_contactar": Q(estado__icontains="sin contactar"),
+            "contactado": Q(estado__icontains="contactado") & ~Q(estado__icontains="sin contactar"),
+            "sin_respuesta": Q(estado__icontains="sin respuesta") | Q(estado__icontains="sin_respuesta"),
+            "calificado": Q(estado__icontains="calificado") & ~Q(estado__icontains="descalificado"),
+            "cotizacion": Q(estado__icontains="pendiente de cotizaci") | Q(estado__icontains="pendiente cotizaci"),
+            "cotizacion_realizada": Q(estado__icontains="cotizacion realizada") | Q(estado__icontains="cotización realizada"),
+            "en_perfilamiento": Q(estado__icontains="en perfilamiento") | Q(estado__icontains="en_perfilamiento"),
+            "requiere_atencion": Q(estado__icontains="requiere atencion") | Q(estado__icontains="requiere atención"),
+            "potencialmente_viable": Q(estado__icontains="potencialmente viable") | Q(estado__icontains="potencialmente_viable"),
+            "cita_programada": Q(estado__icontains="cita programada") | Q(estado__icontains="cita_programada"),
+            "asistencia_cita": Q(estado__icontains="asistencia a la cita") | Q(estado__icontains="asistencia_cita"),
+            "no_show": Q(estado__icontains="no show") | Q(estado__icontains="no asistio") | Q(estado__icontains="no asistió") | Q(estado__icontains="noshow"),
+            "financiamiento": Q(estado__icontains="financiamiento"),
+            "recopilacion_documentos": Q(estado__icontains="recopilacion de documentos") | Q(estado__icontains="recopilación de documentos"),
+            "documentos_enviados": Q(estado__icontains="documentos enviados") | Q(estado__icontains="documentos_enviados"),
+            "seguimiento": Q(estado__icontains="seguimiento"),
+            "solicitud_credito": Q(estado__icontains="solicitud de credito") | Q(estado__icontains="solicitud de crédito"),
+            "autorizado_no_formalizado": Q(estado__icontains="autorizado no formalizado"),
+            "facturado": Q(estado__icontains="facturado"),
+            "entregado": Q(estado__icontains="entregado"),
+            "descalificado": Q(estado__icontains="descalificado"),
+        }
+
+        filtro_q = MAPEO_ESTADOS.get(clave_estado)
+        if filtro_q:
+            qs = qs.filter(filtro_q)
+        else:
+            # Fallback en caso de nuevos estados: reemplaza guiones bajos por espacios
+            qs = qs.filter(estado__icontains=clave_estado.replace("_", " "))
 
     tiene_filtro_activo = bool(
         busqueda
