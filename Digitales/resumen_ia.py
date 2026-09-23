@@ -5,11 +5,13 @@ import logging
 from functools import lru_cache
 
 from django.conf import settings
-from google import genai
-from google.genai import types
+from openai import OpenAI
 
 logger = logging.getLogger(__name__)
 
+# =============================================================================
+# 1. RESUMEN COMERCIAL
+# =============================================================================
 
 PROMPT_RESUMEN = """
 Eres un analista comercial experto en conversaciones de WhatsApp dentro de un CRM automotriz.
@@ -38,55 +40,47 @@ Reglas:
 - Debe ser un texto corrido, claro, útil, profesional y entendible para un asesor.
 - Debe sonar como nota comercial interna de CRM.
 - No uses viñetas.
-- No regreses JSON.
+- Devuelve exclusivamente el objeto JSON con los campos requeridos.
 - No repitas literalmente toda la conversación.
-- El resumen general maximo 30 palabras. Adicionalmente agrega un parrafo de status actual del prospecto max 5 palabras, otro parrafo de retroalimentacion max 15 palabras,
-  otro parrafo para la deficiencia de la atencion al prospecto, deficiencia de la IA o asesor si es que se involucro max 20 palabras, otro parrafo para definir cual es el
-  siguiente paso recomendable a seguir max 15 palabras y uno ultimo para dar una recomendacion extra para continuar con el proceso de prospeccion e incrementar la probabilidad
-  de que se lleve a cabo la venta max 30 palabras.
-- El formato que debes devolver es:
-  Resumen General:
-  Status:
-  Retroalimentacion:
-  Deficiencia:
-  Siguiente paso:
-  Recomendacion:
+- El resumen general maximo 30 palabras. Adicionalmente un parrafo de status actual max 5 palabras, otro parrafo de retroalimentacion max 15 palabras,
+  deficiencia de la atencion max 20 palabras, siguiente paso recomendable max 15 palabras y recomendacion extra max 30 palabras.
 """
 
-GEMINI_RESUMEN_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "resumen_general": {"type": "STRING"},
-        "status": {"type": "STRING"},
-        "retroalimentacion": {"type": "STRING"},
-        "deficiencia": {"type": "STRING"},
-        "siguiente_paso": {"type": "STRING"},
-        "recomendacion": {"type": "STRING"},
+OPENAI_RESUMEN_SCHEMA = {
+    "name": "resumen_comercial",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "resumen_general": {"type": "string"},
+            "status": {"type": "string"},
+            "retroalimentacion": {"type": "string"},
+            "deficiencia": {"type": "string"},
+            "siguiente_paso": {"type": "string"},
+            "recomendacion": {"type": "string"},
+        },
+        "required": [
+            "resumen_general",
+            "status",
+            "retroalimentacion",
+            "deficiencia",
+            "siguiente_paso",
+            "recomendacion",
+        ],
+        "additionalProperties": False,
     },
-    "required": [
-        "resumen_general",
-        "status",
-        "retroalimentacion",
-        "deficiencia",
-        "siguiente_paso",
-        "recomendacion",
-    ],
 }
 
 
 @lru_cache(maxsize=1)
-def _get_gemini_client():
-    """Crea una sola instancia del cliente de Gemini por proceso de Django."""
-    api_key = str(getattr(settings, "GEMINI_API_KEY", "") or "").strip()
-
+def _get_openai_client():
+    api_key = str(getattr(settings, "OPENAI_API_KEY", "") or "").strip()
     if not api_key:
-        raise RuntimeError("Falta configurar GEMINI_API_KEY en settings.py")
-
-    return genai.Client(api_key=api_key)
+        raise RuntimeError("Falta configurar OPENAI_API_KEY en settings.py o variables de entorno")
+    return OpenAI(api_key=api_key)
 
 
 def _rol_mensaje(msg) -> str:
-    """Diferencia prospecto, IA y asesor humano usando direction y raw."""
     if getattr(msg, "direction", "") == "in":
         return "Prospecto"
 
@@ -96,65 +90,55 @@ def _rol_mensaje(msg) -> str:
     es_ia = bool(
         raw.get("ia_provider")
         or raw.get("ia_model")
-        or raw.get("gemini_model")
         or raw.get("openai_model")
+        or raw.get("gemini_model")
         or raw.get("decision")
     )
-
     if es_ia:
         return "IA"
 
     if raw.get("origen") == "asesor_humano":
         return "Asesor humano"
 
-    # Los mensajes salientes antiguos pueden no tener metadata de origen.
     return "Asesor o IA"
 
 
 def construir_conversacion_para_resumen(mensajes) -> str:
     lineas: list[str] = []
-
     for msg in mensajes:
         texto = str(getattr(msg, "body", "") or "").strip()
-
         if not texto:
             continue
 
         rol = _rol_mensaje(msg)
         created_at = getattr(msg, "created_at", None)
         fecha = created_at.strftime("%Y-%m-%d %H:%M:%S") if created_at else ""
-
         lineas.append(f"[{fecha}] {rol}: {texto}")
 
     return "\n".join(lineas).strip()
 
 
 def _limpiar_texto(valor) -> str:
-    """Evita saltos de línea inesperados dentro de cada campo del resumen."""
     return " ".join(str(valor or "").split()).strip()
 
 
 def _limitar_palabras(valor, limite: int, default: str) -> str:
     texto = _limpiar_texto(valor) or default
     palabras = texto.split()
-
     if len(palabras) <= limite:
         return texto
-
     return " ".join(palabras[:limite]).rstrip(".,;:") + "."
 
 
 def _parsear_respuesta_json(texto: str) -> dict:
     texto = str(texto or "").strip()
-
     if not texto:
         return {}
-
     try:
         resultado = json.loads(texto)
         return resultado if isinstance(resultado, dict) else {}
     except json.JSONDecodeError:
-        logger.warning("Gemini devolvió un resumen que no era JSON válido: %s", texto[:500])
+        logger.warning("OpenAI devolvió un texto no válido como JSON: %s", texto[:500])
         return {}
 
 
@@ -200,65 +184,51 @@ def _formatear_resumen(data: dict) -> str:
     )
 
 
-def generar_resumen_con_gemini(*, mensajes, telefono: str = "") -> str:
+def generar_resumen_con_openai(*, mensajes, telefono: str = "") -> str:
     texto_conversacion = construir_conversacion_para_resumen(mensajes)
-
     if not texto_conversacion:
         return ""
 
-    contenido_usuario = f"""
-Teléfono del prospecto: {telefono or "No disponible"}
-
-Analiza la siguiente conversación completa y genera el resumen comercial solicitado:
-
-{texto_conversacion}
-""".strip()
-
-    client = _get_gemini_client()
-    modelo = getattr(
-        settings,
-        "GEMINI_SUMMARY_MODEL",
-        getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
+    contenido_usuario = (
+        f"Teléfono del prospecto: {telefono or 'No disponible'}\n\n"
+        f"Analiza la siguiente conversación completa y genera el resumen comercial solicitado:\n\n"
+        f"{texto_conversacion}"
     )
 
+    client = _get_openai_client()
+    modelo = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
+
     try:
-        response = client.models.generate_content(
+        response = client.chat.completions.create(
             model=modelo,
-            contents=contenido_usuario,
-            config=types.GenerateContentConfig(
-                system_instruction=PROMPT_RESUMEN,
-                response_mime_type="application/json",
-                response_schema=GEMINI_RESUMEN_SCHEMA,
-                temperature=0.2,
-            ),
+            messages=[
+                {"role": "system", "content": PROMPT_RESUMEN},
+                {"role": "user", "content": contenido_usuario},
+            ],
+            response_format={"type": "json_schema", "json_schema": OPENAI_RESUMEN_SCHEMA},
+            temperature=0.2,
+            timeout=getattr(settings, "OPENAI_RESULTS_TIMEOUT_SECONDS", 30),
         )
 
-        data = _parsear_respuesta_json(getattr(response, "text", "") or "")
-
+        contenido = response.choices[0].message.content or ""
+        data = _parsear_respuesta_json(contenido)
         if not data:
-            raise RuntimeError("Gemini no devolvió un resumen estructurado válido")
+            raise RuntimeError("OpenAI no devolvió un JSON estructurado válido")
 
         return _formatear_resumen(data)
 
     except Exception:
-        logger.exception(
-            "Error generando resumen con Gemini | telefono=%s modelo=%s",
-            telefono,
-            modelo,
-        )
+        logger.exception("Error generando resumen con OpenAI | telefono=%s modelo=%s", telefono, modelo)
         raise
 
 
-# Alias temporal para no romper cualquier import antiguo que todavía exista.
-def generar_resumen_con_openai(*, mensajes, telefono: str = "") -> str:
-    return generar_resumen_con_gemini(
-        mensajes=mensajes,
-        telefono=telefono,
-    )
+def generar_resumen_con_gemini(*, mensajes, telefono: str = "") -> str:
+    return generar_resumen_con_openai(mensajes=mensajes, telefono=telefono)
 
-# -----------------------------------------------------------------------------
-# Resumen analítico de la atención del asesor
-# -----------------------------------------------------------------------------
+
+# =============================================================================
+# 2. RESUMEN ANALÍTICO DE LA ATENCIÓN DEL ASESOR
+# =============================================================================
 
 PROMPT_RESUMEN_ATENCION = """
 Eres un auditor de calidad comercial para un CRM automotriz Volkswagen.
@@ -276,43 +246,46 @@ Reglas obligatorias:
 - Si el cliente escribió y no existe atención humana posterior, marca la atención como crítica.
 - Si la IA estaba activa, menciona si apoyó o si la conversación terminó requiriendo atención humana.
 - Redacta en español, con lenguaje ejecutivo y fácil de medir.
-
-Devuelve exclusivamente el objeto JSON solicitado por el esquema.
 """
 
-GEMINI_RESUMEN_ATENCION_SCHEMA = {
-    "type": "OBJECT",
-    "properties": {
-        "resumen_acciones": {"type": "STRING"},
-        "estado_atencion": {
-            "type": "STRING",
-            "enum": [
-                "sin_atencion",
-                "esperando_cliente",
-                "cliente_interesado",
-                "seguimiento_activo",
-                "atencion_completada",
-                "atencion_mejorable",
-                "atencion_critica",
-                "sin_datos",
-            ],
+OPENAI_ATENCION_SCHEMA = {
+    "name": "resumen_atencion",
+    "strict": True,
+    "schema": {
+        "type": "object",
+        "properties": {
+            "resumen_acciones": {"type": "string"},
+            "estado_atencion": {
+                "type": "string",
+                "enum": [
+                    "sin_atencion",
+                    "esperando_cliente",
+                    "cliente_interesado",
+                    "seguimiento_activo",
+                    "atencion_completada",
+                    "atencion_mejorable",
+                    "atencion_critica",
+                    "sin_datos",
+                ],
+            },
+            "evaluacion": {"type": "string"},
+            "siguiente_accion": {"type": "string"},
+            "calidad": {
+                "type": "string",
+                "enum": ["buena", "mejorable", "critica", "sin_datos"],
+            },
+            "interes_detectado": {"type": "boolean"},
         },
-        "evaluacion": {"type": "STRING"},
-        "siguiente_accion": {"type": "STRING"},
-        "calidad": {
-            "type": "STRING",
-            "enum": ["buena", "mejorable", "critica", "sin_datos"],
-        },
-        "interes_detectado": {"type": "BOOLEAN"},
+        "required": [
+            "resumen_acciones",
+            "estado_atencion",
+            "evaluacion",
+            "siguiente_accion",
+            "calidad",
+            "interes_detectado",
+        ],
+        "additionalProperties": False,
     },
-    "required": [
-        "resumen_acciones",
-        "estado_atencion",
-        "evaluacion",
-        "siguiente_accion",
-        "calidad",
-        "interes_detectado",
-    ],
 }
 
 
@@ -325,13 +298,10 @@ def _evento_a_linea(evento) -> str:
     respuesta = _limpiar_texto(getattr(evento, "respuesta_texto", ""))
 
     partes = [f"[{fecha}] Acción: {accion or 'Sin descripción'}"]
-
     if detalle:
         partes.append(f"Detalle: {detalle}")
-
     if resultado:
         partes.append(f"Clasificación interna: {resultado}")
-
     if respuesta:
         partes.append(f"Respuesta del cliente: {respuesta}")
 
@@ -388,7 +358,7 @@ def _normalizar_resumen_atencion(data: dict, *, fuente: str) -> dict:
         ),
         "calidad": calidad if calidad in calidad_valida else "sin_datos",
         "interes_detectado": bool(data.get("interes_detectado", False)),
-        "generado_por_ia": fuente == "gemini",
+        "generado_por_ia": fuente == "openai",
         "fuente": fuente,
     }
 
@@ -470,7 +440,7 @@ def generar_resumen_atencion_fallback(*, eventos, estado_ia: dict | None = None)
     return _normalizar_resumen_atencion(data, fuente="reglas")
 
 
-def generar_resumen_atencion_con_gemini(
+def generar_resumen_atencion_con_openai(
     *,
     mensajes,
     eventos,
@@ -489,44 +459,34 @@ def generar_resumen_atencion_con_gemini(
         estado_ia=estado_ia,
     )
 
-    client = _get_gemini_client()
-    modelo = getattr(
-        settings,
-        "GEMINI_ANALYTICS_MODEL",
-        getattr(
-            settings,
-            "GEMINI_SUMMARY_MODEL",
-            getattr(settings, "GEMINI_MODEL", "gemini-2.5-flash"),
-        ),
-    )
-
-    contenido = (
-        f"Teléfono del prospecto: {telefono or 'No disponible'}\n\n"
-        "Genera una lectura ejecutiva de la atención con base exclusivamente en el contexto:\n\n"
-        f"{contexto}"
-    )
+    client = _get_openai_client()
+    modelo = getattr(settings, "OPENAI_MODEL", "gpt-4o-mini")
 
     try:
-        response = client.models.generate_content(
+        response = client.chat.completions.create(
             model=modelo,
-            contents=contenido,
-            config=types.GenerateContentConfig(
-                system_instruction=PROMPT_RESUMEN_ATENCION,
-                response_mime_type="application/json",
-                response_schema=GEMINI_RESUMEN_ATENCION_SCHEMA,
-                temperature=0.15,
-            ),
+            messages=[
+                {"role": "system", "content": PROMPT_RESUMEN_ATENCION},
+                {
+                    "role": "user",
+                    "content": f"Teléfono del prospecto: {telefono or 'No disponible'}\n\nContexto:\n{contexto}",
+                },
+            ],
+            response_format={"type": "json_schema", "json_schema": OPENAI_ATENCION_SCHEMA},
+            temperature=0.15,
+            timeout=getattr(settings, "OPENAI_RESULTS_TIMEOUT_SECONDS", 30),
         )
-        data = _parsear_respuesta_json(getattr(response, "text", "") or "")
 
+        contenido = response.choices[0].message.content or ""
+        data = _parsear_respuesta_json(contenido)
         if not data:
-            raise RuntimeError("Gemini no devolvió un resumen analítico válido")
+            raise RuntimeError("OpenAI no devolvió un JSON de atención válido")
 
-        return _normalizar_resumen_atencion(data, fuente="gemini")
+        return _normalizar_resumen_atencion(data, fuente="openai")
     except Exception:
-        logger.exception(
-            "Error generando resumen de atención | telefono=%s modelo=%s",
-            telefono,
-            modelo,
-        )
+        logger.exception("Error generando resumen de atención con OpenAI | telefono=%s", telefono)
         return generar_resumen_atencion_fallback(eventos=eventos, estado_ia=estado_ia)
+
+
+def generar_resumen_atencion_con_gemini(*args, **kwargs):
+    return generar_resumen_atencion_con_openai(*args, **kwargs)

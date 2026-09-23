@@ -1,21 +1,32 @@
 # Digitales/services.py
 from datetime import timedelta
-
 from django.utils import timezone
+from django.db.models import Q
 
+from citas.models import normaliza_tel_mx
 from .models import MensajeWhatsApp
-from .resumen_ia import generar_resumen_con_gemini
+from .resumen_ia import generar_resumen_con_openai
 
 
 def generar_y_guardar_resumen(*, expediente, fuente: str):
-    mensajes = MensajeWhatsApp.objects.filter(
-        telefono=expediente.cliente.telefono
-    ).order_by("created_at", "id")
+    tel_raw = str(getattr(expediente.cliente, "telefono", "") or "").strip()
+    tel_10 = normaliza_tel_mx(tel_raw)
 
-    resumen = generar_resumen_con_gemini(
-        mensajes=mensajes,
-        telefono=expediente.cliente.telefono,
-    )
+    # Busca tanto por el teléfono directo como por los 10 dígitos normalizados
+    filtro_tel = Q(telefono=tel_raw)
+    if tel_10:
+        filtro_tel |= Q(telefono=tel_10) | Q(telefono__icontains=tel_10)
+
+    mensajes = MensajeWhatsApp.objects.filter(filtro_tel).order_by("created_at", "id")
+
+    # Si no hay mensajes reales en la conversación
+    if not mensajes.exists():
+        resumen = "Sin mensajes registrados en WhatsApp para generar un resumen."
+    else:
+        resumen = generar_resumen_con_openai(
+            mensajes=mensajes,
+            telefono=tel_10 or tel_raw,
+        )
 
     expediente.resumen = resumen
     expediente.resumen_actualizado_at = timezone.now()
