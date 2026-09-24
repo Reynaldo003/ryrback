@@ -279,6 +279,17 @@ DATABASES = {
         'OPTIONS': {
             'driver': 'ODBC Driver 18 for SQL Server',
             "extra_params": "TrustServerCertificate=yes",
+            # Si SQL Server no responde, no congelar el worker.
+            "connection_timeout": 3,
+
+            # No hacer 5 reintentos automáticamente.
+            "connection_retries": 0,
+
+            # Irrelevante con retries=0, pero lo dejamos definido.
+            "connection_retry_backoff_time": 1,
+
+            # Una consulta tampoco debe quedarse colgada.
+            "query_timeout": 10,
         }
     },
     'sqlserver_inv': {
@@ -291,6 +302,17 @@ DATABASES = {
         'OPTIONS': {
             'driver': 'ODBC Driver 18 for SQL Server',
             "extra_params": "TrustServerCertificate=yes",
+            # Si SQL Server no responde, no congelar el worker.
+            "connection_timeout": 3,
+
+            # No hacer 5 reintentos automáticamente.
+            "connection_retries": 0,
+
+            # Irrelevante con retries=0, pero lo dejamos definido.
+            "connection_retry_backoff_time": 1,
+
+            # Una consulta tampoco debe quedarse colgada.
+            "query_timeout": 10,
         }
     },
 }
