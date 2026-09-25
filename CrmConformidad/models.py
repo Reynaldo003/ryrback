@@ -23,6 +23,7 @@ class Usuario(models.Model):
     rol = models.ForeignKey(Rol, db_column="rol", on_delete=models.PROTECT)
     agencia = models.CharField(max_length=255)
     telefono = models.CharField(max_length=100, null=True)
+    interfaces = models.JSONField(null=True, blank=True)
 
     class Meta:
         db_table = "usuarios"

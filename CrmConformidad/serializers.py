@@ -1,9 +1,12 @@
 # crmConformidad/serializers.py
+import json
+
 from rest_framework import serializers
 from .models import Cliente, ExpedienteConformidad, ExpedienteDocumento, Usuario, Rol
 from django.contrib.auth.hashers import make_password, check_password
 from django.core import signing
 import re
+from .catalogo_interfaces import PERMISOS_POR_INTERFAZ
 
 DEALERS_VALIDOS = [
     "VW Cordoba",
@@ -85,6 +88,29 @@ def validar_correo_usuario(valor, excluir_id=None):
     if excluir_id: consulta = consulta.exclude(id_usuario=excluir_id)
     if consulta.exists(): raise serializers.ValidationError("Ese correo ya está registrado.")
     return valor
+
+def validar_interfaces(valor):
+    """
+    `valor` llega como string JSON desde el FormData del frontend.
+
+    Devuelve None (heredar del rol) o una lista de claves de interfaces.
+    """
+    if valor in (None, ""):
+        return None
+
+    try:
+        data = json.loads(valor)
+    except (ValueError, TypeError):
+        raise serializers.ValidationError("Formato de interfaces inválido.")
+
+    if not isinstance(data, list):
+        raise serializers.ValidationError("interfaces debe ser una lista.")
+
+    for clave in data:
+        if clave not in PERMISOS_POR_INTERFAZ:
+            raise serializers.ValidationError(f"Interfaz desconocida: {clave}")
+
+    return data
 
 class ExpedienteDocumentoSerializer(serializers.ModelSerializer):
     url = serializers.SerializerMethodField()
@@ -328,6 +354,7 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
     contrasena = serializers.CharField(write_only=True)
     agencia = serializers.CharField(max_length=255)
     id_rol = serializers.IntegerField()
+    interfaces = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
 
     def validate_nombre(self, value):
         value = value.strip()
@@ -378,6 +405,9 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
 
         return value
 
+    def validate_interfaces(self, value):
+        return validar_interfaces(value)
+
     def create(self, validated_data):
         rol = Rol.objects.get(id_rol=validated_data["id_rol"])
 
@@ -390,6 +420,7 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
             contrasena=make_password(validated_data["contrasena"]),
             rol=rol,
             agencia=validated_data["agencia"],
+            interfaces=validated_data.get("interfaces"),
         )
 
 class AdminUsuarioUpdateSerializer(serializers.Serializer):
@@ -401,6 +432,7 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
     contrasena = serializers.CharField(write_only=True, required=False, allow_blank=True)
     agencia = serializers.CharField(max_length=255, required=False)
     id_rol = serializers.IntegerField(required=False)
+    interfaces = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
 
     def validate_nombre(self, value):
         value = value.strip()
@@ -425,6 +457,9 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
         if not Rol.objects.filter(id_rol=value).exists(): raise serializers.ValidationError("Rol inválido.")
         return value
 
+    def validate_interfaces(self, value):
+        return validar_interfaces(value)
+
     def validate_contrasena(self, value):
         if not value: return ""
         if len(value) < 8: raise serializers.ValidationError("La contraseña debe tener al menos 8 caracteres.")
@@ -441,6 +476,7 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
         if "telefono" in validated_data: instance.telefono = validated_data.get("telefono") or ""
         if "agencia" in validated_data: instance.agencia = validated_data["agencia"]
         if "id_rol" in validated_data: instance.rol = Rol.objects.get(id_rol=validated_data["id_rol"])
+        if "interfaces" in validated_data: instance.interfaces = validated_data["interfaces"]
 
         contrasena = validated_data.get("contrasena")
         if contrasena: instance.contrasena = make_password(contrasena)

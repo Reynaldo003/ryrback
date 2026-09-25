@@ -13,6 +13,7 @@ from .jwt_authentication import CRMJWTAuthentication
 from .models import ExpedienteConformidad, ExpedienteDocumento, Usuario, Rol
 from .permissions import IsAdminRole
 from .serializers import CasoSerializer, ExpedienteDocumentoSerializer, UsuarioRegisterSerializer, UsuarioLoginSerializer, AdminUsuarioCreateSerializer, AdminUsuarioUpdateSerializer
+from .catalogo_interfaces import permisos_por_interfaces
 
 
 # ============================================================
@@ -78,6 +79,30 @@ def permisos_por_rol(nombre_rol: str):
     return []
 
 
+def permisos_por_usuario(user):
+    """
+    Permisos efectivos de un usuario.
+
+    Los administradores siempre conservan todos los permisos (ALL), sin
+    importar si tienen interfaces configuradas manualmente.
+
+    Si el usuario tiene configuradas sus interfaces manualmente (campo
+    `interfaces` con una lista), los permisos se calculan a partir de ellas.
+    En caso contrario se usan los permisos automáticos del rol.
+    """
+    rol_nombre = getattr(user, "rol", None).nombre if getattr(user, "rol", None) else ""
+
+    if rol_nombre.strip().lower() == "administrador":
+        return permisos_por_rol("administrador")
+
+    interfaces = getattr(user, "interfaces", None)
+
+    if isinstance(interfaces, list):
+        return permisos_por_interfaces(interfaces)
+
+    return permisos_por_rol(rol_nombre)
+
+
 def serialize_usuario(user):
     rol_nombre = user.rol.nombre if getattr(user, "rol", None) else ""
 
@@ -90,7 +115,8 @@ def serialize_usuario(user):
         "rol": rol_nombre,
         "agencia": user.agencia,
         "telefono": user.telefono,
-        "permisos": permisos_por_rol(rol_nombre),
+        "interfaces": getattr(user, "interfaces", None),
+        "permisos": permisos_por_usuario(user),
     }
 
 
@@ -110,7 +136,8 @@ def generar_jwt_usuario(user):
     refresh["rol"] = rol_nombre
     refresh["agencia"] = user.agencia
     refresh["telefono"] = user.telefono or ""
-    refresh["permisos"] = permisos_por_rol(rol_nombre)
+    refresh["interfaces"] = user.interfaces or []
+    refresh["permisos"] = permisos_por_usuario(user)
 
     access = refresh.access_token
 
@@ -396,6 +423,8 @@ def serializar_usuario_admin(u):
         "telefono": u.telefono or "",
         "id_rol": u.rol.id_rol if u.rol else None,
         "nombre_rol": u.rol.nombre if u.rol else "",
+        "interfaces": getattr(u, "interfaces", None),
+        "permisos": permisos_por_usuario(u),
     }
 
 class AdminUsuariosCreateView(APIView):
