@@ -19,6 +19,7 @@ DB_ALIAS = "sqlserver_inv"
 
 TABLA_PRESUPUESTOS = "dbo.Matriz_Presupuestos"
 TABLA_REFACCIONES = "dbo.Matriz_PresupuestosRef"
+TABLA_FUNCIONARIOS = "dbo.Matriz_Funcionarios"
 
 CACHE_OPCIONES = "presupuestos_opciones_v1"
 
@@ -529,6 +530,7 @@ class MatrizPresupuestosListView(APIView):
                 NrPrisma AS nr_prisma,
                 CorPrisma AS cor_prisma,
                 CodFunc AS cod_func,
+                mf.Nm_Funcionario AS nm_funcionario,
                 Comentario AS comentario,
                 NrApolice AS nr_apolice,
                 DescPcs AS desc_pcs,
@@ -559,9 +561,19 @@ class MatrizPresupuestosListView(APIView):
                 Cod_Empresa AS cod_empresa,
                 Cod_Filial AS cod_filial,
                 rowid__ AS rowid
-            FROM {TABLA_PRESUPUESTOS}
-            {where_sql}
-            ORDER BY
+                FROM {TABLA_PRESUPUESTOS} AS mp
+
+                LEFT JOIN (
+                    SELECT
+                        Cod_Funcionario,
+                        MAX(Nm_Funcionario) AS Nm_Funcionario
+                    FROM {TABLA_FUNCIONARIOS}
+                    GROUP BY Cod_Funcionario
+                ) AS mf
+                    ON mf.Cod_Funcionario = mp.CodFunc
+
+                {where_sql}
+                ORDER BY
                 CASE
                     WHEN NrOrcamento IS NULL
                     THEN 1
@@ -1059,40 +1071,67 @@ class PresupuestosDashboardView(APIView):
             -- =====================================================
 
             SELECT
-                CodFunc AS cod_func,
+                bp.CodFunc AS cod_func,
+
+                COALESCE(
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(mf.Nm_Funcionario)
+                        ),
+                        ''
+                    ),
+                    CASE
+                        WHEN bp.CodFunc IS NULL
+                            THEN 'Sin asignar'
+                        ELSE CONCAT(
+                            'Asesor ',
+                            CAST(bp.CodFunc AS VARCHAR(50))
+                        )
+                    END
+                ) AS nm_funcionario,
 
                 COUNT(
-                    DISTINCT NrOrcamento
+                    DISTINCT bp.NrOrcamento
                 ) AS presupuestos,
 
                 COALESCE(
                     SUM(
                         COALESCE(
-                            VrProdutos,
+                            bp.VrProdutos,
                             0
                         )
                         +
                         COALESCE(
-                            VrMDO_Pub,
+                            bp.VrMDO_Pub,
                             0
                         )
                         +
                         COALESCE(
-                            VrAdicionais,
+                            bp.VrAdicionais,
                             0
                         )
                     ),
                     0
                 ) AS monto_total
 
-            FROM #BasePresupuestos
+            FROM #BasePresupuestos AS bp
+
+            LEFT JOIN (
+                SELECT
+                    Cod_Funcionario,
+                    MAX(Nm_Funcionario) AS Nm_Funcionario
+                FROM {TABLA_FUNCIONARIOS}
+                GROUP BY
+                    Cod_Funcionario
+            ) AS mf
+                ON mf.Cod_Funcionario = bp.CodFunc
 
             GROUP BY
-                CodFunc
+                bp.CodFunc,
+                mf.Nm_Funcionario
 
             ORDER BY
                 presupuestos DESC;
-
 
             -- =====================================================
             -- 5. RESUMEN DE REFACCIONES

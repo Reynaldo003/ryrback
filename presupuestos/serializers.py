@@ -142,6 +142,11 @@ class MatrizPresupuestosSerializer(serializers.Serializer):
         allow_null=True,
         required=False,
     )
+    nm_funcionario = serializers.CharField(
+        allow_null=True,
+        allow_blank=True,
+        required=False,
+    )
     comentario = serializers.CharField(
         allow_null=True,
         allow_blank=True,
