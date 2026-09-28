@@ -1,51 +1,88 @@
 # documentacion/requisitos.py
 
-def r(id, nombre, descripcion="", obligatorio=True): return {"id": id, "nombre": nombre, "descripcion": descripcion, "obligatorio": obligatorio}
+def r(id, nombre, descripcion="", obligatorio=True):
+    return {
+        "id": id,
+        "nombre": nombre,
+        "descripcion": descripcion,
+        "obligatorio": obligatorio,
+    }
 
 
-REQUISITOS_PROFESIONISTA = [
-    r("identificacion", "Identificación oficial", "INE o Pasaporte con Licencia"),
-    r("comprobante_domicilio", "Comprobante de domicilio"),
-    r("constancia_fiscal", "Constancia de Situación Fiscal"),
-    r("estados_cuenta_3_meses", "Estados de Cuenta de últimos 3 meses", "Integrar los tres meses en un solo PDF."),
-    r("solicitud_origen", "Solicitud de Origen"),
-    r("consulta_buro", "Consulta de Buró firmada"),
-    r("resumen_operacion", "Resumen de Operación"),
+REQUISITOS_SERVICIOS_FINANCIEROS = [
+    # 1. Buró Físico (conserva 'consulta_buro' para expedientes previos)
+    r("consulta_buro", "Autorización de Consulta de Buró Físico", "", True),
+    # 2. Identificación (conserva 'identificacion' para expedientes previos)
+    r("identificacion", "Identificación Oficial Vigente", "INE o Pasaporte vigente", True),
+    # 3. Verificación ID
+    r("verificacion_id", "Verificación de la ID", "", False),
+    # 4. Consentimiento Identidad
+    r("consentimiento_validacion_identidad", "Consentimiento de Validación Identidad", "", False),
+    # 5. Certificados Especiales
+    r("certificados_especiales", "Certificados Especiales", "", False),
+    # 6. Carta Preferente
+    r("carta_preferente", "Carta Preferente", "", False),
+    # 7. Formato Verificación
+    r("formato_verificacion_datos", "Formato de Verificación de Datos", "", True),
+    # 8. Validación RFC
+    r("validacion_rfc", "Validación de RFC", "", False),
+    # 9. CURP
+    r("curp", "CURP", "Formato actualizado", True),
+    # 10. Comprobante Domicilio (conserva 'comprobante_domicilio')
+    r("comprobante_domicilio", "Comprobante de Domicilio", "No mayor a 3 meses", True),
+    # 11-16. Comprobantes de Ingresos
+    r("comprobantes_ingresos_1", "Comprobantes de Ingresos 1", "", True),
+    r("comprobantes_ingresos_2", "Comprobantes de Ingresos 2", "", True),
+    r("comprobantes_ingresos_3", "Comprobantes de Ingresos 3", "", False),
+    r("comprobantes_ingresos_4", "Comprobantes de Ingresos 4", "", False),
+    r("comprobantes_ingresos_5", "Comprobantes de Ingresos 5", "", False),
+    r("comprobantes_ingresos_6", "Comprobantes de Ingresos 6", "", False),
+    # 17-18. Extranjeros
+    r("formato_migratorio", "Formato Migratorio", "En caso de extranjeros", False),
+    r("formato_domicilio_extranjero", "Formato de Domicilio en el Extranjero", "", False),
+    # 19. Encuesta
+    r("encuesta_conocimiento_cliente", "Encuesta de Conocimiento del Cliente", "", False),
+    # 20. Investigación
+    r("investigacion_credito", "Investigación de Crédito", "", False),
+    # 21. Siniestros
+    r("documentacion_siniestros", "Documentación de Siniestros", "", False),
+    # 22. Motivos de Compra
+    r("carta_motivos_compra", "Carta de Motivos de Compra", "", False),
+    # 23-25. Adicionales
+    r("documento_adicional_1", "Documento Adicional 1", "", False),
+    r("documento_adicional_2", "Documento Adicional 2", "", False),
+    r("documento_adicional_3", "Documento Adicional 3", "", False),
+    # 26. Fiscal (conserva 'constancia_fiscal' para expedientes previos)
+    r("constancia_fiscal", "Constancia de Situación Fiscal", "Actualizada al mes en curso", False),
+    # 27-28. Historial
+    r("saldos_vencidos", "Saldos Vencidos", "", False),
+    r("reporte_especial_bc", "Reporte Especial BC", "", False),
+    # 29. Resumen Operación (conserva 'resumen_operacion')
+    r("resumen_operacion", "Resumen de Operación", "", True),
+    # 30. ID Adicional
+    r("identificaciones_adicionales", "Identificaciones Adicionales", "", False),
+    # 31. Buró Digital
+    r("autorizacion_buro_digital", "Autorización de Consulta de Buró Digital", "", True),
+    # 32. Unidad Adicional
+    r("carta_unidad_adicional", "Carta de Unidad Adicional", "", False),
+    # 33. Otros
+    r("otros", "Otros", "Documentos varios no contemplados", False),
 ]
-
 
 REQUISITOS_MORAL = [
-    r("solicitud_origen", "Solicitud de Origen"),
-    r("apoderado_identificacion", "INE o Pasaporte del Apoderado"),
-    r("apoderado_comprobante_domicilio", "Comprobante de domicilio del Apoderado", "Con fecha actualizada."),
-    r("apoderado_constancia_fiscal", "Constancia de Situación Fiscal del Apoderado", "Con fecha actualizada."),
-    r("empresa_constancia_fiscal", "Constancia de Situación Fiscal de la Empresa", "Con fecha actualizada."),
-    r("empresa_comprobante_domicilio", "Comprobante de Domicilio de la Empresa", "Con fecha actualizada."),
-    r("empresa_estados_cuenta", "Estados de Cuenta completos de últimos 2 meses", "Integrar ambos meses en un solo PDF."),
-    r("empresa_declaracion_anual", "Acuse de Recibo y Declaración Anual", "Del año anterior. Archivos PDF descargados del SAT."),
-    r("empresa_estados_financieros", "Estados Financieros Internos", "Del año anterior, firmados por Apoderado y Contador."),
-    r("empresa_acta_constitutiva", "Acta Constitutiva"),
-    r("empresa_poder_notarial", "Poder Notarial", "En caso de que aplique.", False),
+    *REQUISITOS_SERVICIOS_FINANCIEROS,
+    r("empresa_acta_constitutiva", "Acta Constitutiva", "", True),
+    r("empresa_poder_notarial", "Poder Notarial", "", False),
 ]
-
 
 REQUISITOS = {
     "fisica_asalariada": {
-        "credit": None,
-        "leasing": [
-            r("identificacion", "Identificación oficial", "INE o Pasaporte con Licencia"),
-            r("comprobante_domicilio", "Comprobante de domicilio"),
-            r("constancia_fiscal", "Constancia de Situación Fiscal"),
-            r("nomina_ultimos_2_meses", "Comprobantes de Nómina de últimos 2 meses", "Recibos y estados de cuenta. Integrar todo en un solo PDF."),
-            r("pagos_especiales", "Recibos de pagos especiales", "Aguinaldo, PTU, bonos o compensaciones anuales, en caso de aplicar.", False),
-            r("solicitud_origen", "Solicitud de Origen"),
-            r("consulta_buro", "Consulta de Buró firmada"),
-            r("resumen_operacion", "Resumen de Operación"),
-        ],
+        "credit": REQUISITOS_SERVICIOS_FINANCIEROS,
+        "leasing": REQUISITOS_SERVICIOS_FINANCIEROS,
     },
     "fisica_profesionista": {
-        "credit": REQUISITOS_PROFESIONISTA,
-        "leasing": REQUISITOS_PROFESIONISTA,
+        "credit": REQUISITOS_SERVICIOS_FINANCIEROS,
+        "leasing": REQUISITOS_SERVICIOS_FINANCIEROS,
     },
     "moral": {
         "credit": REQUISITOS_MORAL,
@@ -59,8 +96,11 @@ PLANTILLAS_SOLICITUD = {
             "value": "persona_fisica_asalariada",
             "archivo": "Solicitud-Persona-Fisica-Asalariada.pdf",
         },
+        "credit": {
+            "value": "credito_personas_fisicas",
+            "archivo": "Solicitud-Credito-Personas-Fisicas.pdf",
+        },
     },
-
     "fisica_profesionista": {
         "credit": {
             "value": "credito_personas_fisicas",
@@ -71,7 +111,6 @@ PLANTILLAS_SOLICITUD = {
             "archivo": "Solicitud-Arrendamiento-Personas-Fisicas.pdf",
         },
     },
-
     "moral": {
         "credit": {
             "value": "credito_personas_morales",
@@ -85,14 +124,10 @@ PLANTILLAS_SOLICITUD = {
 }
 
 def obtener_plantilla_solicitud(tipo_persona, financiamiento):
-    return (
-        PLANTILLAS_SOLICITUD
-        .get(tipo_persona, {})
-        .get(financiamiento)
-    )
+    return PLANTILLAS_SOLICITUD.get(tipo_persona, {}).get(financiamiento)
 
-def obtener_requisitos(tipo_persona, financiamiento): return REQUISITOS.get(tipo_persona, {}).get(financiamiento)
-
+def obtener_requisitos(tipo_persona, financiamiento):
+    return REQUISITOS.get(tipo_persona, {}).get(financiamiento)
 
 def obtener_requisito(tipo_persona, financiamiento, requisito_id):
     requisitos = obtener_requisitos(tipo_persona, financiamiento) or []
