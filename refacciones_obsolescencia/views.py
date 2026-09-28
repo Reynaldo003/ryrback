@@ -182,7 +182,7 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
             1,
             min(
                 tamano_pagina,
-                500,
+                25000,
             ),
         )
 

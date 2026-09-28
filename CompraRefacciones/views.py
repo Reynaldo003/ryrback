@@ -270,7 +270,7 @@ class CompraRefaccionesListView(APIView):
             "page_size",
             50,
             minimo=1,
-            maximo=500,
+            maximo=150000,
         )
 
         offset = (
