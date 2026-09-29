@@ -19,7 +19,7 @@ DB_ALIAS = "sqlserver_inv"
 
 TABLA_PRESUPUESTOS = "dbo.Matriz_Presupuestos"
 TABLA_REFACCIONES = "dbo.Matriz_PresupuestosRef"
-TABLA_FUNCIONARIOS = "dbo.Matriz_Funcionarios"
+TABLA_FUNCIONARIOS = "dbo.Matriz_Funcionarios2"
 
 CACHE_OPCIONES = "presupuestos_opciones_v1"
 
@@ -565,12 +565,16 @@ class MatrizPresupuestosListView(APIView):
 
                 LEFT JOIN (
                     SELECT
+                        Agencia,
                         Cod_Funcionario,
                         MAX(Nm_Funcionario) AS Nm_Funcionario
                     FROM {TABLA_FUNCIONARIOS}
-                    GROUP BY Cod_Funcionario
+                    GROUP BY
+                        Agencia,
+                        Cod_Funcionario
                 ) AS mf
                     ON mf.Cod_Funcionario = mp.CodFunc
+                    AND mf.Agencia = mp.Agencia
 
                 {where_sql}
                 ORDER BY
@@ -1118,13 +1122,16 @@ class PresupuestosDashboardView(APIView):
 
             LEFT JOIN (
                 SELECT
+                    Agencia,
                     Cod_Funcionario,
                     MAX(Nm_Funcionario) AS Nm_Funcionario
                 FROM {TABLA_FUNCIONARIOS}
                 GROUP BY
+                    Agencia,
                     Cod_Funcionario
             ) AS mf
                 ON mf.Cod_Funcionario = bp.CodFunc
+                AND mf.Agencia = bp.Agencia
 
             GROUP BY
                 bp.CodFunc,
