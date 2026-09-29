@@ -123,6 +123,7 @@ class DocumentoExpediente(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["expediente", "requisito_id"],
+                condition=~models.Q(requisito_id="otros"),
                 name="doc_unico_por_requisito",
             ),
         ]

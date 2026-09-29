@@ -67,6 +67,7 @@ class DocumentoUploadSerializer(serializers.ModelSerializer):
 
 class ExpedienteSerializer(serializers.ModelSerializer):
     documentos = serializers.SerializerMethodField()
+    documentos_otros = serializers.SerializerMethodField()
     requisitos = serializers.SerializerMethodField()
     avance = serializers.SerializerMethodField()
     solicitud_pdf_url = serializers.SerializerMethodField()
@@ -87,6 +88,7 @@ class ExpedienteSerializer(serializers.ModelSerializer):
             "solicitud_pdf_campos",
             "solicitud_pdf_actualizado",
             "documentos",
+            "documentos_otros",
             "requisitos",
             "avance",
             "creado",
@@ -102,6 +104,7 @@ class ExpedienteSerializer(serializers.ModelSerializer):
             "solicitud_pdf_campos",
             "solicitud_pdf_actualizado",
             "documentos",
+            "documentos_otros",
             "requisitos",
             "avance",
             "creado",
@@ -113,6 +116,10 @@ class ExpedienteSerializer(serializers.ModelSerializer):
     def get_documentos(self, obj):
         serializer = DocumentoExpedienteSerializer(obj.documentos.all(), many=True, context=self.context)
         return {str(documento["requisito_id"]): documento for documento in serializer.data}
+
+    def get_documentos_otros(self, obj):
+        otros = obj.documentos.filter(requisito_id="otros").order_by("id_documento")
+        return DocumentoExpedienteSerializer(otros, many=True, context=self.context).data
 
     def get_solicitud_pdf_url(self, obj):
         if not obj.solicitud_pdf:

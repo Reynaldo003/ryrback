@@ -78,7 +78,11 @@ REQUISITOS_MORAL = [
     r("empresa_poder_notarial", "Poder Notarial", "", False),
 ]
 
-criterio_orden = lambda x: (not x["obligatorio"], x["nombre"].lower())
+criterio_orden = lambda x: (
+    not x["obligatorio"],
+    x["id"] == "otros",     # <-- Los normales (False) van primero; 'otros' (True) va al final
+    x["nombre"].lower()
+)
 
 REQUISITOS_SERVICIOS_FINANCIEROS.sort(key=criterio_orden)
 REQUISITOS_MORAL.sort(key=criterio_orden)

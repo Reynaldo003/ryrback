@@ -153,10 +153,13 @@ class ExpedienteDownloadZipView(APIView):
                         f"documento_{documento.id_documento}",
                     )
 
-                    nombre_dentro_zip = (
-                        f"documentos/"
-                        f"{requisito_id} - {nombre_original}"
-                    )
+                    if documento.requisito_id == "otros":
+                        nombre_dentro_zip = f"documentos/otros/{documento.id_documento}_{nombre_original}"
+                    else:
+                        nombre_dentro_zip = (
+                            f"documentos/"
+                            f"{requisito_id} - {nombre_original}"
+                        )
 
                     try:
                         documento.archivo.open("rb")
@@ -520,7 +523,7 @@ class DocumentoUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if expediente.documentos.filter(requisito_id=requisito_id).exists():
+        if requisito_id != "otros" and expediente.documentos.filter(requisito_id=requisito_id).exists():
             return Response(
                 {
                     "archivo": [
