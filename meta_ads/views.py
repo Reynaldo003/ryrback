@@ -1,19 +1,15 @@
 # meta_ads/views.py
 from datetime import date
-
 from django.db.models import Count, Q, Sum
 from django.db.models.functions import Coalesce, ExtractMonth, ExtractYear
 from django.utils.dateparse import parse_date
-
 from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
-
 from .models import CampanaMeta
 from .serializers import CampanaMetaListSerializer, CampanaMetaSerializer
-
 
 LIST_FIELDS = (
     "id_campana",
@@ -35,17 +31,14 @@ LIST_FIELDS = (
     "importe_gastado",
 )
 
-
 class CampanaMetaPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
     max_page_size = 500
 
-
 def valor_vacio(valor):
     valor = (valor or "").strip()
     return valor.lower() in {"", "todos", "todas", "null", "undefined"}
-
 
 def rango_fecha(anio, mes=None):
     """
@@ -55,7 +48,6 @@ def rango_fecha(anio, mes=None):
     """
     if valor_vacio(anio):
         return None, None
-
     try:
         anio = int(anio)
     except (TypeError, ValueError):
@@ -81,7 +73,6 @@ def rango_fecha(anio, mes=None):
 
     return desde, hasta
 
-
 class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = CampanaMetaSerializer
     permission_classes = [AllowAny]
@@ -91,30 +82,20 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
     def get_serializer_class(self):
         if self.action in {"list", "ligero"}:
             return CampanaMetaListSerializer
-
         return CampanaMetaSerializer
 
     def get_queryset(self):
         params = self.request.query_params
 
         qs = CampanaMeta.objects.using("sqlserver").all()
-
         q = (params.get("q") or "").strip()
         sucursal = (params.get("sucursal") or "").strip()
         estado_campana = (params.get("estado_campana") or "").strip()
         id_concesionaria = (params.get("id_concesionaria") or "").strip()
-
-        anio = (
-            params.get("anio")
-            or params.get("año")
-            or params.get("year")
-            or ""
-        )
+        anio = (params.get("anio") or params.get("año") or params.get("year") or "")
         mes = params.get("mes") or params.get("month") or ""
-
         fecha_desde = parse_date(params.get("fecha_desde") or "")
         fecha_hasta = parse_date(params.get("fecha_hasta") or "")
-
         inicio_campana_desde = parse_date(params.get("inicio_campana_desde") or "")
         inicio_campana_hasta = parse_date(params.get("inicio_campana_hasta") or "")
 
@@ -126,7 +107,6 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
                 | Q(indicador_resultados__icontains=q)
                 | Q(objetivo_campana__icontains=q)
             )
-
         if not valor_vacio(sucursal):
             # Antes usabas icontains. Para botones/selects conviene exacto:
             # es más rápido y evita traer sucursales parecidas por accidente.
@@ -143,11 +123,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
         if desde and hasta:
             qs = qs.filter(
                 Q(inicio_campana__gte=desde, inicio_campana__lt=hasta)
-                | Q(
-                    inicio_campana__isnull=True,
-                    inicio_informe__gte=desde,
-                    inicio_informe__lt=hasta,
-                )
+                | Q(inicio_campana__isnull=True, inicio_informe__gte=desde, inicio_informe__lt=hasta,)
             )
 
         if fecha_desde:
@@ -163,7 +139,6 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
             qs = qs.filter(inicio_campana__lte=inicio_campana_hasta)
 
         ordering = params.get("ordering") or "-inicio_informe"
-
         ordering_permitido = {
             "id_campana",
             "id_concesionaria",
@@ -209,7 +184,6 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
     def ligero(self, request):
         """
         Endpoint optimizado para el dashboard.
-
         Antes el front consultaba página por página hasta traer toda la tabla.
         Ahora este endpoint devuelve, en una sola llamada, solo las columnas
         necesarias y ya filtradas desde SQL Server.
@@ -218,10 +192,22 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
         serializer = CampanaMetaListSerializer(qs, many=True)
         return Response(serializer.data)
 
+    @action(detail=False, methods=["get"], url_path="reporte")
+    def reporte(self, request):
+        """
+        Endpoint de exportación detallada.
+        Reutiliza los filtros de get_queryset, pero al ser una acción distinta
+        de list/ligero no aplica .only(*LIST_FIELDS). Así el frontend puede
+        construir reportes avanzados sin volver pesado el dashboard.
+        """
+        qs = self.get_queryset()
+        serializer = CampanaMetaSerializer(qs, many=True)
+        return Response(serializer.data)
+
+
     @action(detail=False, methods=["get"], url_path="resumen")
     def resumen(self, request):
         qs = self.get_queryset()
-
         data = qs.aggregate(
             total_campanas=Count("id_campana"),
             total_resultados=Sum("total_resultados"),
@@ -261,7 +247,6 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
     @action(detail=False, methods=["get"], url_path="opciones")
     def opciones(self, request):
         qs = CampanaMeta.objects.using("sqlserver").all()
-
         sucursales = (
             qs.exclude(sucursal__isnull=True)
             .exclude(sucursal="")
@@ -291,8 +276,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
             .annotate(
                 anio=ExtractYear("fecha_base"),
                 mes=ExtractMonth("fecha_base"),
-            )
-            .values("anio", "mes")
+            ).values("anio", "mes")
             .distinct()
             .order_by("-anio", "mes")
         )
@@ -316,7 +300,6 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
         for item in anio_mes:
             anio_item = str(item["anio"])
             meses_por_anio.setdefault(anio_item, [])
-
             if item["mes"] not in meses_por_anio[anio_item]:
                 meses_por_anio[anio_item].append(item["mes"])
 
