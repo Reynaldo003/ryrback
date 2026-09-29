@@ -59,7 +59,7 @@ def limpiar_telefonos(valor):
     if len(resultado) > 100: raise serializers.ValidationError("La cantidad de teléfonos excede el espacio disponible.")
     return resultado
 
-def validar_nombre_usuario(valor, excluir_id=None):
+def validar_nombre_usuario(valor, excluir_id=None, permitir_especiales=False):
     valor = str(valor or "").strip()
 
     if len(valor) > 10:
@@ -67,7 +67,7 @@ def validar_nombre_usuario(valor, excluir_id=None):
             "El usuario no puede tener más de 10 caracteres."
         )
 
-    if not re.fullmatch(r"[A-Za-z0-9._-]+", valor):
+    if not permitir_especiales and not re.fullmatch(r"[A-Za-z0-9._-]+", valor):
         raise serializers.ValidationError(
             "El usuario solo puede contener letras, números, punto, guion y guion bajo."
         )
@@ -440,7 +440,13 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
         return value
 
     def validate_usuario(self, value):
-        return validar_nombre_usuario(value, excluir_id=self.instance.id_usuario)
+        # Usuarios ya existentes pueden conservar caracteres especiales
+        # (ej. "NanciR&R"); la restricción de caracteres solo aplica al crear.
+        return validar_nombre_usuario(
+            value,
+            excluir_id=self.instance.id_usuario,
+            permitir_especiales=True,
+        )
 
     def validate_correo(self, value):
         return validar_correo_usuario(value, excluir_id=self.instance.id_usuario)
