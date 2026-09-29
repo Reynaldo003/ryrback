@@ -9,6 +9,7 @@ def r(id, nombre, descripcion="", obligatorio=True):
     }
 
 
+# ── CATÁLOGO GENERAL: 33 DOCUMENTOS DE CRÉDITO ────────────────────────────────
 REQUISITOS_SERVICIOS_FINANCIEROS = [
     # 1. Buró Físico (conserva 'consulta_buro' para expedientes previos)
     r("consulta_buro", "Autorización de Consulta de Buró Físico", "", True),
@@ -30,7 +31,7 @@ REQUISITOS_SERVICIOS_FINANCIEROS = [
     r("curp", "CURP", "Formato actualizado", True),
     # 10. Comprobante Domicilio (conserva 'comprobante_domicilio')
     r("comprobante_domicilio", "Comprobante de Domicilio", "No mayor a 3 meses", True),
-    # 11-16. Comprobantes de Ingresos
+    # 11-16. Comprobantes de Ingresos (1 y 2 obligatorios)
     r("comprobantes_ingresos_1", "Comprobantes de Ingresos 1", "", True),
     r("comprobantes_ingresos_2", "Comprobantes de Ingresos 2", "", True),
     r("comprobantes_ingresos_3", "Comprobantes de Ingresos 3", "", False),
@@ -52,7 +53,7 @@ REQUISITOS_SERVICIOS_FINANCIEROS = [
     r("documento_adicional_1", "Documento Adicional 1", "", False),
     r("documento_adicional_2", "Documento Adicional 2", "", False),
     r("documento_adicional_3", "Documento Adicional 3", "", False),
-    # 26. Fiscal (conserva 'constancia_fiscal' para expedientes previos)
+    # 26. Fiscal (conserva 'constancia_fiscal')
     r("constancia_fiscal", "Constancia de Situación Fiscal", "Actualizada al mes en curso", False),
     # 27-28. Historial
     r("saldos_vencidos", "Saldos Vencidos", "", False),
@@ -69,15 +70,25 @@ REQUISITOS_SERVICIOS_FINANCIEROS = [
     r("otros", "Otros", "Documentos varios no contemplados", False),
 ]
 
+# Persona Moral incluye sus requisitos corporativos obligatorios
 REQUISITOS_MORAL = [
     *REQUISITOS_SERVICIOS_FINANCIEROS,
+    r("solicitud_origen", "Solicitud de Origen", "", True),
     r("empresa_acta_constitutiva", "Acta Constitutiva", "", True),
     r("empresa_poder_notarial", "Poder Notarial", "", False),
 ]
 
+criterio_orden = lambda x: (not x["obligatorio"], x["nombre"].lower())
+
+REQUISITOS_SERVICIOS_FINANCIEROS.sort(key=criterio_orden)
+REQUISITOS_MORAL.sort(key=criterio_orden)
+
+# Alias de compatibilidad
+REQUISITOS_PROFESIONISTA = REQUISITOS_SERVICIOS_FINANCIEROS
+
 REQUISITOS = {
     "fisica_asalariada": {
-        "credit": REQUISITOS_SERVICIOS_FINANCIEROS,
+        "credit": None,
         "leasing": REQUISITOS_SERVICIOS_FINANCIEROS,
     },
     "fisica_profesionista": {
@@ -95,10 +106,6 @@ PLANTILLAS_SOLICITUD = {
         "leasing": {
             "value": "persona_fisica_asalariada",
             "archivo": "Solicitud-Persona-Fisica-Asalariada.pdf",
-        },
-        "credit": {
-            "value": "credito_personas_fisicas",
-            "archivo": "Solicitud-Credito-Personas-Fisicas.pdf",
         },
     },
     "fisica_profesionista": {
@@ -123,11 +130,18 @@ PLANTILLAS_SOLICITUD = {
     },
 }
 
+
 def obtener_plantilla_solicitud(tipo_persona, financiamiento):
-    return PLANTILLAS_SOLICITUD.get(tipo_persona, {}).get(financiamiento)
+    return (
+        PLANTILLAS_SOLICITUD
+        .get(tipo_persona, {})
+        .get(financiamiento)
+    )
+
 
 def obtener_requisitos(tipo_persona, financiamiento):
     return REQUISITOS.get(tipo_persona, {}).get(financiamiento)
+
 
 def obtener_requisito(tipo_persona, financiamiento, requisito_id):
     requisitos = obtener_requisitos(tipo_persona, financiamiento) or []
