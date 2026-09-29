@@ -1,11 +1,12 @@
-# usados/views.py
-from rest_framework import viewsets, permissions
+from django.utils.dateparse import parse_date
+from rest_framework import permissions, viewsets
 from rest_framework.filters import OrderingFilter, SearchFilter
-from rest_framework.parsers import JSONParser, FormParser, MultiPartParser
+from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
 from .models import AvaluoUsado
+from .pagination import AvaluoPagination
 from .serializers import AvaluoUsadoSerializer
 
 
@@ -13,15 +14,8 @@ class AvaluoUsadoViewSet(viewsets.ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [permissions.IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser, JSONParser]
-
-    queryset = (
-        AvaluoUsado.objects
-        .select_related("cliente")
-        .prefetch_related("evidencias", "conceptos")
-        .all()
-        .order_by("-creado")
-    )
     serializer_class = AvaluoUsadoSerializer
+    pagination_class = AvaluoPagination
     filter_backends = [OrderingFilter, SearchFilter]
 
     ordering_fields = [
@@ -43,6 +37,7 @@ class AvaluoUsadoViewSet(viewsets.ModelViewSet):
         "etapa_proceso",
         "tipo_toma",
     ]
+    ordering = ["-creado"]
 
     search_fields = [
         "agencia",
@@ -67,3 +62,26 @@ class AvaluoUsadoViewSet(viewsets.ModelViewSet):
         "cliente__telefono",
         "cliente__correo",
     ]
+
+    def get_queryset(self):
+        queryset = (
+            AvaluoUsado.objects
+            .select_related("cliente")
+            .prefetch_related("evidencias", "conceptos")
+            .all()
+        )
+
+        agencia = str(self.request.query_params.get("agencia", "")).strip()
+        desde = parse_date(str(self.request.query_params.get("desde", "")).strip())
+        hasta = parse_date(str(self.request.query_params.get("hasta", "")).strip())
+
+        if agencia and agencia.lower() != "todos":
+            queryset = queryset.filter(agencia__iexact=agencia)
+
+        if desde:
+            queryset = queryset.filter(fecha_avaluo__date__gte=desde)
+
+        if hasta:
+            queryset = queryset.filter(fecha_avaluo__date__lte=hasta)
+
+        return queryset.distinct()

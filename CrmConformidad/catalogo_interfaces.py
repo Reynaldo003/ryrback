@@ -1,3 +1,4 @@
+#CrmConformidad/catalogo_interfaces.py
 # CrmConformidad/catalogo_interfaces.py
 """
 Catálogo de interfaces del menú lateral y su relación con permisos.

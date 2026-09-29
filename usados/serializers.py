@@ -1,4 +1,3 @@
-#usados/serializers.py
 import json
 import mimetypes
 from decimal import Decimal, InvalidOperation
@@ -8,6 +7,10 @@ from rest_framework import serializers
 
 from citas.models import ClienteComercial, normaliza_tel_mx
 from .models import AvaluoUsado, AvaluoUsadoEvidencia, ConceptoAvaluo
+
+MAX_ARCHIVO_BYTES = 50 * 1024 * 1024
+MAX_TOTAL_EVIDENCIAS_BYTES = 100 * 1024 * 1024
+MAX_EVIDENCIAS_POR_OPERACION = 20
 
 
 class ClienteComercialMiniSerializer(serializers.ModelSerializer):
@@ -103,16 +106,20 @@ class BaseClienteComercialSerializer(serializers.ModelSerializer):
             if telefono:
                 telefono_normalizado = normaliza_tel_mx(telefono)
                 if not telefono_normalizado:
-                    raise serializers.ValidationError({
-                        "telefono": "Teléfono inválido."
-                    })
+                    raise serializers.ValidationError({"telefono": "Teléfono inválido."})
 
                 if telefono_normalizado != cliente.telefono:
-                    existe = ClienteComercial.objects.filter(telefono=telefono_normalizado).exclude(pk=cliente.pk).exists()
+                    existe = (
+                        ClienteComercial.objects
+                        .filter(telefono=telefono_normalizado)
+                        .exclude(pk=cliente.pk)
+                        .exists()
+                    )
                     if existe:
                         raise serializers.ValidationError({
                             "telefono": "Ya existe otro cliente con ese teléfono."
                         })
+
                     cliente.telefono = telefono_normalizado
                     cambios = True
 
@@ -123,9 +130,7 @@ class BaseClienteComercialSerializer(serializers.ModelSerializer):
 
         telefono = normaliza_tel_mx(telefono)
         if not telefono:
-            raise serializers.ValidationError({
-                "telefono": "El teléfono es requerido."
-            })
+            raise serializers.ValidationError({"telefono": "El teléfono es requerido."})
 
         cliente, _ = ClienteComercial.objects.get_or_create(
             telefono=telefono,
@@ -202,7 +207,6 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
             "delete_evidencia_ids",
             "creado",
         )
-
         read_only_fields = (
             "id",
             "cliente",
@@ -217,11 +221,7 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         if not texto:
             return Decimal("0.00")
 
-        texto = (
-            texto.replace("$", "")
-            .replace(",", "")
-            .replace(" ", "")
-        )
+        texto = texto.replace("$", "").replace(",", "").replace(" ", "")
 
         try:
             return Decimal(texto).quantize(Decimal("0.01"))
@@ -263,7 +263,7 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
 
             if not descripcion:
                 raise serializers.ValidationError({
-                    "conceptos_json": "Cada concepto debe tener descripción."
+                    "conceptos_json": "Cada concepto con costo debe tener descripción."
                 })
 
             conceptos.append({
@@ -274,15 +274,6 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         return conceptos
 
     def _obtener_conceptos_desde_request(self, attrs):
-        """
-        Devuelve:
-        - conceptos_recibidos: True si el frontend mandó conceptos_json.
-        - conceptos: lista normalizada.
-
-        Esto evita borrar conceptos por accidente cuando algún PATCH no mande
-        conceptos_json.
-        """
-
         request = self.context.get("request")
         raw_conceptos = attrs.get("conceptos_json", None)
         conceptos_recibidos = raw_conceptos is not None
@@ -313,11 +304,31 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
                 if raw_delete_ids:
                     delete_ids = raw_delete_ids
 
-        delete_ids_limpios = []
+        if len(archivos) > MAX_EVIDENCIAS_POR_OPERACION:
+            raise serializers.ValidationError({
+                "evidencias_nuevas": (
+                    f"Solo puedes subir hasta {MAX_EVIDENCIAS_POR_OPERACION} "
+                    "evidencias por operación."
+                )
+            })
 
+        total_archivos = sum(getattr(archivo, "size", 0) or 0 for archivo in archivos)
+        if total_archivos > MAX_TOTAL_EVIDENCIAS_BYTES:
+            raise serializers.ValidationError({
+                "evidencias_nuevas": "El total de evidencias no puede superar 100 MB por operación."
+            })
+
+        for archivo in archivos:
+            if archivo.size > MAX_ARCHIVO_BYTES:
+                raise serializers.ValidationError({
+                    "evidencias_nuevas": (
+                        f"El archivo '{archivo.name}' supera el límite de 50 MB."
+                    )
+                })
+
+        delete_ids_limpios = []
         for valor in delete_ids or []:
             valor = str(valor).strip()
-
             if not valor:
                 continue
 
@@ -325,13 +336,9 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
                 delete_ids_limpios.append(int(valor))
             except ValueError:
                 raise serializers.ValidationError({
-                    "delete_evidencia_ids": "Todos los IDs de evidencias a eliminar deben ser números enteros."
-                })
-
-        for archivo in archivos:
-            if archivo.size > 50 * 1024 * 1024:
-                raise serializers.ValidationError({
-                    "evidencias_nuevas": f"El archivo '{archivo.name}' supera el límite de 50 MB."
+                    "delete_evidencia_ids": (
+                        "Todos los IDs de evidencias a eliminar deben ser números enteros."
+                    )
                 })
 
         conceptos_recibidos, conceptos = self._obtener_conceptos_desde_request(attrs)
@@ -341,7 +348,6 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
                 (item["costo"] for item in conceptos),
                 Decimal("0.00"),
             )
-
             attrs["costo_reparacion"] = f"{total_reparacion:.2f}"
             attrs["_conceptos"] = conceptos
             attrs["_conceptos_recibidos"] = True
@@ -382,12 +388,14 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
     def _guardar_conceptos(self, avaluo, conceptos):
         avaluo.conceptos.all().delete()
 
-        for item in conceptos:
-            ConceptoAvaluo.objects.create(
+        ConceptoAvaluo.objects.bulk_create([
+            ConceptoAvaluo(
                 avaluo=avaluo,
                 descripcion=item["descripcion"],
                 costo=item["costo"],
             )
+            for item in conceptos
+        ])
 
     @transaction.atomic
     def create(self, validated_data):
@@ -401,8 +409,8 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         cliente = self._resolver_cliente(validated_data)
         avaluo = AvaluoUsado.objects.create(cliente=cliente, **validated_data)
 
-        self._crear_evidencias(avaluo, evidencias_nuevas)
         self._guardar_conceptos(avaluo, conceptos)
+        self._crear_evidencias(avaluo, evidencias_nuevas)
 
         return avaluo
 
@@ -457,10 +465,10 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         if delete_ids:
             instance.evidencias.filter(id__in=delete_ids).delete()
 
-        if evidencias_nuevas:
-            self._crear_evidencias(instance, evidencias_nuevas)
-
         if conceptos_recibidos:
             self._guardar_conceptos(instance, conceptos)
+
+        if evidencias_nuevas:
+            self._crear_evidencias(instance, evidencias_nuevas)
 
         return instance
