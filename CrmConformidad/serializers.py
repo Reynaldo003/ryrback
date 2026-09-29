@@ -493,3 +493,146 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
 def generar_token_usuario(id_usuario: int) -> str:
     signer = signing.TimestampSigner()
     return signer.sign(str(id_usuario))
+
+class PerfilUsuarioUpdateSerializer(serializers.Serializer):
+    nombre = serializers.CharField(
+        max_length=50,
+        required=False
+    )
+
+    apellidos = serializers.CharField(
+        max_length=70,
+        required=False,
+        allow_blank=True,
+        allow_null=True
+    )
+
+    usuario = serializers.CharField(
+        max_length=10,
+        required=False
+    )
+
+    correo = serializers.EmailField(
+        max_length=255,
+        required=False
+    )
+
+    telefono = serializers.CharField(
+        max_length=100,
+        required=False,
+        allow_blank=True,
+        allow_null=True
+    )
+
+    contrasena = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True
+    )
+
+    foto = serializers.ImageField(
+        required=False,
+        allow_null=True
+    )
+
+    def validate_nombre(self, value):
+        value = value.strip()
+
+        if not value:
+            raise serializers.ValidationError(
+                "El nombre no puede quedar vacío."
+            )
+
+        return value
+
+    def validate_usuario(self, value):
+        return validar_nombre_usuario(
+            value,
+            excluir_id=self.instance.id_usuario,
+            permitir_especiales=True
+        )
+
+    def validate_correo(self, value):
+        return validar_correo_usuario(
+            value,
+            excluir_id=self.instance.id_usuario
+        )
+
+    def validate_telefono(self, value):
+        return limpiar_telefonos(value)
+
+    def validate_contrasena(self, value):
+        if not value:
+            return ""
+
+        if len(value) < 8:
+            raise serializers.ValidationError(
+                "La contraseña debe tener al menos 8 caracteres."
+            )
+
+        if not re.search(r"[A-Z]", value):
+            raise serializers.ValidationError(
+                "La contraseña debe contener al menos una mayúscula."
+            )
+
+        if not re.search(r"[0-9]", value):
+            raise serializers.ValidationError(
+                "La contraseña debe contener al menos un número."
+            )
+
+        if not re.search(r"[^A-Za-z0-9]", value):
+            raise serializers.ValidationError(
+                "La contraseña debe contener al menos un símbolo."
+            )
+
+        return value
+
+    def validate_foto(self, value):
+        if value.size > 5 * 1024 * 1024:
+            raise serializers.ValidationError(
+                "La imagen no puede superar los 5 MB."
+            )
+
+        return value
+
+    def update(self, instance, validated_data):
+        foto_anterior = None
+
+        if "foto" in validated_data:
+            foto_anterior = instance.foto
+
+        if "nombre" in validated_data:
+            instance.nombre = validated_data["nombre"].strip()
+
+        if "apellidos" in validated_data:
+            instance.apellidos = (
+                validated_data.get("apellidos") or ""
+            ).strip()
+
+        if "usuario" in validated_data:
+            instance.usuario = validated_data["usuario"].strip()
+
+        if "correo" in validated_data:
+            instance.correo = validated_data["correo"].strip().lower()
+
+        if "telefono" in validated_data:
+            instance.telefono = validated_data.get("telefono") or ""
+
+        if "foto" in validated_data:
+            instance.foto = validated_data["foto"]
+
+        contrasena = validated_data.get("contrasena")
+
+        if contrasena:
+            instance.contrasena = make_password(contrasena)
+
+        instance.save()
+
+        if (
+            foto_anterior and
+            "foto" in validated_data and
+            foto_anterior.name != instance.foto.name
+        ):
+            foto_anterior.delete(save=False)
+
+        return instance

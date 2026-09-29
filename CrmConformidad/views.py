@@ -12,7 +12,7 @@ from rest_framework_simplejwt.tokens import RefreshToken
 from .jwt_authentication import CRMJWTAuthentication
 from .models import ExpedienteConformidad, ExpedienteDocumento, Usuario, Rol
 from .permissions import IsAdminRole
-from .serializers import CasoSerializer, ExpedienteDocumentoSerializer, UsuarioRegisterSerializer, UsuarioLoginSerializer, AdminUsuarioCreateSerializer, AdminUsuarioUpdateSerializer
+from .serializers import CasoSerializer, ExpedienteDocumentoSerializer, UsuarioRegisterSerializer, UsuarioLoginSerializer, AdminUsuarioCreateSerializer, AdminUsuarioUpdateSerializer, PerfilUsuarioUpdateSerializer
 from .catalogo_interfaces import permisos_por_interfaces
 
 
@@ -103,8 +103,25 @@ def permisos_por_usuario(user):
     return permisos_por_rol(rol_nombre)
 
 
-def serialize_usuario(user):
-    rol_nombre = user.rol.nombre if getattr(user, "rol", None) else ""
+def obtener_foto_url(user, request=None):
+    foto = getattr(user, "foto", None)
+
+    if not foto:
+        return None
+
+    try:
+        url = foto.url
+    except ValueError:
+        return None
+
+    if request:
+        return request.build_absolute_uri(url)
+
+    return url
+
+
+def serialize_usuario(user, request=None):
+    rol_nombre = (user.rol.nombre if getattr(user, "rol", None) else "")
 
     return {
         "id_usuario": user.id_usuario,
@@ -115,6 +132,7 @@ def serialize_usuario(user):
         "rol": rol_nombre,
         "agencia": user.agencia,
         "telefono": user.telefono,
+        "foto_url": obtener_foto_url(user, request),
         "interfaces": getattr(user, "interfaces", None),
         "permisos": permisos_por_usuario(user),
     }
@@ -270,7 +288,7 @@ class AuthLoginView(APIView):
 
         user = ser.validated_data["user"]
         jwt = generar_jwt_usuario(user)
-        user_data = serialize_usuario(user)
+        user_data = serialize_usuario(user, request)
 
         return Response(
             {
@@ -293,7 +311,7 @@ class AuthMeView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response(serialize_usuario(request.user))
+        return Response(serialize_usuario(request.user,request))
 
 
 # ============================================================
@@ -468,15 +486,45 @@ class AdminUsuarioDetailView(APIView):
         return Response(serializar_usuario_admin(usuario), status=status.HTTP_200_OK)
     
 class PerfilUsuarioView(APIView):
+    authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
     parser_classes = [MultiPartParser, FormParser]
 
+    def get(self, request):
+        return Response(
+            serialize_usuario(
+                request.user,
+                request
+            )
+        )
+
     def patch(self, request):
-        usuario = request.user  # ajustar según tu modelo
-        for field in ['nombre', 'apellidos', 'usuario', 'correo', 'telefono']:
-            if field in request.data:
-                setattr(usuario, field, request.data[field])
-        if 'foto' in request.FILES:
-            usuario.foto = request.FILES['foto']
-        usuario.save()
-        return Response({'detail': 'Perfil actualizado'})
+        usuario = request.user
+
+        serializer = PerfilUsuarioUpdateSerializer(
+            usuario,
+            data=request.data,
+            partial=True
+        )
+
+        if not serializer.is_valid():
+            return Response(
+                serializer.errors,
+                status=status.HTTP_400_BAD_REQUEST
+            )
+
+        usuario = serializer.save()
+
+        usuario.refresh_from_db()
+
+        usuario = Usuario.objects.select_related("rol").get(
+            id_usuario=usuario.id_usuario
+        )
+
+        return Response(
+            serialize_usuario(
+                usuario,
+                request
+            ),
+            status=status.HTTP_200_OK
+        )

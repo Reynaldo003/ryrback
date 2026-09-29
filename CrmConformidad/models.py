@@ -20,10 +20,11 @@ class Usuario(models.Model):
     usuario = models.CharField(max_length=10)
     correo = models.EmailField(max_length=255)
     contrasena = models.CharField(max_length=255)
-    rol = models.ForeignKey(Rol, db_column="rol", on_delete=models.PROTECT)
+    rol = models.ForeignKey(Rol,db_column="rol",on_delete=models.PROTECT)
     agencia = models.CharField(max_length=255)
     telefono = models.CharField(max_length=100, null=True)
     interfaces = models.JSONField(null=True, blank=True)
+    foto = models.ImageField(upload_to="usuarios/perfiles/%Y/%m/",null=True,blank=True)
 
     class Meta:
         db_table = "usuarios"
@@ -38,7 +39,7 @@ class Usuario(models.Model):
     @property
     def is_anonymous(self):
         return False
-
+    
 class Cliente(models.Model):
     id_cliente = models.AutoField(primary_key=True)
     chasis = models.CharField(max_length=255)
