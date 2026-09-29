@@ -499,7 +499,7 @@ class MatrizPresupuestosListView(APIView):
 
         consulta = f"""
             SELECT
-                Agencia AS agencia,
+                mp.Agencia AS agencia,
                 NrOrcamento AS nr_orcamento,
                 CodEntidade AS cod_entidade,
                 Nome AS nome,
@@ -561,7 +561,11 @@ class MatrizPresupuestosListView(APIView):
                 Cod_Empresa AS cod_empresa,
                 Cod_Filial AS cod_filial,
                 rowid__ AS rowid
-                FROM {TABLA_PRESUPUESTOS} AS mp
+                FROM (
+                    SELECT *
+                    FROM {TABLA_PRESUPUESTOS}
+                    {where_sql}
+                ) AS mp
 
                 LEFT JOIN (
                     SELECT
@@ -576,15 +580,14 @@ class MatrizPresupuestosListView(APIView):
                     ON mf.Cod_Funcionario = mp.CodFunc
                     AND mf.Agencia = mp.Agencia
 
-                {where_sql}
                 ORDER BY
-                CASE
-                    WHEN NrOrcamento IS NULL
-                    THEN 1
-                    ELSE 0
-                END,
-                NrOrcamento DESC,
-                Agencia
+                    CASE
+                        WHEN mp.NrOrcamento IS NULL
+                        THEN 1
+                        ELSE 0
+                    END,
+                    mp.NrOrcamento DESC,
+                    mp.Agencia
             OFFSET %s ROWS
             FETCH NEXT %s ROWS ONLY
         """
