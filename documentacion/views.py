@@ -11,6 +11,7 @@ from django.core.files.storage import default_storage
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
+from django.db.models import Q
 
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
@@ -30,7 +31,8 @@ def normalizar(valor):
     valor = unicodedata.normalize("NFD", str(valor or "").strip().lower())
     return "".join(caracter for caracter in valor if unicodedata.category(caracter) != "Mn")
 
-def obtener_rol(usuario): return normalizar(getattr(usuario, "rol", ""))
+def obtener_rol(usuario): 
+    return normalizar(getattr(usuario, "rol", ""))
 
 def obtener_agencias_usuario(usuario):
     return [agencia.strip() for agencia in str(getattr(usuario, "agencia", "") or "").split("|") if agencia.strip()]
@@ -46,46 +48,83 @@ def nombre_usuario_crm(usuario):
         or ""
     ).strip()
 
+def obtener_id_rol(usuario):
+    """Extrae el número de rol del usuario (id_rol en la tabla usuarios)."""
+    for campo in ["id_rol", "rol_id", "rol"]:
+        val = getattr(usuario, campo, None)
+        if val is not None:
+            if hasattr(val, "id_rol"):
+                return val.id_rol
+            if hasattr(val, "pk"):
+                return val.pk
+            try:
+                return int(val)
+            except (ValueError, TypeError):
+                pass
+    return None
+
 def es_admin(usuario):
-    if getattr(usuario, "is_superuser", False): return True
+    if getattr(usuario, "is_superuser", False):
+        return True
+    # id_rol == 1 en la tabla roles corresponde a Administrador
+    if obtener_id_rol(usuario) == 1:
+        return True
     return obtener_rol(usuario) == "administrador"
 
+def obtener_identificadores_usuario(usuario):
+    """Reúne todas las variantes exactas del nombre y usuario para hacer match estricto con creado_por o asesor_nombre."""
+    identificadores = set()
+    for attr in ["nombre_completo", "usuario", "username", "correo", "email"]:
+        val = str(getattr(usuario, attr, "") or "").strip()
+        if val:
+            identificadores.add(val)
 
-def es_gerente_servicios_financieros(usuario):
-    rol = obtener_rol(usuario)
-    return "gerente" in rol and "servicios" in rol and "financieros" in rol
+    nombre = str(getattr(usuario, "nombre", "") or "").strip()
+    apellidos = str(getattr(usuario, "apellidos", "") or getattr(usuario, "last_name", "") or "").strip()
+    if nombre and apellidos:
+        identificadores.add(f"{nombre} {apellidos}")
+    elif nombre:
+        identificadores.add(nombre)
 
-def requisitos_obligatorios_faltantes(expediente):
-    requisitos = obtener_requisitos(expediente.tipo_persona, expediente.financiamiento,) or []
+    crm_nombre = nombre_usuario_crm(usuario)
+    if crm_nombre:
+        identificadores.add(crm_nombre)
 
-    obligatorios = [requisito for requisito in requisitos if requisito.get("obligatorio")]
-
-    cargados = set(expediente.documentos.values_list("requisito_id",flat=True,))
-
-    return [requisito for requisito in obligatorios if requisito["id"] not in cargados]
+    return [ident for ident in identificadores if ident]
 
 def queryset_expedientes_usuario(usuario):
     """
-    Actualmente los asesores de piso NO tienen cuentas en el CRM.
-
-    Por lo tanto:
-    - Administrador: ve todos los expedientes.
-    - Resto de usuarios: ve expedientes de las agencias que tenga asignadas.
-    - El asesor responsable se guarda como texto en asesor_nombre.
+    - Administrador (id_rol = 1): ve todos los expedientes de todos los asesores.
+    - Asesor Piso (id_rol = 12) y demás: solo ve los expedientes creados por él o asignados a él (coincidencia exacta).
     """
     queryset = Expediente.objects.prefetch_related("documentos").all()
 
-    if es_admin(usuario): return queryset
+    if es_admin(usuario):
+        return queryset
 
-    agencias = obtener_agencias_usuario(usuario)
-    return queryset.filter(agencia__in=agencias) if agencias else queryset.none()
+    identificadores = obtener_identificadores_usuario(usuario)
+    if not identificadores:
+        return queryset.none()
 
+    filtro_propios = Q()
+    for ident in identificadores:
+        # Coincidencia exacta sin importar mayúsculas/minúsculas (evita colisiones con nombres parecidos)
+        filtro_propios |= Q(creado_por__iexact=ident)
+        filtro_propios |= Q(asesor_nombre__iexact=ident)
+
+    return queryset.filter(filtro_propios)
 
 def puede_editar_expediente(usuario, expediente):
-    if es_admin(usuario): return True
+    """Valida si el usuario en sesión tiene permisos para editar un expediente específico."""
+    if es_admin(usuario):
+        return True
 
-    agencias = obtener_agencias_usuario(usuario)
-    return expediente.agencia in agencias
+    identificadores = [i.lower() for i in obtener_identificadores_usuario(usuario)]
+    creado = str(expediente.creado_por or "").strip().lower()
+    asesor = str(expediente.asesor_nombre or "").strip().lower()
+
+    # Coincidencia exacta entre identificadores del usuario y creado_por / asesor_nombre
+    return creado in identificadores or asesor in identificadores
 
 def limpiar_nombre_archivo(nombre, nombre_default="archivo.pdf"):
     """
@@ -93,7 +132,7 @@ def limpiar_nombre_archivo(nombre, nombre_default="archivo.pdf"):
     dentro del archivo ZIP.
     """
     nombre = os.path.basename(str(nombre or nombre_default)).strip()
-    nombre = re.sub(r'[<>:"/\\|?*\x00-\x1F]',"_",nombre,)
+    nombre = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", nombre)
 
     return nombre or nombre_default
 
@@ -102,8 +141,8 @@ def limpiar_nombre_zip(nombre):
     Limpia el nombre final del archivo ZIP.
     """
     nombre = str(nombre or "expediente").strip()
-    nombre = re.sub(r'[<>:"/\\|?*\x00-\x1F]',"_",nombre,)
-    nombre = re.sub(r"\s+","_",nombre,)
+    nombre = re.sub(r'[<>:"/\\|?*\x00-\x1F]', "_", nombre)
+    nombre = re.sub(r"\s+", "_", nombre)
 
     return nombre.strip("._") or "expediente"
 
@@ -112,17 +151,14 @@ class ExpedienteDownloadZipView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request, expediente_id):
-        expediente = get_object_or_404(queryset_expedientes_usuario(request.user),pk=expediente_id,)
+        expediente = get_object_or_404(queryset_expedientes_usuario(request.user), pk=expediente_id)
         documentos = list(expediente.documentos.all())
         tiene_solicitud = bool(expediente.solicitud_pdf)
 
         if not documentos and not tiene_solicitud:
             return Response(
                 {
-                    "detail": (
-                        "El expediente no tiene archivos "
-                        "disponibles para descargar."
-                    )
+                    "detail": "El expediente no tiene archivos disponibles para descargar."
                 },
                 status=status.HTTP_404_NOT_FOUND,
             )
@@ -135,7 +171,7 @@ class ExpedienteDownloadZipView(APIView):
         archivos_agregados = 0
 
         try:
-            with zipfile.ZipFile(archivo_temporal,mode="w",compression=zipfile.ZIP_DEFLATED,) as archivo_zip:
+            with zipfile.ZipFile(archivo_temporal, mode="w", compression=zipfile.ZIP_DEFLATED) as archivo_zip:
                 # ==========================================
                 # DOCUMENTOS CARGADOS AL EXPEDIENTE
                 # ==========================================
@@ -156,24 +192,14 @@ class ExpedienteDownloadZipView(APIView):
                     if documento.requisito_id == "otros":
                         nombre_dentro_zip = f"documentos/otros/{documento.id_documento}_{nombre_original}"
                     else:
-                        nombre_dentro_zip = (
-                            f"documentos/"
-                            f"{requisito_id} - {nombre_original}"
-                        )
+                        nombre_dentro_zip = f"documentos/{requisito_id} - {nombre_original}"
 
                     try:
                         documento.archivo.open("rb")
-
-                        archivo_zip.writestr(
-                            nombre_dentro_zip,
-                            documento.archivo.read(),
-                        )
-
+                        archivo_zip.writestr(nombre_dentro_zip, documento.archivo.read())
                         archivos_agregados += 1
-
                     except (FileNotFoundError, OSError):
                         continue
-
                     finally:
                         try:
                             documento.archivo.close()
@@ -186,14 +212,14 @@ class ExpedienteDownloadZipView(APIView):
                 if expediente.solicitud_pdf:
                     try:
                         expediente.solicitud_pdf.open("rb")
-
-                        nombre_solicitud = limpiar_nombre_archivo(os.path.basename(expediente.solicitud_pdf.name),"solicitud.pdf",)
-                        archivo_zip.writestr(f"solicitud/{nombre_solicitud}",expediente.solicitud_pdf.read(),)
+                        nombre_solicitud = limpiar_nombre_archivo(
+                            os.path.basename(expediente.solicitud_pdf.name),
+                            "solicitud.pdf",
+                        )
+                        archivo_zip.writestr(f"solicitud/{nombre_solicitud}", expediente.solicitud_pdf.read())
                         archivos_agregados += 1
-
                     except (FileNotFoundError, OSError):
                         pass
-
                     finally:
                         try:
                             expediente.solicitud_pdf.close()
@@ -202,13 +228,9 @@ class ExpedienteDownloadZipView(APIView):
 
             if archivos_agregados == 0:
                 archivo_temporal.close()
-
                 return Response(
                     {
-                        "detail": (
-                            "Los archivos del expediente no "
-                            "se encuentran disponibles."
-                        )
+                        "detail": "Los archivos del expediente no se encuentran disponibles."
                     },
                     status=status.HTTP_404_NOT_FOUND,
                 )
@@ -217,7 +239,7 @@ class ExpedienteDownloadZipView(APIView):
 
             folio = limpiar_nombre_zip(expediente.folio)
             cliente = limpiar_nombre_zip(expediente.cliente)
-            nombre_zip = (f"{folio}_{cliente}.zip")
+            nombre_zip = f"{folio}_{cliente}.zip"
 
             return FileResponse(
                 archivo_temporal,
@@ -242,7 +264,8 @@ class ExpedienteViewSet(
 
     serializer_class = ExpedienteSerializer
 
-    def get_queryset(self): return queryset_expedientes_usuario(self.request.user)
+    def get_queryset(self): 
+        return queryset_expedientes_usuario(self.request.user)
 
     def get_serializer_context(self):
         context = super().get_serializer_context()
@@ -256,23 +279,16 @@ class ExpedienteViewSet(
 
         agencia = serializer.validated_data["agencia"]
 
+        # Validación estricta de agencias asignadas para usuarios no administradores
         if not es_admin(request.user):
             agencias_permitidas = obtener_agencias_usuario(request.user)
-
-            if agencia not in agencias_permitidas:
+            if not agencias_permitidas or agencia not in agencias_permitidas:
                 return Response(
-                    {"agencia": ["No puedes crear expedientes para este Dealer."]},
+                    {"agencia": ["No tienes agencias asignadas o no tienes permiso para este Dealer."]},
                     status=status.HTTP_403_FORBIDDEN,
                 )
 
         expediente = serializer.save(creado_por=nombre_usuario_crm(request.user))
-
-        expediente = (
-            Expediente.objects
-            .prefetch_related("documentos")
-            .get(pk=expediente.pk)
-        )
-
         salida = self.get_serializer(expediente)
 
         return Response(
@@ -282,17 +298,15 @@ class ExpedienteViewSet(
             },
             status=status.HTTP_201_CREATED,
         )
-    @action(detail=True,methods=["post"],url_path="formato-pdf",parser_classes=[MultiPartParser, FormParser],)
+
+    @action(detail=True, methods=["post"], url_path="formato-pdf", parser_classes=[MultiPartParser, FormParser])
     @transaction.atomic
     def guardar_formato_pdf(self, request, pk=None):
         expediente = self.get_object()
 
         if not puede_editar_expediente(request.user, expediente):
-            raise PermissionDenied(
-                "No tienes permisos para modificar este expediente."
-            )
+            raise PermissionDenied("No tienes permisos para modificar este expediente.")
 
-        # Forzamos lectura del multipart completo.
         data = request.data
         archivos = request.FILES
 
@@ -304,16 +318,12 @@ class ExpedienteViewSet(
         if not plantilla_configurada:
             return Response(
                 {
-                    "detail":
-                        "Este expediente no tiene una plantilla PDF configurada."
+                    "detail": "Este expediente no tiene una plantilla PDF configurada."
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        plantilla_enviada = str(
-            data.get("plantilla", "") or ""
-        ).strip()
-
+        plantilla_enviada = str(data.get("plantilla", "") or "").strip()
         plantilla_esperada = plantilla_configurada["value"]
 
         if plantilla_enviada != plantilla_esperada:
@@ -332,27 +342,18 @@ class ExpedienteViewSet(
         if not archivo:
             return Response(
                 {
-                    "archivo": [
-                        "Debes enviar el PDF modificado."
-                    ]
+                    "archivo": ["Debes enviar el PDF modificado."]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        nombre = str(
-            getattr(archivo, "name", "") or ""
-        ).lower()
-
-        mime = str(
-            getattr(archivo, "content_type", "") or ""
-        ).lower()
+        nombre = str(getattr(archivo, "name", "") or "").lower()
+        mime = str(getattr(archivo, "content_type", "") or "").lower()
 
         if not nombre.endswith(".pdf"):
             return Response(
                 {
-                    "archivo": [
-                        "Solo se permiten archivos PDF."
-                    ]
+                    "archivo": ["Solo se permiten archivos PDF."]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -360,9 +361,7 @@ class ExpedienteViewSet(
         if mime and mime != "application/pdf":
             return Response(
                 {
-                    "archivo": [
-                        "El archivo enviado no tiene formato PDF."
-                    ]
+                    "archivo": ["El archivo enviado no tiene formato PDF."]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -374,9 +373,7 @@ class ExpedienteViewSet(
         if cabecera != b"%PDF-":
             return Response(
                 {
-                    "archivo": [
-                        "El archivo enviado no es un PDF válido."
-                    ]
+                    "archivo": ["El archivo enviado no es un PDF válido."]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -384,17 +381,11 @@ class ExpedienteViewSet(
         campos_raw = data.get("campos", "{}")
 
         try:
-            campos = (
-                json.loads(campos_raw)
-                if isinstance(campos_raw, str)
-                else campos_raw
-            )
+            campos = json.loads(campos_raw) if isinstance(campos_raw, str) else campos_raw
         except json.JSONDecodeError:
             return Response(
                 {
-                    "campos": [
-                        "Los campos enviados no contienen JSON válido."
-                    ]
+                    "campos": ["Los campos enviados no contienen JSON válido."]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -402,23 +393,13 @@ class ExpedienteViewSet(
         if not isinstance(campos, dict):
             return Response(
                 {
-                    "campos": [
-                        "Los campos deben enviarse como un objeto JSON."
-                    ]
+                    "campos": ["Los campos deben enviarse como un objeto JSON."]
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        nombre_final = (
-            f"{expediente.folio}-"
-            f"{plantilla_configurada['archivo']}"
-        )
-
-        archivo_anterior = (
-            expediente.solicitud_pdf.name
-            if expediente.solicitud_pdf
-            else ""
-        )
+        nombre_final = f"{expediente.folio}-{plantilla_configurada['archivo']}"
+        archivo_anterior = expediente.solicitud_pdf.name if expediente.solicitud_pdf else ""
 
         expediente.solicitud_pdf.save(
             nombre_final,
@@ -440,10 +421,7 @@ class ExpedienteViewSet(
             ]
         )
 
-        if (
-            archivo_anterior
-            and archivo_anterior != expediente.solicitud_pdf.name
-        ):
+        if archivo_anterior and archivo_anterior != expediente.solicitud_pdf.name:
             try:
                 default_storage.delete(archivo_anterior)
             except Exception:
@@ -453,8 +431,7 @@ class ExpedienteViewSet(
 
         return Response(
             {
-                "message":
-                    "Solicitud PDF guardada correctamente.",
+                "message": "Solicitud PDF guardada correctamente.",
                 "data": salida.data,
             },
             status=status.HTTP_200_OK,
@@ -586,6 +563,13 @@ class DocumentoDeleteView(APIView):
 
         if not puede_editar_expediente(request.user, expediente):
             raise PermissionDenied("No tienes permisos para eliminar documentos de este expediente.")
+
+        # Eliminación del archivo físico para prevenir archivos huérfanos
+        if documento.archivo:
+            try:
+                documento.archivo.delete(save=False)
+            except Exception:
+                pass
 
         documento.delete()
 
