@@ -31,6 +31,7 @@ urlpatterns = [
     path("refacciones-obsolescencia/", include("refacciones_obsolescencia.urls")),
     path("presupuestos/", include("presupuestos.urls"),),
     path("compra-refacciones/",include("CompraRefacciones.urls"),),
+    path("gota/", include("gota.urls"),),
 ]
 
 if settings.DEBUG:
