@@ -12,7 +12,7 @@ from rest_framework.views import APIView
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
 from .serializers import VWVNSerializer
-
+from Digitales.models import ExpedienteDigital
 
 class VWVNListView(APIView):
     """
@@ -57,6 +57,9 @@ class VWVNListView(APIView):
         condicion_pago = str(
             request.query_params.get("condicion_pago", "") or ""
         ).strip()
+        venta_digital = str(
+            request.query_params.get("venta_digital", "") or ""
+        ).strip().lower()
 
         # ---------------------------------------------------------
         # 2. PAGINACIÓN
@@ -162,6 +165,60 @@ class VWVNListView(APIView):
             )
             parametros.append(condicion_pago)
 
+        # ---------------------------------------------------------
+        # FILTRO DE VENTAS DIGITALES
+        # ---------------------------------------------------------
+        # ExpedienteDigital y VW_VN viven en bases distintas.
+        # Primero obtenemos los VIN facturados digitales.
+        # Después consultamos únicamente ProdOuServ de autos nuevos
+        # y hacemos la intersección en Python.
+        #
+        # De esta forma evitamos enviar a SQL Server un IN con todos
+        # los VIN de ExpedienteDigital, que resulta costoso en VW_VN.
+
+        if venta_digital in ("1", "true", "si", "sí"):
+            vins_digitales = {
+                str(vin).strip().upper()
+                for vin in ExpedienteDigital.objects
+                .exclude(vin_facturado="")
+                .values_list("vin_facturado", flat=True)
+                if str(vin or "").strip()
+            }
+
+            vins_coincidentes = []
+
+            if vins_digitales:
+                with connections["sqlserver_inv"].cursor() as cursor:
+                    cursor.execute(
+                        """
+                        SELECT ProdOuServ
+                        FROM dbo.VW_VN
+                        WHERE CondUso = %s
+                        """,
+                        ["N"],
+                    )
+
+                    for fila in cursor.fetchall():
+                        vin = str(fila[0] or "").strip().upper()
+
+                        if vin and vin in vins_digitales:
+                            vins_coincidentes.append(vin)
+
+            # Quitamos posibles VIN repetidos.
+            vins_coincidentes = list(set(vins_coincidentes))
+
+            if vins_coincidentes:
+                placeholders = ", ".join(
+                    ["%s"] * len(vins_coincidentes)
+                )
+
+                condiciones.append(
+                    f"ProdOuServ IN ({placeholders})"
+                )
+                parametros.extend(vins_coincidentes)
+            else:
+                condiciones.append("1 = 0")
+
         # Si no hay filtros, no agregamos WHERE.
         where_sql = (
             "WHERE "
@@ -264,6 +321,72 @@ class VWVNListView(APIView):
                 dict(zip(columnas, fila))
                 for fila in cursor.fetchall()
             ]
+            # ---------------------------------------------------------
+            # 7. IDENTIFICAMOS VENTAS DIGITALES POR VIN
+            # ---------------------------------------------------------
+
+            # VW_VN guarda el VIN en "ProdOuServ", expuesto como
+            # "producto_servicio" en los resultados de esta consulta.
+            # ExpedienteDigital guarda el VIN en "vin_facturado".
+            #
+            # Como ambas tablas pertenecen a conexiones distintas,
+            # el cruce se realiza desde Django y no mediante un JOIN SQL.
+
+            def normalizar_vin(valor):
+                return str(valor or "").strip().upper()
+
+            vins_pagina = {
+                normalizar_vin(registro.get("producto_servicio"))
+                for registro in registros
+                if normalizar_vin(registro.get("producto_servicio"))
+            }
+
+            expedientes_por_vin = {}
+
+            if vins_pagina:
+                expedientes = (
+                    ExpedienteDigital.objects
+                    .filter(vin_facturado__in=vins_pagina)
+                    .select_related("cliente")
+                )
+
+                for expediente in expedientes:
+                    vin = normalizar_vin(expediente.vin_facturado)
+
+                    if not vin:
+                        continue
+
+                    expedientes_por_vin[vin] = expediente
+
+            for registro in registros:
+                vin = normalizar_vin(registro.get("producto_servicio"))
+                expediente = expedientes_por_vin.get(vin)
+
+                if expediente:
+                    registro["tipo_venta"] = "Venta digital"
+                    registro["es_venta_digital"] = True
+                    registro["prospecto_digital"] = {
+                        "id": expediente.id,
+                        "cliente_id": expediente.cliente_id,
+                        "nombre": expediente.cliente.nombre if expediente.cliente else "",
+                        "telefono": expediente.cliente.telefono if expediente.cliente else "",
+                        "correo": expediente.cliente.correo if expediente.cliente else "",
+                        "agencia": expediente.agencia,
+                        "estado": expediente.estado,
+                        "auto_interes": expediente.auto_interes,
+                        "asesor_digital": expediente.asesor_digital,
+                        "asesor_ventas": expediente.asesor_ventas,
+                        "enganche_monto": expediente.enganche_monto,
+                        "presupuesto_mensual": expediente.presupuesto_mensual,
+                        "forma_pago": expediente.forma_pago,
+                        "plazo_compra": expediente.plazo_compra,
+                        "vin_facturado": expediente.vin_facturado,
+                        "facturado_at": expediente.facturado_at,
+                    }
+                else:
+                    registro["tipo_venta"] = ""
+                    registro["es_venta_digital"] = False
+                    registro["prospecto_digital"] = None
 
 
         # ---------------------------------------------------------
@@ -351,6 +474,9 @@ class VWVNDashboardView(APIView):
             request.query_params.get("condicion_pago", "") or ""
         ).strip()
 
+        venta_digital = str(
+            request.query_params.get("venta_digital", "") or ""
+        ).strip().lower()
 
         # ==========================================================
         # 2. WHERE DINÁMICO
@@ -414,13 +540,37 @@ class VWVNDashboardView(APIView):
                 "NmCondPgto = %s"
             )
             parametros.append(condicion_pago)
+        # Venta digital
+        if venta_digital in ("1", "true", "si", "sí"):
+            vins_digitales_filtro = [
+                str(vin or "").strip().upper()
+                for vin in ExpedienteDigital.objects
+                .exclude(vin_facturado="")
+                .values_list("vin_facturado", flat=True)
+                if str(vin or "").strip()
+            ]
 
+            if vins_digitales_filtro:
+                placeholders = ", ".join(
+                    ["%s"] * len(vins_digitales_filtro)
+                )
+
+                condiciones.append(
+                    f"ProdOuServ IN ({placeholders})"
+                )
+
+                parametros.extend(
+                    vins_digitales_filtro
+                )
+            else:
+                # Si no existen VIN digitales, la consulta
+                # debe regresar cero resultados.
+                condiciones.append("1 = 0")
 
         where_sql = (
             "WHERE "
             + " AND ".join(condiciones)
         )
-
 
         # ==========================================================
         # FUNCIÓN INTERNA
@@ -516,6 +666,42 @@ class VWVNDashboardView(APIView):
                 )
             )
 
+            # ======================================================
+            # 3.1 VENTAS DIGITALES
+            # ======================================================
+            #
+            # ExpedienteDigital y VW_VN están en bases distintas.
+            # Obtenemos los VIN facturados digitales y los cruzamos
+            # contra ProdOuServ respetando los mismos filtros activos
+            # del dashboard.
+            # ======================================================
+
+            vins_digitales = {
+                str(vin or "").strip().upper()
+                for vin in ExpedienteDigital.objects
+                .exclude(vin_facturado="")
+                .values_list("vin_facturado", flat=True)
+                if str(vin or "").strip()
+            }
+
+            consulta_vins_dashboard = f"""
+                SELECT ProdOuServ
+                FROM dbo.VW_VN
+                {where_sql}
+            """
+
+            cursor.execute(
+                consulta_vins_dashboard,
+                parametros,
+            )
+
+            ventas_digitales = sum(
+                1
+                for fila in cursor.fetchall()
+                if str(fila[0] or "").strip().upper() in vins_digitales
+            )
+
+            totales["ventas_digitales"] = ventas_digitales
 
             # ======================================================
             # 4. GRÁFICA POR MES
@@ -870,6 +1056,7 @@ class VWVNDashboardView(APIView):
                     "asesor": asesor,
                     "familia": familia,
                     "condicion_pago": condicion_pago,
+                    "venta_digital": venta_digital,
                     "cond_uso": "N",
                 },
 

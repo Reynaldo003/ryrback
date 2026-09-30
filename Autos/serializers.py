@@ -216,4 +216,21 @@ class VWVNSerializer(serializers.Serializer):
         allow_blank=True,
         required=False,
     )
-    
+    # 31. Clasificación de la venta
+    tipo_venta = serializers.CharField(
+        allow_null=True,
+        allow_blank=True,
+        required=False,
+    )
+
+    # 32. Indica si el VIN pertenece a un prospecto digital
+    es_venta_digital = serializers.BooleanField(
+        required=False,
+        default=False,
+    )
+
+    # 33. Datos del prospecto digital asociado
+    prospecto_digital = serializers.DictField(
+        allow_null=True,
+        required=False,
+    )
