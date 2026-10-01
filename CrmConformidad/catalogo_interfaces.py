@@ -38,13 +38,18 @@ PERMISOS_POR_INTERFAZ = {
 
 
 def permisos_por_interfaces(interfaces):
-    """Unión de los permisos mínimos de una lista de interfaces."""
+    """Unión de los permisos mínimos de una lista de interfaces.
+
+    Soporta claves compuestas "<interfaz>:<submodulo>" (desglose por
+    submódulo): el prefijo de interfaz aporta los permisos del módulo.
+    """
     if not isinstance(interfaces, list):
         return []
 
     permisos = []
     for clave in interfaces:
-        for permiso in PERMISOS_POR_INTERFAZ.get(clave, []):
+        clave_base = clave.split(":", 1)[0]
+        for permiso in PERMISOS_POR_INTERFAZ.get(clave_base, []):
             if permiso not in permisos:
                 permisos.append(permiso)
 

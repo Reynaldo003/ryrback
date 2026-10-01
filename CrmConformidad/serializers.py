@@ -107,8 +107,13 @@ def validar_interfaces(valor):
         raise serializers.ValidationError("interfaces debe ser una lista.")
 
     for clave in data:
-        if clave not in PERMISOS_POR_INTERFAZ:
-            raise serializers.ValidationError(f"Interfaz desconocida: {clave}")
+        if not isinstance(clave, str):
+            raise serializers.ValidationError("Las claves de interfaces deben ser texto.")
+
+        clave_base = clave.split(":", 1)[0]
+
+        if clave_base not in PERMISOS_POR_INTERFAZ:
+            raise serializers.ValidationError(f"Interfaz desconocida: {clave_base}")
 
     return data
 
