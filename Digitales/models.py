@@ -678,3 +678,70 @@ class Tecnico(models.Model):
 
     def __str__(self):
         return f"{self.nombre} - {self.tipo_personal} - {self.agencia}"
+
+class BloqueoWhatsAppLinea(models.Model):
+    expediente = models.ForeignKey(
+        ExpedienteDigital,
+        on_delete=models.CASCADE,
+        related_name="bloqueos_whatsapp",
+    )
+
+    numero_asesor = models.CharField(
+        max_length=15,
+        db_index=True,
+    )
+
+    motivo = models.CharField(
+        max_length=255,
+        blank=True,
+        default="",
+    )
+
+    bloqueado_por = models.CharField(
+        max_length=120,
+        blank=True,
+        default="",
+    )
+
+    respuesta_meta = models.JSONField(
+        default=dict,
+        blank=True,
+    )
+
+    bloqueado_at = models.DateTimeField(
+        default=timezone.now,
+    )
+
+    actualizado = models.DateTimeField(
+        auto_now=True,
+    )
+
+    class Meta:
+        db_table = "digitales_bloqueo_whatsapp_linea"
+
+        constraints = [
+            models.UniqueConstraint(
+                fields=["expediente", "numero_asesor"],
+                name="uniq_bloqueo_whatsapp_linea",
+            )
+        ]
+
+        indexes = [
+            models.Index(
+                fields=["numero_asesor", "expediente"],
+                name="dig_bloqueo_linea_idx",
+            )
+        ]
+
+    def save(self, *args, **kwargs):
+        self.numero_asesor = normaliza_tel_mx(
+            self.numero_asesor or ""
+        )
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return (
+            f"Expediente {self.expediente_id} | "
+            f"{self.numero_asesor}"
+        )
+    

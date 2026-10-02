@@ -58,6 +58,7 @@ from .models import (
     ConversacionIA,
     CatalogoVehiculos,
     ControlRepartoWhatsApp,
+    BloqueoWhatsAppLinea,
 )
 from .serializers import ProspectoSerializer, WhatsAppMessageSerializer, EvidenciaProspectoDigitalSerializer
 from .services import generar_y_guardar_resumen, debe_generar_resumen_al_llegar_a_6
@@ -115,6 +116,34 @@ TOKEN = "CBAR&RVOLKS"
 logger = logging.getLogger(__name__)
 _cat_logger = logging.getLogger(__name__)
 
+def obtener_bloqueo_whatsapp_linea(expediente, numero_asesor):
+    if not expediente:
+        return None
+
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+
+    if not numero_asesor:
+        return None
+
+    return BloqueoWhatsAppLinea.objects.filter(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    ).first()
+
+
+def contacto_bloqueado_en_linea(expediente, numero_asesor):
+    if not expediente:
+        return False
+
+    numero_asesor = normaliza_tel_mx(numero_asesor or "")
+
+    if not numero_asesor:
+        return False
+
+    return BloqueoWhatsAppLinea.objects.filter(
+        expediente=expediente,
+        numero_asesor=numero_asesor,
+    ).exists()
 
 # ── ViewSet ───────────────────────────────────────────────────────────────────
 class ProspectosPagination(PageNumberPagination):
@@ -2862,6 +2891,15 @@ def chats_list(request):
         numero_asesor,
     )
 
+    ids_expedientes = [exp.id for exp in expedientes]
+    bloqueos_whatsapp = {
+        bloqueo.expediente_id: bloqueo
+        for bloqueo in BloqueoWhatsAppLinea.objects.filter(
+            expediente_id__in=ids_expedientes,
+            numero_asesor=numero_asesor,
+        )
+    }
+
     data = []
 
     # ---------------------------------------------------------
@@ -2872,14 +2910,10 @@ def chats_list(request):
         dt_original = exp.last_time
         dt_ui = dt_original
 
-        if (
-            dt_ui
-            and settings.USE_TZ
-            and timezone.is_aware(dt_ui)
-        ):
-            dt_ui = timezone.localtime(
-                dt_ui
-            )
+        bloqueo_whatsapp = bloqueos_whatsapp.get(exp.id)
+        
+        if (dt_ui and settings.USE_TZ and timezone.is_aware(dt_ui)        ):
+            dt_ui = timezone.localtime(dt_ui)
 
         telefono = normaliza_tel_mx(
             exp.cliente.telefono
@@ -2936,15 +2970,10 @@ def chats_list(request):
                 if estado_ia
                 else []
             ),
-            "whatsapp_bloqueado":
-                bool(exp.whatsapp_bloqueado),
-            "whatsapp_bloqueado_at": (
-                exp.whatsapp_bloqueado_at.isoformat()
-                if exp.whatsapp_bloqueado_at
-                else None
-            ),
-            "whatsapp_bloqueado_motivo":
-                exp.whatsapp_bloqueado_motivo or "",
+            
+            "whatsapp_bloqueado": bool(bloqueo_whatsapp),
+            "whatsapp_bloqueado_at": (bloqueo_whatsapp.bloqueado_at.isoformat() if bloqueo_whatsapp and bloqueo_whatsapp.bloqueado_at else None),
+            "whatsapp_bloqueado_motivo": (bloqueo_whatsapp.motivo if bloqueo_whatsapp else ""),
         })
 
     # ---------------------------------------------------------
@@ -3078,58 +3107,232 @@ def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):
 @permission_classes([IsAuthenticated])
 def contacto_por_telefono(request):
     numero_asesor = _get_numero_asesor_request(request)
-    tel = normaliza_tel_mx(request.query_params.get("tel", ""))
+
+    tel = normaliza_tel_mx(
+        request.query_params.get("tel", "")
+    )
+
     if not tel:
-        return Response({"ok": False, "error": "Falta tel"}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(
+            {
+                "ok": False,
+                "error": "Falta tel",
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
 
-    limit = _int_param(request, "limit", 8, 1, 50)
-    before_id = str(request.query_params.get("before_id", "") or "").strip()
-    mark_read = str(request.query_params.get("mark_read", "1") or "1").strip().casefold() not in {"0", "false", "no", "off"}
-    incluir_contexto = str(request.query_params.get("incluir_contexto", "1") or "1").strip().casefold() not in {"0", "false", "no", "off"}
+    limit = _int_param(
+        request,
+        "limit",
+        8,
+        1,
+        50,
+    )
 
-    cliente = ClienteComercial.objects.filter(telefono=tel).first()
-    exp = ExpedienteDigital.objects.select_related("cliente").filter(cliente=cliente).first() if cliente else None
+    before_id = str(
+        request.query_params.get("before_id", "")
+        or ""
+    ).strip()
+
+    mark_read = (
+        str(
+            request.query_params.get(
+                "mark_read",
+                "1",
+            )
+            or "1"
+        )
+        .strip()
+        .casefold()
+        not in {"0", "false", "no", "off"}
+    )
+
+    incluir_contexto = (
+        str(
+            request.query_params.get(
+                "incluir_contexto",
+                "1",
+            )
+            or "1"
+        )
+        .strip()
+        .casefold()
+        not in {"0", "false", "no", "off"}
+    )
+
+    cliente = ClienteComercial.objects.filter(
+        telefono=tel
+    ).first()
+
+    exp = (
+        ExpedienteDigital.objects
+        .select_related("cliente")
+        .filter(cliente=cliente)
+        .first()
+        if cliente
+        else None
+    )
+
     if not exp:
-        return Response({"ok": False, "error": "No existe expediente"}, status=status.HTTP_404_NOT_FOUND)
-    _validar_acceso_expediente(request=request, expediente=exp, numero_asesor=numero_asesor)
+        return Response(
+            {
+                "ok": False,
+                "error": "No existe expediente",
+            },
+            status=status.HTTP_404_NOT_FOUND,
+        )
 
-    qs = MensajeWhatsApp.objects.filter(telefono=tel, numero_asesor=numero_asesor)
+    _validar_acceso_expediente(
+        request=request,
+        expediente=exp,
+        numero_asesor=numero_asesor,
+    )
+
+    qs = MensajeWhatsApp.objects.filter(
+        telefono=tel,
+        numero_asesor=numero_asesor,
+    )
+
     if before_id:
         try:
             id_referencia = int(before_id)
         except (TypeError, ValueError):
             id_referencia = 0
+
         if id_referencia:
-            ref = qs.filter(id=id_referencia).only("id", "created_at").first()
+            ref = (
+                qs.filter(id=id_referencia)
+                .only("id", "created_at")
+                .first()
+            )
+
             if ref:
-                qs = qs.filter(Q(created_at__lt=ref.created_at) | Q(created_at=ref.created_at, id__lt=ref.id))
+                qs = qs.filter(
+                    Q(created_at__lt=ref.created_at)
+                    |
+                    Q(
+                        created_at=ref.created_at,
+                        id__lt=ref.id,
+                    )
+                )
 
-    mensajes_desc = list(qs.order_by("-created_at", "-id")[:limit + 1])
+    mensajes_desc = list(
+        qs.order_by(
+            "-created_at",
+            "-id",
+        )[:limit + 1]
+    )
+
     has_more = len(mensajes_desc) > limit
-    mensajes = list(reversed(mensajes_desc[:limit]))
-    if not before_id and mark_read:
-        _mark_read_exp(exp, numero_asesor)
 
-    prospecto_data, ia_estado = None, None
-    if incluir_contexto:
-        ia_estado = obtener_estado_ia_conversacion(tel=tel, numero_asesor=numero_asesor, expediente=exp)
-        prospecto_data = ProspectoSerializer(exp, context={"request": request}).data
-        prospecto_data["origen_preview"] = _obtener_origen_preview_para_contacto(
-            expediente=exp, tel=tel, numero_asesor=numero_asesor
+    mensajes = list(
+        reversed(
+            mensajes_desc[:limit]
+        )
+    )
+
+    if not before_id and mark_read:
+        _mark_read_exp(
+            exp,
+            numero_asesor,
         )
 
-    oldest_id = mensajes[0].id if mensajes else None
-    newest_id = mensajes[-1].id if mensajes else None
-    return Response({
-        "ok": True, "numero_asesor_activo": numero_asesor, "prospecto": prospecto_data, "ia_estado": ia_estado,
-        "mensajes": WhatsAppMessageSerializer(mensajes, many=True, context={"request": request}).data,
-        "paginacion": {
-            "limit": limit, "has_more": has_more, "oldest_id": oldest_id, "newest_id": newest_id,
-            "oldest_created_at": mensajes[0].created_at.isoformat() if mensajes and mensajes[0].created_at else None,
-            "newest_created_at": mensajes[-1].created_at.isoformat() if mensajes and mensajes[-1].created_at else None,
-            "before_id": oldest_id,
+    prospecto_data = None
+    ia_estado = None
+
+    if incluir_contexto:
+        ia_estado = obtener_estado_ia_conversacion(
+            tel=tel,
+            numero_asesor=numero_asesor,
+            expediente=exp,
+        )
+
+        prospecto_data = ProspectoSerializer(
+            exp,
+            context={"request": request},
+        ).data
+
+        bloqueo = obtener_bloqueo_whatsapp_linea(
+            exp,
+            numero_asesor,
+        )
+
+        prospecto_data["whatsapp_bloqueado"] = bool(
+            bloqueo
+        )
+
+        prospecto_data["whatsapp_bloqueado_at"] = (
+            bloqueo.bloqueado_at.isoformat()
+            if bloqueo
+            and bloqueo.bloqueado_at
+            else None
+        )
+
+        prospecto_data["whatsapp_bloqueado_por"] = (
+            bloqueo.bloqueado_por
+            if bloqueo
+            else ""
+        )
+
+        prospecto_data["whatsapp_bloqueado_motivo"] = (
+            bloqueo.motivo
+            if bloqueo
+            else ""
+        )
+
+        prospecto_data["origen_preview"] = (
+            _obtener_origen_preview_para_contacto(
+                expediente=exp,
+                tel=tel,
+                numero_asesor=numero_asesor,
+            )
+        )
+
+    oldest_id = (
+        mensajes[0].id
+        if mensajes
+        else None
+    )
+
+    newest_id = (
+        mensajes[-1].id
+        if mensajes
+        else None
+    )
+
+    return Response(
+        {
+            "ok": True,
+            "numero_asesor_activo": numero_asesor,
+            "prospecto": prospecto_data,
+            "ia_estado": ia_estado,
+            "mensajes": WhatsAppMessageSerializer(
+                mensajes,
+                many=True,
+                context={"request": request},
+            ).data,
+            "paginacion": {
+                "limit": limit,
+                "has_more": has_more,
+                "oldest_id": oldest_id,
+                "newest_id": newest_id,
+                "oldest_created_at": (
+                    mensajes[0].created_at.isoformat()
+                    if mensajes
+                    and mensajes[0].created_at
+                    else None
+                ),
+                "newest_created_at": (
+                    mensajes[-1].created_at.isoformat()
+                    if mensajes
+                    and mensajes[-1].created_at
+                    else None
+                ),
+                "before_id": oldest_id,
+            },
         },
-    }, status=status.HTTP_200_OK)
+        status=status.HTTP_200_OK,
+    )
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
@@ -3385,11 +3588,14 @@ def enviar_mensaje_view(request):
             numero_asesor=numero_asesor,
         )
 
-        if getattr(exp, "whatsapp_bloqueado", False):
+        if contacto_bloqueado_en_linea(exp, numero_asesor,):
             return Response(
                 {
                     "ok": False,
-                    "error": "Este contacto está bloqueado en WhatsApp. Desbloquéalo antes de enviar mensajes.",
+                    "error": (
+                        "Este contacto está bloqueado en esta línea de WhatsApp. "
+                        "Desbloquéalo antes de enviar mensajes."
+                    ),
                     "tel": to,
                     "numero_asesor": numero_asesor,
                 },
@@ -3590,16 +3796,12 @@ def enviar_media_view(request):
         numero_asesor=numero_asesor,
     )
 
-    if getattr(
-        exp,
-        "whatsapp_bloqueado",
-        False,
-    ):
+    if contacto_bloqueado_en_linea(exp,numero_asesor,):
         return Response(
             {
                 "ok": False,
                 "error": (
-                    "Este contacto está bloqueado en WhatsApp. "
+                    "Este contacto está bloqueado en esta línea de WhatsApp. "
                     "Desbloquéalo antes de enviar mensajes."
                 ),
                 "tel": to,
@@ -3954,11 +4156,14 @@ def enviar_plantilla_view(request):
             numero_asesor=numero_asesor,
         )
 
-        if getattr(exp, "whatsapp_bloqueado", False):
+        if contacto_bloqueado_en_linea(exp,numero_asesor,):
             return Response(
                 {
                     "ok": False,
-                    "error": "Este contacto está bloqueado en WhatsApp. Desbloquéalo antes de enviar mensajes.",
+                    "error": (
+                        "Este contacto está bloqueado en esta línea de WhatsApp. "
+                        "Desbloquéalo antes de enviar mensajes."
+                    ),
                     "tel": to,
                     "numero_asesor": numero_asesor,
                 },
@@ -4777,12 +4982,12 @@ def _meta_block_failed(data: dict) -> list:
         or []
     )
 
-
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def bloquear_contacto_whatsapp_view(request):
     numero_asesor = _get_numero_asesor_request(request)
+
     tel = normaliza_tel_mx(
         request.data.get("tel", "")
         or request.data.get("telefono", "")
@@ -4795,13 +5000,21 @@ def bloquear_contacto_whatsapp_view(request):
 
     if not tel:
         return Response(
-            {"ok": False, "error": "Falta tel"},
+            {
+                "ok": False,
+                "error": "Falta tel",
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    cliente = ClienteComercial.objects.filter(telefono=tel).first()
+    cliente = ClienteComercial.objects.filter(
+        telefono=tel
+    ).first()
+
     expediente = (
-        ExpedienteDigital.objects.filter(cliente=cliente).first()
+        ExpedienteDigital.objects.filter(
+            cliente=cliente
+        ).first()
         if cliente
         else None
     )
@@ -4817,6 +5030,7 @@ def bloquear_contacto_whatsapp_view(request):
             to=tel,
             numero_asesor=numero_asesor,
         )
+
     except MetaAPIError as e:
         return _response_meta_error(
             e,
@@ -4826,9 +5040,11 @@ def bloquear_contacto_whatsapp_view(request):
                 "tel": tel,
             },
         )
+
     except Exception as e:
         logger.exception(
-            "ERROR BLOQUEANDO CONTACTO WHATSAPP | tel=%s numero_asesor=%s error=%s",
+            "ERROR BLOQUEANDO CONTACTO WHATSAPP | "
+            "tel=%s numero_asesor=%s error=%s",
             tel,
             numero_asesor,
             str(e),
@@ -4853,7 +5069,8 @@ def bloquear_contacto_whatsapp_view(request):
                 "ok": False,
                 "error": (
                     "Meta no confirmó el bloqueo. "
-                    "Recuerda que solo se puede bloquear si el cliente escribió en las últimas 24 horas."
+                    "Recuerda que solo se puede bloquear si el cliente "
+                    "escribió en las últimas 24 horas."
                 ),
                 "numero_asesor": numero_asesor,
                 "tel": tel,
@@ -4866,30 +5083,16 @@ def bloquear_contacto_whatsapp_view(request):
     usuario = _usuario_nombre_para_auditoria(request)
 
     if expediente:
-        expediente.whatsapp_bloqueado = True
-        expediente.whatsapp_bloqueado_at = timezone.now()
-        expediente.whatsapp_bloqueado_por = usuario
-        expediente.whatsapp_bloqueado_motivo = motivo
-        expediente.whatsapp_bloqueado_respuesta_meta = meta_res
-
-        expediente.ia_pausada = True
-        expediente.ia_pausada_motivo = "cliente_bloqueado"
-        expediente.ia_pausada_at = timezone.now()
-
-        expediente.estado = "Descalificado"
-
-        expediente.save(update_fields=[
-            "whatsapp_bloqueado",
-            "whatsapp_bloqueado_at",
-            "whatsapp_bloqueado_por",
-            "whatsapp_bloqueado_motivo",
-            "whatsapp_bloqueado_respuesta_meta",
-            "ia_pausada",
-            "ia_pausada_motivo",
-            "ia_pausada_at",
-            "estado",
-            "actualizado",
-        ])
+        BloqueoWhatsAppLinea.objects.update_or_create(
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+            defaults={
+                "motivo": motivo,
+                "bloqueado_por": usuario,
+                "respuesta_meta": meta_res,
+                "bloqueado_at": timezone.now(),
+            },
+        )
 
     registrar_evento_operativo(
         expediente=expediente,
@@ -4898,7 +5101,10 @@ def bloquear_contacto_whatsapp_view(request):
         accion="Bloqueó al cliente en WhatsApp",
         detalle=motivo,
         request=request,
-        metadata={"respuesta_meta": meta_res},
+        metadata={
+            "respuesta_meta": meta_res,
+            "numero_asesor": numero_asesor,
+        },
     )
 
     return Response(
@@ -4907,17 +5113,18 @@ def bloquear_contacto_whatsapp_view(request):
             "bloqueado": True,
             "tel": tel,
             "numero_asesor": numero_asesor,
+            "motivo": motivo,
             "meta": meta_res,
         },
         status=status.HTTP_200_OK,
     )
-
 
 @api_view(["POST"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def desbloquear_contacto_whatsapp_view(request):
     numero_asesor = _get_numero_asesor_request(request)
+
     tel = normaliza_tel_mx(
         request.data.get("tel", "")
         or request.data.get("telefono", "")
@@ -4925,13 +5132,21 @@ def desbloquear_contacto_whatsapp_view(request):
 
     if not tel:
         return Response(
-            {"ok": False, "error": "Falta tel"},
+            {
+                "ok": False,
+                "error": "Falta tel",
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
-    cliente = ClienteComercial.objects.filter(telefono=tel).first()
+    cliente = ClienteComercial.objects.filter(
+        telefono=tel
+    ).first()
+
     expediente = (
-        ExpedienteDigital.objects.filter(cliente=cliente).first()
+        ExpedienteDigital.objects.filter(
+            cliente=cliente
+        ).first()
         if cliente
         else None
     )
@@ -4947,6 +5162,7 @@ def desbloquear_contacto_whatsapp_view(request):
             to=tel,
             numero_asesor=numero_asesor,
         )
+
     except MetaAPIError as e:
         return _response_meta_error(
             e,
@@ -4956,9 +5172,11 @@ def desbloquear_contacto_whatsapp_view(request):
                 "tel": tel,
             },
         )
+
     except Exception as e:
         logger.exception(
-            "ERROR DESBLOQUEANDO CONTACTO WHATSAPP | tel=%s numero_asesor=%s error=%s",
+            "ERROR DESBLOQUEANDO CONTACTO WHATSAPP | "
+            "tel=%s numero_asesor=%s error=%s",
             tel,
             numero_asesor,
             str(e),
@@ -4991,20 +5209,10 @@ def desbloquear_contacto_whatsapp_view(request):
         )
 
     if expediente:
-        expediente.whatsapp_bloqueado = False
-        expediente.whatsapp_bloqueado_at = None
-        expediente.whatsapp_bloqueado_por = ""
-        expediente.whatsapp_bloqueado_motivo = ""
-        expediente.whatsapp_bloqueado_respuesta_meta = meta_res
-
-        expediente.save(update_fields=[
-            "whatsapp_bloqueado",
-            "whatsapp_bloqueado_at",
-            "whatsapp_bloqueado_por",
-            "whatsapp_bloqueado_motivo",
-            "whatsapp_bloqueado_respuesta_meta",
-            "actualizado",
-        ])
+        BloqueoWhatsAppLinea.objects.filter(
+            expediente=expediente,
+            numero_asesor=numero_asesor,
+        ).delete()
 
     registrar_evento_operativo(
         expediente=expediente,
@@ -5012,7 +5220,10 @@ def desbloquear_contacto_whatsapp_view(request):
         tipo="bloqueo",
         accion="Desbloqueó al cliente en WhatsApp",
         request=request,
-        metadata={"respuesta_meta": meta_res},
+        metadata={
+            "respuesta_meta": meta_res,
+            "numero_asesor": numero_asesor,
+        },
     )
 
     return Response(
