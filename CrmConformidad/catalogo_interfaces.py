@@ -24,6 +24,7 @@ PERMISOS_POR_INTERFAZ = {
     "retencion_no_ventas": ["CRM_VENTAS"],
     "encuesta_whats": ["CRM_RECLAMACIONES"],
     "facturas": ["CRM_CALIDAD"],
+    "tableros": ["CRM_COORDINADOR_DIGITAL"],
     "financieros": ["CRM_FINANCIEROS"],
     "config_ia": ["CRM_DIGITALES"],
     "admin_asesores": ["USUARIOS_ADMIN"],
