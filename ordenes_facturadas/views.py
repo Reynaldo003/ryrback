@@ -536,9 +536,7 @@ def sql_ordenes_agrupadas(
     return f"""
         SELECT
             os.Agencia AS agencia,
-
             os.NrOS AS nros,
-
             os.NrAtendimento AS nratendimento,
 
             MAX(os.TpOS)
@@ -580,10 +578,6 @@ def sql_ordenes_agrupadas(
                 0
             ) AS vrtotalpecas,
 
-            -- =================================================
-            -- TtMo pertenece a la OS.
-            -- MAX evita multiplicarlo por el número de partidas.
-            -- =================================================
             COALESCE(
                 MAX(os.TtMo),
                 0
@@ -638,7 +632,6 @@ def sql_ordenes_agrupadas(
             os.NrOS,
             os.NrAtendimento
     """
-
 
 # ============================================================
 # ORDERING
@@ -710,30 +703,24 @@ def construir_ordering(request):
 # LISTADO PAGINADO
 # ============================================================
 
-
 class OrdenesFacturadasListView(APIView):
     authentication_classes = [
         CRMJWTAuthentication
     ]
-
     permission_classes = [
         IsAuthenticated
     ]
 
     def get(self, request):
         try:
-            (
-                where_sql,
-                parametros,
-            ) = construir_filtros(
+            where_sql, parametros = construir_filtros(
                 request
             )
 
         except ValueError as exc:
             return Response(
                 {
-                    "detail":
-                        str(exc)
+                    "detail": str(exc)
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -761,17 +748,35 @@ class OrdenesFacturadasListView(APIView):
             request
         )
 
+        sql_base = sql_ordenes_agrupadas(
+            where_sql
+        )
+
         consulta = f"""
-            WITH Ordenes AS (
-                {
-                    sql_ordenes_agrupadas(
-                        where_sql
-                    )
-                }
+            ;WITH Ordenes AS (
+                {sql_base}
             )
 
             SELECT
-                *,
+                agencia,
+                nros,
+                nratendimento,
+                tpos,
+                subtipoos,
+                situacao,
+                dtabertura,
+                dtfechamento,
+                sitgarantia,
+                codcondpgto,
+                codoperfiscal,
+                vradicionais,
+                vrdescpeca,
+                vrtotalpecas,
+                ttmo,
+                requisiciones,
+                partidas,
+                valor_productos,
+                descuentos,
 
                 COUNT(*) OVER()
                     AS total_registros
@@ -782,8 +787,7 @@ class OrdenesFacturadasListView(APIView):
                 {ordering_sql}
 
             OFFSET %s ROWS
-
-            FETCH NEXT %s ROWS ONLY
+            FETCH NEXT %s ROWS ONLY;
         """
 
         parametros_consulta = [
@@ -822,30 +826,20 @@ class OrdenesFacturadasListView(APIView):
                 None,
             )
 
-        serializer = (
-            OrdenFacturadaResumenSerializer(
-                registros,
-                many=True,
-            )
+        serializer = OrdenFacturadaResumenSerializer(
+            registros,
+            many=True,
         )
 
         return Response(
             {
-                "count":
-                    total,
-
-                "page":
-                    page,
-
-                "page_size":
-                    page_size,
-
-                "results":
-                    serializer.data,
+                "count": total,
+                "page": page,
+                "page_size": page_size,
+                "results": serializer.data,
             }
         )
-
-
+    
 # ============================================================
 # DETALLE DE UNA OS
 # ============================================================
