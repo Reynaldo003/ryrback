@@ -519,7 +519,6 @@ def construir_ordering(request):
 # No existe ya una segunda consulta /dashboard/ pesada.
 # ============================================================
 
-
 class OrdenesFacturadasListView(APIView):
     authentication_classes = [
         CRMJWTAuthentication
@@ -531,18 +530,14 @@ class OrdenesFacturadasListView(APIView):
 
     def get(self, request):
         try:
-            (
-                where_sql,
-                parametros,
-            ) = construir_filtros_base(
+            where_sql, parametros = construir_filtros_base(
                 request
             )
 
         except ValueError as exc:
             return Response(
                 {
-                    "detail":
-                        str(exc)
+                    "detail": str(exc)
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -570,14 +565,11 @@ class OrdenesFacturadasListView(APIView):
             request
         )
 
-        with connections[
-            DB_ALIAS
-        ].cursor() as cursor:
-
+        with connections[DB_ALIAS].cursor() as cursor:
             try:
-                # ====================================================
-                # LIMPIAR TEMPORALES
-                # ====================================================
+                # =====================================================
+                # 1. LIMPIAR TEMPORALES
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -593,99 +585,128 @@ class OrdenesFacturadasListView(APIView):
                     """
                 )
 
-                # ====================================================
-                # 1. CONSULTA BASE
+                # =====================================================
+                # 2. CREAR TEMPORALES EXPLÍCITAMENTE
                 #
-                # Es la consulta proporcionada por el usuario,
-                # excepto Matriz_ProdutosAtivos_5vw.
-                #
-                # El nombre del producto solamente es necesario:
-                # - al abrir detalle
-                # - al buscar por nombre
-                #
-                # Esto evita unir la vista completa de productos
-                # en cada carga normal de la pantalla.
-                # ====================================================
+                # IMPORTANTE:
+                # No usamos SELECT INTO con parámetros.
+                # Así la tabla temporal permanece disponible para los
+                # siguientes cursor.execute().
+                # =====================================================
+
+                cursor.execute(
+                    """
+                    CREATE TABLE #base_facturada (
+                        agencia varchar(255) NULL,
+                        nros bigint NULL,
+                        nratendimento bigint NULL,
+                        nrreq bigint NULL,
+                        dtemissao date NULL,
+                        funcresp bigint NULL,
+                        qtdeitens bigint NULL,
+                        qtdeatend bigint NULL,
+                        codprod varchar(255) NULL,
+                        precounit float NULL,
+                        percdesc float NULL,
+                        vrdesc float NULL,
+                        vrprod float NULL,
+                        vradicionais float NULL,
+                        vrdescpeca float NULL,
+                        vrtotalpecas float NULL,
+                        ttmo float NULL,
+                        tpos varchar(255) NULL,
+                        dtfechamento date NULL,
+                        dtabertura date NULL,
+                        situacao varchar(255) NULL,
+                        codcondpgto bigint NULL,
+                        codoperfiscal bigint NULL,
+                        sitgarantia varchar(255) NULL,
+                        subtipoos varchar(255) NULL
+                    );
+
+                    CREATE TABLE #ordenes_facturadas (
+                        agencia varchar(255) NULL,
+                        nros bigint NULL,
+                        nratendimento bigint NULL,
+                        tpos varchar(255) NULL,
+                        subtipoos varchar(255) NULL,
+                        situacao varchar(255) NULL,
+                        dtabertura date NULL,
+                        dtfechamento date NULL,
+                        sitgarantia varchar(255) NULL,
+                        codcondpgto bigint NULL,
+                        codoperfiscal bigint NULL,
+                        vradicionais float NULL,
+                        vrdescpeca float NULL,
+                        vrtotalpecas float NULL,
+                        ttmo float NULL,
+                        requisiciones bigint NULL,
+                        partidas bigint NULL,
+                        valor_productos float NULL,
+                        descuentos float NULL
+                    );
+                    """
+                )
+
+                # =====================================================
+                # 3. CARGAR DATOS BASE
+                # =====================================================
 
                 consulta_base = f"""
+                    INSERT INTO #base_facturada (
+                        agencia,
+                        nros,
+                        nratendimento,
+                        nrreq,
+                        dtemissao,
+                        funcresp,
+                        qtdeitens,
+                        qtdeatend,
+                        codprod,
+                        precounit,
+                        percdesc,
+                        vrdesc,
+                        vrprod,
+                        vradicionais,
+                        vrdescpeca,
+                        vrtotalpecas,
+                        ttmo,
+                        tpos,
+                        dtfechamento,
+                        dtabertura,
+                        situacao,
+                        codcondpgto,
+                        codoperfiscal,
+                        sitgarantia,
+                        subtipoos
+                    )
+
                     SELECT
-                        fac.Agencia
-                            AS agencia,
-
-                        fac.NrOS
-                            AS nros,
-
-                        fac.NrAtendim
-                            AS nratendimento,
-
-                        fac.NrReq
-                            AS nrreq,
-
-                        fac.DtEmissao
-                            AS dtemissao,
-
-                        fac.FuncResp
-                            AS funcresp,
-
-                        fac.QtdeItens
-                            AS qtdeitens,
-
-                        fac.QtdeAtend
-                            AS qtdeatend,
-
-                        ref.CodProd
-                            AS codprod,
-
-                        ref.PrecoUnit
-                            AS precounit,
-
-                        ref.PercDesc
-                            AS percdesc,
-
-                        ref.VrDesc
-                            AS vrdesc,
-
-                        ref.VrProd
-                            AS vrprod,
-
-                        os.VrAdicionais
-                            AS vradicionais,
-
-                        os.VrDescPeca
-                            AS vrdescpeca,
-
-                        os.VrTotalPecas
-                            AS vrtotalpecas,
-
-                        os.TtMo
-                            AS ttmo,
-
-                        os.TpOS
-                            AS tpos,
-
-                        os.DtFechamento
-                            AS dtfechamento,
-
-                        os.DtAbertura
-                            AS dtabertura,
-
-                        os.Situacao
-                            AS situacao,
-
-                        os.CodCondPgto
-                            AS codcondpgto,
-
-                        os.CodOperFiscal
-                            AS codoperfiscal,
-
-                        os.SitGarantia
-                            AS sitgarantia,
-
+                        fac.Agencia,
+                        fac.NrOS,
+                        fac.NrAtendim,
+                        fac.NrReq,
+                        fac.DtEmissao,
+                        fac.FuncResp,
+                        fac.QtdeItens,
+                        fac.QtdeAtend,
+                        ref.CodProd,
+                        ref.PrecoUnit,
+                        ref.PercDesc,
+                        ref.VrDesc,
+                        ref.VrProd,
+                        os.VrAdicionais,
+                        os.VrDescPeca,
+                        os.VrTotalPecas,
+                        os.TtMo,
+                        os.TpOS,
+                        os.DtFechamento,
+                        os.DtAbertura,
+                        os.Situacao,
+                        os.CodCondPgto,
+                        os.CodOperFiscal,
+                        os.SitGarantia,
                         os.SubtipoOS
-                            AS subtipoos
-
-                    INTO
-                        #base_facturada
 
                     FROM {TABLA_HEADER} fac
 
@@ -702,9 +723,7 @@ class OrdenesFacturadasListView(APIView):
                     WHERE
                         {where_sql}
 
-                    OPTION (
-                        RECOMPILE
-                    );
+                    OPTION (RECOMPILE);
                 """
 
                 cursor.execute(
@@ -712,9 +731,9 @@ class OrdenesFacturadasListView(APIView):
                     parametros,
                 )
 
-                # ====================================================
-                # ÍNDICE TEMPORAL
-                # ====================================================
+                # =====================================================
+                # 4. ÍNDICE BASE
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -730,20 +749,37 @@ class OrdenesFacturadasListView(APIView):
                     """
                 )
 
-                # ====================================================
-                # 2. UNA FILA POR OS
-                #
-                # TtMo / VrTotalPecas / VrAdicionais:
-                # MAX porque se repiten en cada partida.
-                # ====================================================
+                # =====================================================
+                # 5. AGRUPAR UNA FILA POR OS
+                # =====================================================
 
                 cursor.execute(
                     """
+                    INSERT INTO #ordenes_facturadas (
+                        agencia,
+                        nros,
+                        nratendimento,
+                        tpos,
+                        subtipoos,
+                        situacao,
+                        dtabertura,
+                        dtfechamento,
+                        sitgarantia,
+                        codcondpgto,
+                        codoperfiscal,
+                        vradicionais,
+                        vrdescpeca,
+                        vrtotalpecas,
+                        ttmo,
+                        requisiciones,
+                        partidas,
+                        valor_productos,
+                        descuentos
+                    )
+
                     SELECT
                         agencia,
-
                         nros,
-
                         nratendimento,
 
                         MAX(tpos)
@@ -817,11 +853,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS descuentos
 
-                    INTO
-                        #ordenes_facturadas
-
-                    FROM
-                        #base_facturada
+                    FROM #base_facturada
 
                     GROUP BY
                         agencia,
@@ -829,6 +861,10 @@ class OrdenesFacturadasListView(APIView):
                         nratendimento;
                     """
                 )
+
+                # =====================================================
+                # 6. ÍNDICES DE ÓRDENES
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -850,9 +886,9 @@ class OrdenesFacturadasListView(APIView):
                     """
                 )
 
-                # ====================================================
-                # 3. MÉTRICAS
-                # ====================================================
+                # =====================================================
+                # 7. MÉTRICAS
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -903,8 +939,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS refacciones_mano_obra
 
-                    FROM
-                        #ordenes_facturadas;
+                    FROM #ordenes_facturadas;
                     """
                 )
 
@@ -928,9 +963,9 @@ class OrdenesFacturadasListView(APIView):
                     }
                 )
 
-                # ====================================================
-                # 4. GRÁFICA POR AGENCIA
-                # ====================================================
+                # =====================================================
+                # 8. GRÁFICA POR AGENCIA
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -958,8 +993,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS total
 
-                    FROM
-                        #ordenes_facturadas
+                    FROM #ordenes_facturadas
 
                     GROUP BY
                         agencia
@@ -973,9 +1007,9 @@ class OrdenesFacturadasListView(APIView):
                     cursor
                 )
 
-                # ====================================================
-                # 5. GRÁFICA TIPO OS
-                # ====================================================
+                # =====================================================
+                # 9. GRÁFICA POR TIPO OS
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -1003,8 +1037,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS mano_obra
 
-                    FROM
-                        #ordenes_facturadas
+                    FROM #ordenes_facturadas
 
                     GROUP BY
                         COALESCE(
@@ -1026,9 +1059,9 @@ class OrdenesFacturadasListView(APIView):
                     cursor
                 )
 
-                # ====================================================
-                # 6. GRÁFICA SITUACIÓN
-                # ====================================================
+                # =====================================================
+                # 10. GRÁFICA POR SITUACIÓN
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -1056,8 +1089,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS mano_obra
 
-                    FROM
-                        #ordenes_facturadas
+                    FROM #ordenes_facturadas
 
                     GROUP BY
                         COALESCE(
@@ -1079,9 +1111,9 @@ class OrdenesFacturadasListView(APIView):
                     cursor
                 )
 
-                # ====================================================
-                # 7. GRÁFICA DIARIA
-                # ====================================================
+                # =====================================================
+                # 11. GRÁFICA DIARIA
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -1110,8 +1142,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS total
 
-                    FROM
-                        #ordenes_facturadas
+                    FROM #ordenes_facturadas
 
                     WHERE
                         dtfechamento IS NOT NULL
@@ -1128,9 +1159,9 @@ class OrdenesFacturadasListView(APIView):
                     cursor
                 )
 
-                # ====================================================
-                # 8. GARANTÍA
-                # ====================================================
+                # =====================================================
+                # 12. GARANTÍA
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -1158,8 +1189,7 @@ class OrdenesFacturadasListView(APIView):
                             0
                         ) AS mano_obra
 
-                    FROM
-                        #ordenes_facturadas
+                    FROM #ordenes_facturadas
 
                     GROUP BY
                         COALESCE(
@@ -1181,9 +1211,9 @@ class OrdenesFacturadasListView(APIView):
                     cursor
                 )
 
-                # ====================================================
-                # 9. PAGINACIÓN
-                # ====================================================
+                # =====================================================
+                # 13. PAGINACIÓN
+                # =====================================================
 
                 consulta_paginada = f"""
                     SELECT
@@ -1207,14 +1237,12 @@ class OrdenesFacturadasListView(APIView):
                         valor_productos,
                         descuentos
 
-                    FROM
-                        #ordenes_facturadas
+                    FROM #ordenes_facturadas
 
                     ORDER BY
                         {ordering_sql}
 
                     OFFSET %s ROWS
-
                     FETCH NEXT %s ROWS ONLY;
                 """
 
@@ -1248,11 +1276,9 @@ class OrdenesFacturadasListView(APIView):
                 except Exception:
                     pass
 
-        serializer = (
-            OrdenFacturadaResumenSerializer(
-                registros,
-                many=True,
-            )
+        serializer = OrdenFacturadaResumenSerializer(
+            registros,
+            many=True,
         )
 
         total = int(
@@ -1265,41 +1291,23 @@ class OrdenesFacturadasListView(APIView):
 
         return Response(
             {
-                "count":
-                    total,
+                "count": total,
+                "page": page,
+                "page_size": page_size,
 
-                "page":
-                    page,
-
-                "page_size":
-                    page_size,
-
-                "metricas":
-                    metricas,
+                "metricas": metricas,
 
                 "graficas": {
-                    "por_agencia":
-                        por_agencia,
-
-                    "por_tipo_os":
-                        por_tipo_os,
-
-                    "por_situacion":
-                        por_situacion,
-
-                    "por_dia":
-                        por_dia,
-
-                    "por_garantia":
-                        por_garantia,
+                    "por_agencia": por_agencia,
+                    "por_tipo_os": por_tipo_os,
+                    "por_situacion": por_situacion,
+                    "por_dia": por_dia,
+                    "por_garantia": por_garantia,
                 },
 
-                "results":
-                    serializer.data,
+                "results": serializer.data,
             }
         )
-
-
 # ============================================================
 # DETALLE
 #
@@ -1529,7 +1537,6 @@ class OrdenFacturadaDetalleView(APIView):
 # Es un catálogo y queda cacheado.
 # ============================================================
 
-
 class OrdenesFacturadasOpcionesView(APIView):
     authentication_classes = [
         CRMJWTAuthentication
@@ -1551,9 +1558,9 @@ class OrdenesFacturadasOpcionesView(APIView):
 
         with connections[DB_ALIAS].cursor() as cursor:
             try:
-                # -----------------------------------------------------
-                # 1. Limpiamos temporal por seguridad
-                # -----------------------------------------------------
+                # =====================================================
+                # 1. LIMPIAR TEMPORAL
+                # =====================================================
 
                 cursor.execute(
                     """
@@ -1564,12 +1571,48 @@ class OrdenesFacturadasOpcionesView(APIView):
                     """
                 )
 
-                # -----------------------------------------------------
-                # 2. Leemos Matriz_OS UNA SOLA VEZ
-                # -----------------------------------------------------
+                # =====================================================
+                # 2. CREAR TEMPORAL SIN PARÁMETROS
+                # =====================================================
+
+                cursor.execute(
+                    """
+                    CREATE TABLE #opciones_os (
+                        Agencia varchar(255) NULL,
+                        NrOS bigint NULL,
+                        NrAtendimento bigint NULL,
+                        TpOS varchar(255) NULL,
+                        Situacao varchar(255) NULL,
+                        SubtipoOS varchar(255) NULL,
+                        SitGarantia varchar(255) NULL,
+                        CodCondPgto bigint NULL,
+                        CodOperFiscal bigint NULL,
+                        DtFechamento date NULL
+                    );
+                    """
+                )
+
+                # =====================================================
+                # 3. INSERTAR SOLAMENTE DATOS DESDE 2025
+                #
+                # La tabla ya existe antes del statement parametrizado.
+                # =====================================================
 
                 cursor.execute(
                     f"""
+                    INSERT INTO #opciones_os (
+                        Agencia,
+                        NrOS,
+                        NrAtendimento,
+                        TpOS,
+                        Situacao,
+                        SubtipoOS,
+                        SitGarantia,
+                        CodCondPgto,
+                        CodOperFiscal,
+                        DtFechamento
+                    )
+
                     SELECT
                         Agencia,
                         NrOS,
@@ -1582,13 +1625,22 @@ class OrdenesFacturadasOpcionesView(APIView):
                         CodOperFiscal,
                         DtFechamento
 
-                    INTO #opciones_os
-
                     FROM {TABLA_OS}
 
                     WHERE
                         DtFechamento >= %s;
+                    """,
+                    [
+                        FECHA_MINIMA_DATOS,
+                    ],
+                )
 
+                # =====================================================
+                # 4. ÍNDICE
+                # =====================================================
+
+                cursor.execute(
+                    """
                     CREATE CLUSTERED INDEX
                         IX_opciones_os
 
@@ -1597,15 +1649,12 @@ class OrdenesFacturadasOpcionesView(APIView):
                         NrOS,
                         NrAtendimento
                     );
-                    """,
-                    [
-                        FECHA_MINIMA_DATOS,
-                    ],
+                    """
                 )
 
-                # -----------------------------------------------------
-                # HELPER
-                # -----------------------------------------------------
+                # =====================================================
+                # 5. HELPER DE DISTINTOS
+                # =====================================================
 
                 def obtener_distintos(
                     columna,
@@ -1616,8 +1665,7 @@ class OrdenesFacturadasOpcionesView(APIView):
                     )
 
                     if texto:
-                        condicion += (
-                            f"""
+                        condicion += f"""
                             AND NULLIF(
                                 LTRIM(
                                     RTRIM(
@@ -1629,8 +1677,7 @@ class OrdenesFacturadasOpcionesView(APIView):
                                 ),
                                 ''
                             ) IS NOT NULL
-                            """
-                        )
+                        """
 
                     cursor.execute(
                         f"""
@@ -1653,9 +1700,9 @@ class OrdenesFacturadasOpcionesView(APIView):
                         if fila[0] is not None
                     ]
 
-                # -----------------------------------------------------
-                # 3. CATÁLOGOS
-                # -----------------------------------------------------
+                # =====================================================
+                # 6. CATÁLOGOS
+                # =====================================================
 
                 agencias = obtener_distintos(
                     "Agencia",
@@ -1690,11 +1737,9 @@ class OrdenesFacturadasOpcionesView(APIView):
                     "CodOperFiscal",
                 )
 
-                # -----------------------------------------------------
-                # 4. RESPONSABLES
-                #
-                # Aquí también respetamos solamente OS desde 2025.
-                # -----------------------------------------------------
+                # =====================================================
+                # 7. RESPONSABLES
+                # =====================================================
 
                 cursor.execute(
                     f"""
@@ -1722,15 +1767,18 @@ class OrdenesFacturadasOpcionesView(APIView):
                     if fila[0] is not None
                 ]
 
-                # -----------------------------------------------------
-                # 5. RANGO DE FECHAS DISPONIBLE
-                # -----------------------------------------------------
+                # =====================================================
+                # 8. FECHAS
+                # =====================================================
 
                 cursor.execute(
                     """
                     SELECT
-                        MIN(DtFechamento) AS minima,
-                        MAX(DtFechamento) AS maxima
+                        MIN(DtFechamento)
+                            AS minima,
+
+                        MAX(DtFechamento)
+                            AS maxima
 
                     FROM #opciones_os;
                     """
@@ -1759,6 +1807,7 @@ class OrdenesFacturadasOpcionesView(APIView):
                     "condiciones_pago": condiciones_pago,
                     "operaciones_fiscales": operaciones_fiscales,
                     "funcionarios": funcionarios,
+
                     "fechas": {
                         "minima": (
                             minima.isoformat()
@@ -1773,9 +1822,6 @@ class OrdenesFacturadasOpcionesView(APIView):
                     },
                 }
 
-                # 6 horas.
-                # No tiene sentido consultar estos catálogos
-                # cada vez que alguien abre la pantalla.
                 cache.set(
                     CACHE_OPCIONES,
                     resultado,
