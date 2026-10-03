@@ -77,7 +77,6 @@ class OrdenFacturadaResumenSerializer(serializers.Serializer):
         required=False,
     )
 
-    # Total de mano de obra de la OS
     ttmo = serializers.FloatField(
         allow_null=True,
         required=False,

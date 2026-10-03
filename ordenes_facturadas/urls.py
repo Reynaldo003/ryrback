@@ -6,6 +6,5 @@ app_name = "ordenes_facturadas"
 urlpatterns = [
     path("api/",OrdenesFacturadasListView.as_view(),name="lista",),
     path("api/detalle/",OrdenFacturadaDetalleView.as_view(),name="detalle",),
-    path("api/dashboard/",OrdenesFacturadasDashboardView.as_view(),name="dashboard",),
     path("api/opciones/", OrdenesFacturadasOpcionesView.as_view(), name="opciones",),
 ]

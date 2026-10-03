@@ -291,7 +291,7 @@ DATABASES = {
             "connection_retry_backoff_time": 1,
 
             # Una consulta tampoco debe quedarse colgada.
-            "query_timeout": 10,
+            "query_timeout": 30,
         }
     },
     'sqlserver_inv': {
@@ -314,7 +314,7 @@ DATABASES = {
             "connection_retry_backoff_time": 1,
 
             # Una consulta tampoco debe quedarse colgada.
-            "query_timeout": 10,
+            "query_timeout": 30,
         }
     },
 }
