@@ -1,3 +1,4 @@
+#Autos/views.py
 from django.shortcuts import render
 
 # Create your views here.
@@ -61,6 +62,13 @@ class VWVNListView(APIView):
             request.query_params.get("venta_digital", "") or ""
         ).strip().lower()
 
+        cond_uso = str(
+            request.query_params.get("cond_uso", "N") or "N"
+        ).strip().upper()
+
+        if cond_uso not in ("N", "U"):
+            cond_uso = "N"
+
         # ---------------------------------------------------------
         # 2. PAGINACIÓN
         # ---------------------------------------------------------
@@ -100,7 +108,7 @@ class VWVNListView(APIView):
         ]
 
         parametros = [
-            "N"
+            cond_uso
         ]
 
         if busqueda:
@@ -195,7 +203,7 @@ class VWVNListView(APIView):
                         FROM dbo.VW_VN
                         WHERE CondUso = %s
                         """,
-                        ["N"],
+                        [cond_uso],
                     )
 
                     for fila in cursor.fetchall():
@@ -478,6 +486,13 @@ class VWVNDashboardView(APIView):
             request.query_params.get("venta_digital", "") or ""
         ).strip().lower()
 
+        cond_uso = str(
+            request.query_params.get("cond_uso", "N") or "N"
+        ).strip().upper()
+
+        if cond_uso not in ("N", "U"):
+            cond_uso = "N"
+
         # ==========================================================
         # 2. WHERE DINÁMICO
         #
@@ -490,7 +505,7 @@ class VWVNDashboardView(APIView):
         ]
 
         parametros = [
-            "N"
+            cond_uso
         ]
 
 
@@ -1004,19 +1019,16 @@ class VWVNDashboardView(APIView):
                 consulta = f"""
                     SELECT DISTINCT
                         {columna} AS valor
-
                     FROM dbo.VW_VN
-
                     WHERE CondUso = %s
-                      AND {columna} IS NOT NULL
-                      AND LTRIM(RTRIM({columna})) <> ''
-
+                    AND {columna} IS NOT NULL
+                    AND LTRIM(RTRIM({columna})) <> ''
                     ORDER BY {columna}
                 """
 
                 cursor.execute(
                     consulta,
-                    ["N"],
+                    [cond_uso],
                 )
 
                 return [
@@ -1024,7 +1036,6 @@ class VWVNDashboardView(APIView):
                     for fila in cursor.fetchall()
                     if fila[0] is not None
                 ]
-
 
             agencias = opciones_distintas(
                 "AGENCIA"
@@ -1057,7 +1068,7 @@ class VWVNDashboardView(APIView):
                     "familia": familia,
                     "condicion_pago": condicion_pago,
                     "venta_digital": venta_digital,
-                    "cond_uso": "N",
+                    "cond_uso": cond_uso,
                 },
 
                 "totales": totales,
