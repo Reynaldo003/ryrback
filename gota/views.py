@@ -126,6 +126,37 @@ def entero_parametro(request, nombre):
         )
 
 
+def lista_parametro(request, nombre):
+    """
+    Lee un parámetro de tipo "clave__in=A,B,C" para los filtros de columna
+    del encabezado, que permiten seleccionar varios valores a la vez.
+
+    Devuelve [] si el parámetro no viene, y filtra los valores vacíos.
+    """
+
+    crudo = texto_parametro(
+        request,
+        f"{nombre}__in",
+    )
+
+    if not crudo:
+        return []
+
+    vistos = set()
+    valores = []
+
+    for parte in crudo.split(","):
+        valor = parte.strip()
+
+        if not valor or valor in vistos:
+            continue
+
+        vistos.add(valor)
+        valores.append(valor)
+
+    return valores
+
+
 def validar_fecha(valor, nombre):
     if valor and not parse_date(valor):
         raise ValueError(
@@ -317,6 +348,29 @@ def construir_filtros(request):
         "fecha_hasta",
     )
 
+    # Filtros de columna con selección múltiple (clave__in=A,B,C). Cuando viene
+    # la lista gana sobre el valor simple de la misma columna, para no aplicar
+    # ambos a la vez.
+    agencias_in = lista_parametro(
+        request,
+        "agencia",
+    )
+
+    tipos_os_in = lista_parametro(
+        request,
+        "tp_os",
+    )
+
+    situaciones_in = lista_parametro(
+        request,
+        "situacao",
+    )
+
+    subtipos_os_in = lista_parametro(
+        request,
+        "subtipo_os",
+    )
+
     condiciones = []
     parametros = []
 
@@ -338,7 +392,16 @@ def construir_filtros(request):
             [termino] * 4
         )
 
-    if agencia:
+    if agencias_in:
+        marcadores = ", ".join(
+            ["%s"] * len(agencias_in)
+        )
+
+        condiciones.append(
+            f"Agencia IN ({marcadores})"
+        )
+        parametros.extend(agencias_in)
+    elif agencia:
         condiciones.append(
             "Agencia = %s"
         )
@@ -362,7 +425,16 @@ def construir_filtros(request):
             nr_atendimento
         )
 
-    if tp_os:
+    if tipos_os_in:
+        marcadores = ", ".join(
+            ["%s"] * len(tipos_os_in)
+        )
+
+        condiciones.append(
+            f"TpOS IN ({marcadores})"
+        )
+        parametros.extend(tipos_os_in)
+    elif tp_os:
         condiciones.append(
             "TpOS = %s"
         )
@@ -370,7 +442,16 @@ def construir_filtros(request):
             tp_os
         )
 
-    if situacao:
+    if situaciones_in:
+        marcadores = ", ".join(
+            ["%s"] * len(situaciones_in)
+        )
+
+        condiciones.append(
+            f"Situacao IN ({marcadores})"
+        )
+        parametros.extend(situaciones_in)
+    elif situacao:
         condiciones.append(
             "Situacao = %s"
         )
@@ -378,7 +459,16 @@ def construir_filtros(request):
             situacao
         )
 
-    if subtipo_os:
+    if subtipos_os_in:
+        marcadores = ", ".join(
+            ["%s"] * len(subtipos_os_in)
+        )
+
+        condiciones.append(
+            f"SubtipoOS IN ({marcadores})"
+        )
+        parametros.extend(subtipos_os_in)
+    elif subtipo_os:
         condiciones.append(
             "SubtipoOS = %s"
         )
@@ -418,9 +508,13 @@ def construir_filtros(request):
             cod_oper_fiscal
         )
 
+    # DtAbertura es DATETIME: comparar contra 'YYYY-MM-DD' la interpretaría
+    # como medianoche y descartaría todo lo abierto después de las 00:00 del
+    # último día (p. ej. el filtro por mes perdería su último día). Se
+    # compara por la parte de fecha para que el rango sea inclusivo completo.
     if fecha_desde:
         condiciones.append(
-            "DtAbertura >= %s"
+            "CAST(DtAbertura AS DATE) >= %s"
         )
         parametros.append(
             fecha_desde
@@ -428,7 +522,7 @@ def construir_filtros(request):
 
     if fecha_hasta:
         condiciones.append(
-            "DtAbertura <= %s"
+            "CAST(DtAbertura AS DATE) <= %s"
         )
         parametros.append(
             fecha_hasta
@@ -960,6 +1054,128 @@ class GotaDashboardView(APIView):
                 DtAbertura DESC;
 
 
+            -- =====================================================
+            -- 7. PERMANENCIA POR AGENCIA Y TIPO DE ORDEN
+            --    Barra horizontal apilada: una fila por agencia, un
+            --    segmento por rango de permanencia y, dentro de cada
+            --    segmento, el desglose por tipo de orden para el tooltip.
+            -- =====================================================
+
+            SELECT TOP 3000
+                COALESCE(
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(Agencia)
+                        ),
+                        ''
+                    ),
+                    'Sin agencia'
+                ) AS agencia,
+
+                CASE
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 1
+                        THEN '0-1 días'
+
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 3
+                        THEN '2-3 días'
+
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 7
+                        THEN '4-7 días'
+
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 15
+                        THEN '8-15 días'
+
+                    ELSE 'Más de 15 días'
+                END AS rango,
+
+                COALESCE(
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(TpOS)
+                        ),
+                        ''
+                    ),
+                    'Sin tipo'
+                ) AS tp_os,
+
+                COUNT(*) AS ordenes
+            FROM #BaseOS
+            WHERE
+                DtAbertura IS NOT NULL
+
+            GROUP BY
+                COALESCE(
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(Agencia)
+                        ),
+                        ''
+                    ),
+                    'Sin agencia'
+                ),
+
+                CASE
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 1
+                        THEN '0-1 días'
+
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 3
+                        THEN '2-3 días'
+
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 7
+                        THEN '4-7 días'
+
+                    WHEN DATEDIFF(
+                        DAY,
+                        DtAbertura,
+                        GETDATE()
+                    ) <= 15
+                        THEN '8-15 días'
+
+                    ELSE 'Más de 15 días'
+                END,
+
+                COALESCE(
+                    NULLIF(
+                        LTRIM(
+                            RTRIM(TpOS)
+                        ),
+                        ''
+                    ),
+                    'Sin tipo'
+                )
+
+            ORDER BY
+                ordenes DESC;
+
+
             DROP TABLE #BaseOS;
         """
 
@@ -1015,6 +1231,10 @@ class GotaDashboardView(APIView):
                 cursor
             )
 
+            por_agencia_permanencia_tipo = leer_resultado(
+                cursor
+            )
+
         totales = (
             resultados_totales[0]
             if resultados_totales
@@ -1045,6 +1265,7 @@ class GotaDashboardView(APIView):
                     "por_subtipo": por_subtipo,
                     "por_antiguedad": por_antiguedad,
                     "por_dia": por_dia,
+                    "por_agencia_permanencia_tipo": por_agencia_permanencia_tipo,
                 },
             }
         )
