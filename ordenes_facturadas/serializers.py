@@ -23,9 +23,8 @@ class OrdenFacturadaSerializer(serializers.Serializer):
         required=False,
     )
 
-    funcresp = serializers.CharField(
+    funcresp = serializers.IntegerField(
         allow_null=True,
-        allow_blank=True,
         required=False,
     )
 
@@ -92,12 +91,12 @@ class OrdenFacturadaSerializer(serializers.Serializer):
         required=False,
     )
 
-    dtfechamento = serializers.DateTimeField(
+    dtfechamento = serializers.DateField(
         allow_null=True,
         required=False,
     )
 
-    dtabertura = serializers.DateTimeField(
+    dtabertura = serializers.DateField(
         allow_null=True,
         required=False,
     )
@@ -108,15 +107,13 @@ class OrdenFacturadaSerializer(serializers.Serializer):
         required=False,
     )
 
-    codcondpgto = serializers.CharField(
+    codcondpgto = serializers.IntegerField(
         allow_null=True,
-        allow_blank=True,
         required=False,
     )
 
-    codoperfiscal = serializers.CharField(
+    codoperfiscal = serializers.IntegerField(
         allow_null=True,
-        allow_blank=True,
         required=False,
     )
 
