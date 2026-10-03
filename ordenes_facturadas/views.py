@@ -200,25 +200,23 @@ def construir_filtros(request):
     condiciones = []
     parametros = []
 
-    # --------------------------------------------------------
+    # ========================================================
     # AGENCIA
-    # --------------------------------------------------------
-
-    agencias = valores_parametro(
-        request,
-        "agencia",
-    )
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
         parametros,
         "os.Agencia",
-        agencias,
+        valores_parametro(
+            request,
+            "agencia",
+        ),
     )
 
-    # --------------------------------------------------------
-    # FECHAS DE CIERRE
-    # --------------------------------------------------------
+    # ========================================================
+    # FECHAS
+    # ========================================================
 
     fecha_desde = validar_fecha(
         texto_parametro(
@@ -262,9 +260,9 @@ def construir_filtros(request):
             + timedelta(days=1)
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # TIPO OS
-    # --------------------------------------------------------
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
@@ -276,9 +274,9 @@ def construir_filtros(request):
         ),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SITUACIÓN
-    # --------------------------------------------------------
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
@@ -290,9 +288,9 @@ def construir_filtros(request):
         ),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # SUBTIPO
-    # --------------------------------------------------------
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
@@ -304,9 +302,9 @@ def construir_filtros(request):
         ),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # GARANTÍA
-    # --------------------------------------------------------
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
@@ -318,9 +316,9 @@ def construir_filtros(request):
         ),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # CONDICIÓN DE PAGO
-    # --------------------------------------------------------
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
@@ -332,9 +330,9 @@ def construir_filtros(request):
         ),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # OPERACIÓN FISCAL
-    # --------------------------------------------------------
+    # ========================================================
 
     agregar_filtro_in(
         condiciones,
@@ -346,12 +344,10 @@ def construir_filtros(request):
         ),
     )
 
-    # --------------------------------------------------------
+    # ========================================================
     # RESPONSABLE
-    #
-    # Está en ReqHeader, por eso usamos EXISTS para no afectar
-    # la agregación de todas las partidas de la OS.
-    # --------------------------------------------------------
+    # Solo toca ReqHeader si el filtro está activo.
+    # ========================================================
 
     funcionarios = valores_enteros_parametro(
         request,
@@ -360,22 +356,15 @@ def construir_filtros(request):
 
     if funcionarios:
         placeholders = ", ".join(
-            ["%s"]
-            * len(funcionarios)
+            ["%s"] * len(funcionarios)
         )
 
         condiciones.append(
             f"""
             EXISTS (
-                SELECT
-                    1
+                SELECT 1
 
                 FROM {TABLA_HEADER} fac_func
-
-                INNER JOIN {TABLA_ITEMS} ref_func
-                    ON ref_func.Agencia = fac_func.Agencia
-                    AND ref_func.NrOS = fac_func.NrOS
-                    AND ref_func.NrReq = fac_func.NrReq
 
                 WHERE
                     fac_func.Agencia = os.Agencia
@@ -390,21 +379,9 @@ def construir_filtros(request):
             funcionarios
         )
 
-    # --------------------------------------------------------
+    # ========================================================
     # BÚSQUEDA GLOBAL
-    #
-    # Puede encontrar:
-    # - agencia
-    # - OS
-    # - atención
-    # - tipo
-    # - situación
-    # - subtipo
-    # - requisición
-    # - funcionario
-    # - código producto
-    # - nombre producto
-    # --------------------------------------------------------
+    # ========================================================
 
     busqueda = texto_parametro(
         request,
@@ -417,7 +394,9 @@ def construir_filtros(request):
         condiciones.append(
             f"""
             (
-                CAST(os.NrOS AS varchar(50)) LIKE %s
+                CAST(
+                    os.NrOS AS varchar(50)
+                ) LIKE %s
 
                 OR CAST(
                     os.NrAtendimento AS varchar(50)
@@ -432,15 +411,9 @@ def construir_filtros(request):
                 OR os.SubtipoOS LIKE %s
 
                 OR EXISTS (
-                    SELECT
-                        1
+                    SELECT 1
 
                     FROM {TABLA_HEADER} fac_q
-
-                    INNER JOIN {TABLA_ITEMS} ref_q
-                        ON ref_q.Agencia = fac_q.Agencia
-                        AND ref_q.NrOS = fac_q.NrOS
-                        AND ref_q.NrReq = fac_q.NrReq
 
                     WHERE
                         fac_q.Agencia = os.Agencia
@@ -456,18 +429,30 @@ def construir_filtros(request):
                                 fac_q.FuncResp AS varchar(50)
                             ) LIKE %s
 
-                            OR ref_q.CodProd LIKE %s
-
                             OR EXISTS (
-                                SELECT
-                                    1
+                                SELECT 1
 
-                                FROM {TABLA_PRODUCTOS} prod_q
+                                FROM {TABLA_ITEMS} ref_q
 
                                 WHERE
-                                    prod_q.Agencia = ref_q.Agencia
-                                    AND prod_q.CodProduto = ref_q.CodProd
-                                    AND prod_q.NmProduto LIKE %s
+                                    ref_q.Agencia = fac_q.Agencia
+                                    AND ref_q.NrOS = fac_q.NrOS
+                                    AND ref_q.NrReq = fac_q.NrReq
+
+                                    AND (
+                                        ref_q.CodProd LIKE %s
+
+                                        OR EXISTS (
+                                            SELECT 1
+
+                                            FROM {TABLA_PRODUCTOS} prod_q
+
+                                            WHERE
+                                                prod_q.Agencia = ref_q.Agencia
+                                                AND prod_q.CodProduto = ref_q.CodProd
+                                                AND prod_q.NmProduto LIKE %s
+                                        )
+                                    )
                             )
                         )
                 )
@@ -479,44 +464,34 @@ def construir_filtros(request):
             [patron] * 10
         )
 
-    # --------------------------------------------------------
-    # SOLO OS QUE TIENEN PARTIDAS
-    # --------------------------------------------------------
+    # ========================================================
+    # Debe existir al menos una requisición.
+    #
+    # OJO:
+    # ya NO tocamos ReqItens aquí.
+    # ========================================================
 
     condiciones.append(
         f"""
         EXISTS (
-            SELECT
-                1
+            SELECT 1
 
-            FROM {TABLA_HEADER} fac_exist
-
-            INNER JOIN {TABLA_ITEMS} ref_exist
-                ON ref_exist.Agencia = fac_exist.Agencia
-                AND ref_exist.NrOS = fac_exist.NrOS
-                AND ref_exist.NrReq = fac_exist.NrReq
+            FROM {TABLA_HEADER} fac_existe
 
             WHERE
-                fac_exist.Agencia = os.Agencia
-                AND fac_exist.NrOS = os.NrOS
-                AND fac_exist.NrAtendim = os.NrAtendimento
+                fac_existe.Agencia = os.Agencia
+                AND fac_existe.NrOS = os.NrOS
+                AND fac_existe.NrAtendim = os.NrAtendimento
         )
         """
     )
 
-    where_sql = (
-        " AND ".join(
-            condiciones
-        )
-        if condiciones
-        else "1 = 1"
-    )
-
     return (
-        where_sql,
+        " AND ".join(condiciones)
+        if condiciones
+        else "1 = 1",
         parametros,
     )
-
 
 # ============================================================
 # SQL BASE: UNA FILA POR OS
@@ -654,12 +629,7 @@ ORDERING_MAP = {
     "vrdescpeca": "vrdescpeca",
     "vrtotalpecas": "vrtotalpecas",
     "ttmo": "ttmo",
-    "requisiciones": "requisiciones",
-    "partidas": "partidas",
-    "valor_productos": "valor_productos",
-    "descuentos": "descuentos",
 }
-
 
 def construir_ordering(request):
     valor = texto_parametro(
@@ -698,7 +668,6 @@ def construir_ordering(request):
         "nratendimento DESC"
     )
 
-
 # ============================================================
 # LISTADO PAGINADO
 # ============================================================
@@ -707,20 +676,25 @@ class OrdenesFacturadasListView(APIView):
     authentication_classes = [
         CRMJWTAuthentication
     ]
+
     permission_classes = [
         IsAuthenticated
     ]
 
     def get(self, request):
         try:
-            where_sql, parametros = construir_filtros(
+            (
+                where_sql,
+                parametros,
+            ) = construir_filtros(
                 request
             )
 
         except ValueError as exc:
             return Response(
                 {
-                    "detail": str(exc)
+                    "detail":
+                        str(exc)
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
@@ -748,46 +722,170 @@ class OrdenesFacturadasListView(APIView):
             request
         )
 
-        sql_base = sql_ordenes_agrupadas(
-            where_sql
-        )
-
         consulta = f"""
-            ;WITH Ordenes AS (
-                {sql_base}
+            ;WITH BaseOS AS (
+                SELECT
+                    os.Agencia
+                        AS agencia,
+
+                    os.NrOS
+                        AS nros,
+
+                    os.NrAtendimento
+                        AS nratendimento,
+
+                    os.TpOS
+                        AS tpos,
+
+                    os.SubtipoOS
+                        AS subtipoos,
+
+                    os.Situacao
+                        AS situacao,
+
+                    os.DtAbertura
+                        AS dtabertura,
+
+                    os.DtFechamento
+                        AS dtfechamento,
+
+                    os.SitGarantia
+                        AS sitgarantia,
+
+                    os.CodCondPgto
+                        AS codcondpgto,
+
+                    os.CodOperFiscal
+                        AS codoperfiscal,
+
+                    COALESCE(
+                        os.VrAdicionais,
+                        0
+                    ) AS vradicionais,
+
+                    COALESCE(
+                        os.VrDescPeca,
+                        0
+                    ) AS vrdescpeca,
+
+                    COALESCE(
+                        os.VrTotalPecas,
+                        0
+                    ) AS vrtotalpecas,
+
+                    COALESCE(
+                        os.TtMo,
+                        0
+                    ) AS ttmo
+
+                FROM {TABLA_OS} os
+
+                WHERE
+                    {where_sql}
+            ),
+
+            Paginadas AS (
+                SELECT
+                    *,
+
+                    COUNT(*) OVER()
+                        AS total_registros
+
+                FROM BaseOS
+
+                ORDER BY
+                    {ordering_sql}
+
+                OFFSET %s ROWS
+                FETCH NEXT %s ROWS ONLY
             )
 
             SELECT
-                agencia,
-                nros,
-                nratendimento,
-                tpos,
-                subtipoos,
-                situacao,
-                dtabertura,
-                dtfechamento,
-                sitgarantia,
-                codcondpgto,
-                codoperfiscal,
-                vradicionais,
-                vrdescpeca,
-                vrtotalpecas,
-                ttmo,
-                requisiciones,
-                partidas,
-                valor_productos,
-                descuentos,
+                p.agencia,
+                p.nros,
+                p.nratendimento,
+                p.tpos,
+                p.subtipoos,
+                p.situacao,
+                p.dtabertura,
+                p.dtfechamento,
+                p.sitgarantia,
+                p.codcondpgto,
+                p.codoperfiscal,
+                p.vradicionais,
+                p.vrdescpeca,
+                p.vrtotalpecas,
+                p.ttmo,
 
-                COUNT(*) OVER()
-                    AS total_registros
+                COALESCE(
+                    detalle.requisiciones,
+                    0
+                ) AS requisiciones,
 
-            FROM Ordenes
+                COALESCE(
+                    detalle.partidas,
+                    0
+                ) AS partidas,
+
+                COALESCE(
+                    detalle.valor_productos,
+                    0
+                ) AS valor_productos,
+
+                COALESCE(
+                    detalle.descuentos,
+                    0
+                ) AS descuentos,
+
+                p.total_registros
+
+            FROM Paginadas p
+
+            OUTER APPLY (
+                SELECT
+                    COUNT(
+                        DISTINCT fac.NrReq
+                    ) AS requisiciones,
+
+                    COUNT(
+                        ref.CodProd
+                    ) AS partidas,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                ref.VrProd,
+                                0
+                            )
+                        ),
+                        0
+                    ) AS valor_productos,
+
+                    COALESCE(
+                        SUM(
+                            COALESCE(
+                                ref.VrDesc,
+                                0
+                            )
+                        ),
+                        0
+                    ) AS descuentos
+
+                FROM {TABLA_HEADER} fac
+
+                LEFT JOIN {TABLA_ITEMS} ref
+                    ON ref.Agencia = fac.Agencia
+                    AND ref.NrOS = fac.NrOS
+                    AND ref.NrReq = fac.NrReq
+
+                WHERE
+                    fac.Agencia = p.agencia
+                    AND fac.NrOS = p.nros
+                    AND fac.NrAtendim = p.nratendimento
+            ) detalle
 
             ORDER BY
-                {ordering_sql}
-
-            OFFSET %s ROWS
-            FETCH NEXT %s ROWS ONLY;
+                {ordering_sql};
         """
 
         parametros_consulta = [
@@ -809,16 +907,17 @@ class OrdenesFacturadasListView(APIView):
                 cursor
             )
 
-        if registros:
-            total = int(
+        total = (
+            int(
                 registros[0].get(
                     "total_registros",
                     0,
                 )
                 or 0
             )
-        else:
-            total = 0
+            if registros
+            else 0
+        )
 
         for registro in registros:
             registro.pop(
@@ -826,17 +925,26 @@ class OrdenesFacturadasListView(APIView):
                 None,
             )
 
-        serializer = OrdenFacturadaResumenSerializer(
-            registros,
-            many=True,
+        serializer = (
+            OrdenFacturadaResumenSerializer(
+                registros,
+                many=True,
+            )
         )
 
         return Response(
             {
-                "count": total,
-                "page": page,
-                "page_size": page_size,
-                "results": serializer.data,
+                "count":
+                    total,
+
+                "page":
+                    page,
+
+                "page_size":
+                    page_size,
+
+                "results":
+                    serializer.data,
             }
         )
     
@@ -1120,33 +1228,114 @@ class OrdenesFacturadasDashboardView(APIView):
         ].cursor() as cursor:
 
             try:
-                # Por si la misma conexión del pool conserva
-                # una tabla temporal de una ejecución anterior.
+                # ====================================================
+                # LIMPIAR TEMPORAL ANTERIOR
+                # ====================================================
+
                 cursor.execute(
                     """
                     IF OBJECT_ID(
                         'tempdb..#ordenes_dashboard'
                     ) IS NOT NULL
-
-                    DROP TABLE
-                        #ordenes_dashboard;
+                    BEGIN
+                        DROP TABLE
+                            #ordenes_dashboard;
+                    END;
                     """
                 )
 
-                consulta_base = (
-                    sql_ordenes_agrupadas(
-                        where_sql,
-                        "#ordenes_dashboard",
-                    )
-                )
+                # ====================================================
+                # BASE DEL DASHBOARD
+                #
+                # IMPORTANTE:
+                # NO JOIN A ReqItens.
+                #
+                # VrTotalPecas, VrDescPeca y TtMo ya existen a nivel OS.
+                # ====================================================
 
                 cursor.execute(
-                    consulta_base,
+                    f"""
+                    SELECT
+                        os.Agencia
+                            AS agencia,
+
+                        os.NrOS
+                            AS nros,
+
+                        os.NrAtendimento
+                            AS nratendimento,
+
+                        os.TpOS
+                            AS tpos,
+
+                        os.SubtipoOS
+                            AS subtipoos,
+
+                        os.Situacao
+                            AS situacao,
+
+                        os.DtAbertura
+                            AS dtabertura,
+
+                        os.DtFechamento
+                            AS dtfechamento,
+
+                        os.SitGarantia
+                            AS sitgarantia,
+
+                        os.CodCondPgto
+                            AS codcondpgto,
+
+                        os.CodOperFiscal
+                            AS codoperfiscal,
+
+                        COALESCE(
+                            os.VrAdicionais,
+                            0
+                        ) AS vradicionais,
+
+                        COALESCE(
+                            os.VrDescPeca,
+                            0
+                        ) AS descuentos,
+
+                        COALESCE(
+                            os.VrTotalPecas,
+                            0
+                        ) AS valor_productos,
+
+                        COALESCE(
+                            os.TtMo,
+                            0
+                        ) AS ttmo
+
+                    INTO
+                        #ordenes_dashboard
+
+                    FROM {TABLA_OS} os
+
+                    WHERE
+                        {where_sql};
+                    """,
                     parametros,
                 )
 
+                # Índice sobre la temporal.
+                cursor.execute(
+                    """
+                    CREATE CLUSTERED INDEX
+                        IX_ordenes_dashboard_os
+
+                    ON #ordenes_dashboard (
+                        agencia,
+                        nros,
+                        nratendimento
+                    );
+                    """
+                )
+
                 # ====================================================
-                # TOTALES
+                # TOTALES DE OS
                 # ====================================================
 
                 cursor.execute(
@@ -1154,16 +1343,6 @@ class OrdenesFacturadasDashboardView(APIView):
                     SELECT
                         COUNT(*)
                             AS ordenes,
-
-                        COALESCE(
-                            SUM(requisiciones),
-                            0
-                        ) AS requisiciones,
-
-                        COALESCE(
-                            SUM(partidas),
-                            0
-                        ) AS partidas,
 
                         COALESCE(
                             SUM(valor_productos),
@@ -1189,18 +1368,93 @@ class OrdenesFacturadasDashboardView(APIView):
                         ) AS refacciones_mano_obra
 
                     FROM
-                        #ordenes_dashboard
+                        #ordenes_dashboard;
                     """
                 )
 
-                filas = cursor_a_dicts(
+                filas_totales = cursor_a_dicts(
                     cursor
                 )
 
                 totales = (
-                    filas[0]
-                    if filas
+                    filas_totales[0]
+                    if filas_totales
                     else {}
+                )
+
+                # ====================================================
+                # REQUISICIONES / PARTIDAS
+                #
+                # Utilizamos ReqHeader.
+                # No necesitamos recorrer ReqItens.
+                # ====================================================
+
+                cursor.execute(
+                    f"""
+                    SELECT
+                        COUNT(*)
+                            AS requisiciones,
+
+                        COALESCE(
+                            SUM(
+                                req.qtdeitens
+                            ),
+                            0
+                        ) AS partidas
+
+                    FROM (
+                        SELECT
+                            od.agencia,
+                            od.nros,
+                            od.nratendimento,
+                            fac.NrReq,
+
+                            MAX(
+                                COALESCE(
+                                    fac.QtdeItens,
+                                    0
+                                )
+                            ) AS qtdeitens
+
+                        FROM
+                            #ordenes_dashboard od
+
+                        INNER JOIN {TABLA_HEADER} fac
+                            ON fac.Agencia = od.agencia
+                            AND fac.NrOS = od.nros
+                            AND fac.NrAtendim = od.nratendimento
+
+                        GROUP BY
+                            od.agencia,
+                            od.nros,
+                            od.nratendimento,
+                            fac.NrReq
+                    ) req;
+                    """
+                )
+
+                fila_req = cursor_a_dicts(
+                    cursor
+                )
+
+                resumen_req = (
+                    fila_req[0]
+                    if fila_req
+                    else {}
+                )
+
+                totales[
+                    "requisiciones"
+                ] = resumen_req.get(
+                    "requisiciones",
+                    0,
+                )
+
+                totales[
+                    "partidas"
+                ] = resumen_req.get(
+                    "partidas",
+                    0,
                 )
 
                 # ====================================================
@@ -1215,21 +1469,22 @@ class OrdenesFacturadasDashboardView(APIView):
                         COUNT(*)
                             AS ordenes,
 
-                        SUM(requisiciones)
-                            AS requisiciones,
+                        COALESCE(
+                            SUM(valor_productos),
+                            0
+                        ) AS valor_productos,
 
-                        SUM(partidas)
-                            AS partidas,
+                        COALESCE(
+                            SUM(ttmo),
+                            0
+                        ) AS mano_obra,
 
-                        SUM(valor_productos)
-                            AS valor_productos,
-
-                        SUM(ttmo)
-                            AS mano_obra,
-
-                        SUM(
-                            valor_productos
-                            + ttmo
+                        COALESCE(
+                            SUM(
+                                valor_productos
+                                + ttmo
+                            ),
+                            0
                         ) AS total
 
                     FROM
@@ -1239,7 +1494,7 @@ class OrdenesFacturadasDashboardView(APIView):
                         agencia
 
                     ORDER BY
-                        total DESC
+                        total DESC;
                     """
                 )
 
@@ -1248,7 +1503,7 @@ class OrdenesFacturadasDashboardView(APIView):
                 )
 
                 # ====================================================
-                # TIPO OS
+                # TIPO DE OS
                 # ====================================================
 
                 cursor.execute(
@@ -1267,11 +1522,15 @@ class OrdenesFacturadasDashboardView(APIView):
                         COUNT(*)
                             AS ordenes,
 
-                        SUM(valor_productos)
-                            AS valor_productos,
+                        COALESCE(
+                            SUM(valor_productos),
+                            0
+                        ) AS valor_productos,
 
-                        SUM(ttmo)
-                            AS mano_obra
+                        COALESCE(
+                            SUM(ttmo),
+                            0
+                        ) AS mano_obra
 
                     FROM
                         #ordenes_dashboard
@@ -1288,7 +1547,7 @@ class OrdenesFacturadasDashboardView(APIView):
                         )
 
                     ORDER BY
-                        ordenes DESC
+                        ordenes DESC;
                     """
                 )
 
@@ -1316,11 +1575,15 @@ class OrdenesFacturadasDashboardView(APIView):
                         COUNT(*)
                             AS ordenes,
 
-                        SUM(valor_productos)
-                            AS valor_productos,
+                        COALESCE(
+                            SUM(valor_productos),
+                            0
+                        ) AS valor_productos,
 
-                        SUM(ttmo)
-                            AS mano_obra
+                        COALESCE(
+                            SUM(ttmo),
+                            0
+                        ) AS mano_obra
 
                     FROM
                         #ordenes_dashboard
@@ -1337,7 +1600,7 @@ class OrdenesFacturadasDashboardView(APIView):
                         )
 
                     ORDER BY
-                        ordenes DESC
+                        ordenes DESC;
                     """
                 )
 
@@ -1346,7 +1609,7 @@ class OrdenesFacturadasDashboardView(APIView):
                 )
 
                 # ====================================================
-                # POR DÍA DE CIERRE
+                # POR FECHA
                 # ====================================================
 
                 cursor.execute(
@@ -1358,15 +1621,22 @@ class OrdenesFacturadasDashboardView(APIView):
                         COUNT(*)
                             AS ordenes,
 
-                        SUM(valor_productos)
-                            AS valor_productos,
+                        COALESCE(
+                            SUM(valor_productos),
+                            0
+                        ) AS valor_productos,
 
-                        SUM(ttmo)
-                            AS mano_obra,
+                        COALESCE(
+                            SUM(ttmo),
+                            0
+                        ) AS mano_obra,
 
-                        SUM(
-                            valor_productos
-                            + ttmo
+                        COALESCE(
+                            SUM(
+                                valor_productos
+                                + ttmo
+                            ),
+                            0
                         ) AS total
 
                     FROM
@@ -1379,7 +1649,7 @@ class OrdenesFacturadasDashboardView(APIView):
                         dtfechamento
 
                     ORDER BY
-                        dtfechamento ASC
+                        dtfechamento ASC;
                     """
                 )
 
@@ -1407,11 +1677,15 @@ class OrdenesFacturadasDashboardView(APIView):
                         COUNT(*)
                             AS ordenes,
 
-                        SUM(valor_productos)
-                            AS valor_productos,
+                        COALESCE(
+                            SUM(valor_productos),
+                            0
+                        ) AS valor_productos,
 
-                        SUM(ttmo)
-                            AS mano_obra
+                        COALESCE(
+                            SUM(ttmo),
+                            0
+                        ) AS mano_obra
 
                     FROM
                         #ordenes_dashboard
@@ -1428,76 +1702,11 @@ class OrdenesFacturadasDashboardView(APIView):
                         )
 
                     ORDER BY
-                        ordenes DESC
+                        ordenes DESC;
                     """
                 )
 
                 por_garantia = cursor_a_dicts(
-                    cursor
-                )
-
-                # ====================================================
-                # TOP PRODUCTOS
-                #
-                # Se parte de las OS ya filtradas.
-                # ====================================================
-
-                cursor.execute(
-                    f"""
-                    SELECT TOP 15
-                        ref.CodProd
-                            AS codprod,
-
-                        MAX(
-                            prod.NmProduto
-                        ) AS nmproduto,
-
-                        COUNT(*)
-                            AS partidas,
-
-                        COALESCE(
-                            SUM(
-                                ref.VrProd
-                            ),
-                            0
-                        ) AS importe
-
-                    FROM
-                        #ordenes_dashboard od
-
-                    INNER JOIN {TABLA_HEADER} fac
-                        ON fac.Agencia = od.agencia
-                        AND fac.NrOS = od.nros
-                        AND fac.NrAtendim = od.nratendimento
-
-                    INNER JOIN {TABLA_ITEMS} ref
-                        ON ref.Agencia = fac.Agencia
-                        AND ref.NrOS = fac.NrOS
-                        AND ref.NrReq = fac.NrReq
-
-                    OUTER APPLY (
-                        SELECT TOP 1
-                            p.NmProduto
-
-                        FROM {TABLA_PRODUCTOS} p
-
-                        WHERE
-                            p.Agencia = ref.Agencia
-                            AND p.CodProduto = ref.CodProd
-
-                        ORDER BY
-                            p.NmProduto
-                    ) prod
-
-                    GROUP BY
-                        ref.CodProd
-
-                    ORDER BY
-                        importe DESC
-                    """
-                )
-
-                top_productos = cursor_a_dicts(
                     cursor
                 )
 
@@ -1508,11 +1717,13 @@ class OrdenesFacturadasDashboardView(APIView):
                         IF OBJECT_ID(
                             'tempdb..#ordenes_dashboard'
                         ) IS NOT NULL
-
-                        DROP TABLE
-                            #ordenes_dashboard;
+                        BEGIN
+                            DROP TABLE
+                                #ordenes_dashboard;
+                        END;
                         """
                     )
+
                 except Exception:
                     pass
 
@@ -1536,14 +1747,10 @@ class OrdenesFacturadasDashboardView(APIView):
 
                     "por_garantia":
                         por_garantia,
-
-                    "top_productos":
-                        top_productos,
                 },
             }
         )
-
-
+    
 # ============================================================
 # OPCIONES
 # ============================================================
