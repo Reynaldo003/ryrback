@@ -11,7 +11,10 @@ from rest_framework.views import APIView
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
-from .serializers import OrdenFacturadaSerializer
+from .serializers import (
+    OrdenFacturadaResumenSerializer,
+    OrdenFacturadaDetalleSerializer,
+)
 
 
 DB_ALIAS = "sqlserver_inv"
@@ -21,16 +24,21 @@ TABLA_OS = "dbo.Matriz_OS"
 TABLA_ITEMS = "dbo.Matriz_OS_ReqItensLojas"
 TABLA_PRODUCTOS = "dbo.Matriz_ProdutosAtivos_5vw"
 
-CACHE_OPCIONES = "ordenes_facturadas_opciones_v1"
+CACHE_OPCIONES = "ordenes_facturadas_opciones_v3"
 
 
 # ============================================================
 # HELPERS
 # ============================================================
 
+
 def texto_parametro(request, nombre):
     return str(
-        request.query_params.get(nombre, "") or ""
+        request.query_params.get(
+            nombre,
+            "",
+        )
+        or ""
     ).strip()
 
 
@@ -66,7 +74,10 @@ def entero_parametro(
     return valor
 
 
-def validar_fecha(valor, nombre):
+def validar_fecha(
+    valor,
+    nombre,
+):
     if not valor:
         return None
 
@@ -97,38 +108,131 @@ def cursor_a_dicts(cursor):
     ]
 
 
+def valores_parametro(
+    request,
+    nombre,
+):
+    """
+    Acepta:
+
+    tp_os=CP
+
+    o:
+
+    tp_os__in=CP,GW,REV
+    """
+
+    valor_multiple = texto_parametro(
+        request,
+        f"{nombre}__in",
+    )
+
+    if valor_multiple:
+        return [
+            valor.strip()
+            for valor in valor_multiple.split(",")
+            if valor.strip()
+        ]
+
+    valor_simple = texto_parametro(
+        request,
+        nombre,
+    )
+
+    if valor_simple:
+        return [valor_simple]
+
+    return []
+
+
+def valores_enteros_parametro(
+    request,
+    nombre,
+):
+    valores = valores_parametro(
+        request,
+        nombre,
+    )
+
+    resultado = []
+
+    for valor in valores:
+        try:
+            resultado.append(
+                int(valor)
+            )
+        except (TypeError, ValueError):
+            raise ValueError(
+                f"El parámetro '{nombre}' debe contener valores numéricos."
+            )
+
+    return resultado
+
+
+def agregar_filtro_in(
+    condiciones,
+    parametros,
+    columna,
+    valores,
+):
+    if not valores:
+        return
+
+    placeholders = ", ".join(
+        ["%s"] * len(valores)
+    )
+
+    condiciones.append(
+        f"{columna} IN ({placeholders})"
+    )
+
+    parametros.extend(
+        valores
+    )
+
+
 # ============================================================
 # FILTROS
 # ============================================================
 
+
 def construir_filtros(request):
-    agencia = texto_parametro(
+    condiciones = []
+    parametros = []
+
+    # --------------------------------------------------------
+    # AGENCIA
+    # --------------------------------------------------------
+
+    agencias = valores_parametro(
         request,
         "agencia",
     )
 
-    fecha_desde_texto = texto_parametro(
-        request,
-        "fecha_desde",
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.Agencia",
+        agencias,
     )
 
-    fecha_hasta_texto = texto_parametro(
-        request,
-        "fecha_hasta",
-    )
-
-    busqueda = texto_parametro(
-        request,
-        "q",
-    )
+    # --------------------------------------------------------
+    # FECHAS DE CIERRE
+    # --------------------------------------------------------
 
     fecha_desde = validar_fecha(
-        fecha_desde_texto,
+        texto_parametro(
+            request,
+            "fecha_desde",
+        ),
         "fecha_desde",
     )
 
     fecha_hasta = validar_fecha(
-        fecha_hasta_texto,
+        texto_parametro(
+            request,
+            "fecha_hasta",
+        ),
         "fecha_hasta",
     )
 
@@ -141,99 +245,271 @@ def construir_filtros(request):
             "'fecha_desde' no puede ser mayor que 'fecha_hasta'."
         )
 
-    condiciones = []
-    parametros = []
-
-    # ========================================================
-    # AGENCIA
-    # Solo se aplica cuando viene desde el frontend.
-    # ========================================================
-
-    if agencia:
-        condiciones.append(
-            "fac.Agencia = %s"
-        )
-
-        parametros.append(
-            agencia
-        )
-
-    # ========================================================
-    # FECHA DESDE
-    # Se filtra por fecha de cierre de la OS.
-    # ========================================================
-
     if fecha_desde:
         condiciones.append(
             "os.DtFechamento >= %s"
         )
-
         parametros.append(
             fecha_desde
         )
 
-    # ========================================================
-    # FECHA HASTA
-    #
-    # Se suma un día para hacer inclusivo el día enviado
-    # desde el frontend.
-    #
-    # fecha_hasta=2026-09-30
-    #
-    # se convierte internamente en:
-    #
-    # os.DtFechamento < 2026-10-01
-    # ========================================================
-
     if fecha_hasta:
-        fecha_hasta_exclusiva = (
+        condiciones.append(
+            "os.DtFechamento < %s"
+        )
+        parametros.append(
             fecha_hasta
             + timedelta(days=1)
         )
 
-        condiciones.append(
-            "os.DtFechamento < %s"
+    # --------------------------------------------------------
+    # TIPO OS
+    # --------------------------------------------------------
+
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.TpOS",
+        valores_parametro(
+            request,
+            "tp_os",
+        ),
+    )
+
+    # --------------------------------------------------------
+    # SITUACIÓN
+    # --------------------------------------------------------
+
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.Situacao",
+        valores_parametro(
+            request,
+            "situacao",
+        ),
+    )
+
+    # --------------------------------------------------------
+    # SUBTIPO
+    # --------------------------------------------------------
+
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.SubtipoOS",
+        valores_parametro(
+            request,
+            "subtipo_os",
+        ),
+    )
+
+    # --------------------------------------------------------
+    # GARANTÍA
+    # --------------------------------------------------------
+
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.SitGarantia",
+        valores_parametro(
+            request,
+            "sit_garantia",
+        ),
+    )
+
+    # --------------------------------------------------------
+    # CONDICIÓN DE PAGO
+    # --------------------------------------------------------
+
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.CodCondPgto",
+        valores_enteros_parametro(
+            request,
+            "cod_cond_pgto",
+        ),
+    )
+
+    # --------------------------------------------------------
+    # OPERACIÓN FISCAL
+    # --------------------------------------------------------
+
+    agregar_filtro_in(
+        condiciones,
+        parametros,
+        "os.CodOperFiscal",
+        valores_enteros_parametro(
+            request,
+            "cod_oper_fiscal",
+        ),
+    )
+
+    # --------------------------------------------------------
+    # RESPONSABLE
+    #
+    # Está en ReqHeader, por eso usamos EXISTS para no afectar
+    # la agregación de todas las partidas de la OS.
+    # --------------------------------------------------------
+
+    funcionarios = valores_enteros_parametro(
+        request,
+        "func_resp",
+    )
+
+    if funcionarios:
+        placeholders = ", ".join(
+            ["%s"]
+            * len(funcionarios)
         )
 
-        parametros.append(
-            fecha_hasta_exclusiva
-        )
-
-    # ========================================================
-    # BUSCADOR GENERAL
-    # ========================================================
-
-    if busqueda:
-        termino = f"%{busqueda}%"
-
         condiciones.append(
-            """
-            (
-                fac.Agencia LIKE %s
-                OR CONVERT(VARCHAR(50), fac.NrOS) LIKE %s
-                OR CONVERT(VARCHAR(50), fac.NrReq) LIKE %s
-                OR ref.CodProd LIKE %s
-                OR prod.NmProduto LIKE %s
-                OR fac.FuncResp LIKE %s
+            f"""
+            EXISTS (
+                SELECT
+                    1
+
+                FROM {TABLA_HEADER} fac_func
+
+                INNER JOIN {TABLA_ITEMS} ref_func
+                    ON ref_func.Agencia = fac_func.Agencia
+                    AND ref_func.NrOS = fac_func.NrOS
+                    AND ref_func.NrReq = fac_func.NrReq
+
+                WHERE
+                    fac_func.Agencia = os.Agencia
+                    AND fac_func.NrOS = os.NrOS
+                    AND fac_func.NrAtendim = os.NrAtendimento
+                    AND fac_func.FuncResp IN ({placeholders})
             )
             """
         )
 
-        parametros.extend([
-            termino,
-            termino,
-            termino,
-            termino,
-            termino,
-            termino,
-        ])
+        parametros.extend(
+            funcionarios
+        )
 
-    if not condiciones:
-        return "", parametros
+    # --------------------------------------------------------
+    # BÚSQUEDA GLOBAL
+    #
+    # Puede encontrar:
+    # - agencia
+    # - OS
+    # - atención
+    # - tipo
+    # - situación
+    # - subtipo
+    # - requisición
+    # - funcionario
+    # - código producto
+    # - nombre producto
+    # --------------------------------------------------------
+
+    busqueda = texto_parametro(
+        request,
+        "q",
+    )
+
+    if busqueda:
+        patron = f"%{busqueda}%"
+
+        condiciones.append(
+            f"""
+            (
+                CAST(os.NrOS AS varchar(50)) LIKE %s
+
+                OR CAST(
+                    os.NrAtendimento AS varchar(50)
+                ) LIKE %s
+
+                OR os.Agencia LIKE %s
+
+                OR os.TpOS LIKE %s
+
+                OR os.Situacao LIKE %s
+
+                OR os.SubtipoOS LIKE %s
+
+                OR EXISTS (
+                    SELECT
+                        1
+
+                    FROM {TABLA_HEADER} fac_q
+
+                    INNER JOIN {TABLA_ITEMS} ref_q
+                        ON ref_q.Agencia = fac_q.Agencia
+                        AND ref_q.NrOS = fac_q.NrOS
+                        AND ref_q.NrReq = fac_q.NrReq
+
+                    WHERE
+                        fac_q.Agencia = os.Agencia
+                        AND fac_q.NrOS = os.NrOS
+                        AND fac_q.NrAtendim = os.NrAtendimento
+
+                        AND (
+                            CAST(
+                                fac_q.NrReq AS varchar(50)
+                            ) LIKE %s
+
+                            OR CAST(
+                                fac_q.FuncResp AS varchar(50)
+                            ) LIKE %s
+
+                            OR ref_q.CodProd LIKE %s
+
+                            OR EXISTS (
+                                SELECT
+                                    1
+
+                                FROM {TABLA_PRODUCTOS} prod_q
+
+                                WHERE
+                                    prod_q.Agencia = ref_q.Agencia
+                                    AND prod_q.CodProduto = ref_q.CodProd
+                                    AND prod_q.NmProduto LIKE %s
+                            )
+                        )
+                )
+            )
+            """
+        )
+
+        parametros.extend(
+            [patron] * 10
+        )
+
+    # --------------------------------------------------------
+    # SOLO OS QUE TIENEN PARTIDAS
+    # --------------------------------------------------------
+
+    condiciones.append(
+        f"""
+        EXISTS (
+            SELECT
+                1
+
+            FROM {TABLA_HEADER} fac_exist
+
+            INNER JOIN {TABLA_ITEMS} ref_exist
+                ON ref_exist.Agencia = fac_exist.Agencia
+                AND ref_exist.NrOS = fac_exist.NrOS
+                AND ref_exist.NrReq = fac_exist.NrReq
+
+            WHERE
+                fac_exist.Agencia = os.Agencia
+                AND fac_exist.NrOS = os.NrOS
+                AND fac_exist.NrAtendim = os.NrAtendimento
+        )
+        """
+    )
 
     where_sql = (
-        "WHERE "
-        + " AND ".join(condiciones)
+        " AND ".join(
+            condiciones
+        )
+        if condiciones
+        else "1 = 1"
     )
 
     return (
@@ -243,38 +519,208 @@ def construir_filtros(request):
 
 
 # ============================================================
-# LISTADO DE ÓRDENES FACTURADAS
+# SQL BASE: UNA FILA POR OS
 # ============================================================
+
+
+def sql_ordenes_agrupadas(
+    where_sql,
+    destino=None,
+):
+    into_sql = (
+        f"INTO {destino}"
+        if destino
+        else ""
+    )
+
+    return f"""
+        SELECT
+            os.Agencia AS agencia,
+
+            os.NrOS AS nros,
+
+            os.NrAtendimento AS nratendimento,
+
+            MAX(os.TpOS)
+                AS tpos,
+
+            MAX(os.SubtipoOS)
+                AS subtipoos,
+
+            MAX(os.Situacao)
+                AS situacao,
+
+            MAX(os.DtAbertura)
+                AS dtabertura,
+
+            MAX(os.DtFechamento)
+                AS dtfechamento,
+
+            MAX(os.SitGarantia)
+                AS sitgarantia,
+
+            MAX(os.CodCondPgto)
+                AS codcondpgto,
+
+            MAX(os.CodOperFiscal)
+                AS codoperfiscal,
+
+            COALESCE(
+                MAX(os.VrAdicionais),
+                0
+            ) AS vradicionais,
+
+            COALESCE(
+                MAX(os.VrDescPeca),
+                0
+            ) AS vrdescpeca,
+
+            COALESCE(
+                MAX(os.VrTotalPecas),
+                0
+            ) AS vrtotalpecas,
+
+            -- =================================================
+            -- TtMo pertenece a la OS.
+            -- MAX evita multiplicarlo por el número de partidas.
+            -- =================================================
+            COALESCE(
+                MAX(os.TtMo),
+                0
+            ) AS ttmo,
+
+            COUNT(
+                DISTINCT fac.NrReq
+            ) AS requisiciones,
+
+            COUNT(*)
+                AS partidas,
+
+            COALESCE(
+                SUM(
+                    COALESCE(
+                        ref.VrProd,
+                        0
+                    )
+                ),
+                0
+            ) AS valor_productos,
+
+            COALESCE(
+                SUM(
+                    COALESCE(
+                        ref.VrDesc,
+                        0
+                    )
+                ),
+                0
+            ) AS descuentos
+
+        {into_sql}
+
+        FROM {TABLA_OS} os
+
+        INNER JOIN {TABLA_HEADER} fac
+            ON fac.Agencia = os.Agencia
+            AND fac.NrOS = os.NrOS
+            AND fac.NrAtendim = os.NrAtendimento
+
+        INNER JOIN {TABLA_ITEMS} ref
+            ON ref.Agencia = fac.Agencia
+            AND ref.NrOS = fac.NrOS
+            AND ref.NrReq = fac.NrReq
+
+        WHERE
+            {where_sql}
+
+        GROUP BY
+            os.Agencia,
+            os.NrOS,
+            os.NrAtendimento
+    """
+
+
+# ============================================================
+# ORDERING
+# ============================================================
+
+
+ORDERING_MAP = {
+    "agencia": "agencia",
+    "nros": "nros",
+    "nratendimento": "nratendimento",
+    "tpos": "tpos",
+    "subtipoos": "subtipoos",
+    "situacao": "situacao",
+    "dtabertura": "dtabertura",
+    "dtfechamento": "dtfechamento",
+    "sitgarantia": "sitgarantia",
+    "codcondpgto": "codcondpgto",
+    "codoperfiscal": "codoperfiscal",
+    "vradicionais": "vradicionais",
+    "vrdescpeca": "vrdescpeca",
+    "vrtotalpecas": "vrtotalpecas",
+    "ttmo": "ttmo",
+    "requisiciones": "requisiciones",
+    "partidas": "partidas",
+    "valor_productos": "valor_productos",
+    "descuentos": "descuentos",
+}
+
+
+def construir_ordering(request):
+    valor = texto_parametro(
+        request,
+        "ordering",
+    )
+
+    if not valor:
+        valor = "-dtfechamento"
+
+    descendente = valor.startswith(
+        "-"
+    )
+
+    campo = (
+        valor[1:]
+        if descendente
+        else valor
+    )
+
+    columna = ORDERING_MAP.get(
+        campo,
+        "dtfechamento",
+    )
+
+    direccion = (
+        "DESC"
+        if descendente
+        else "ASC"
+    )
+
+    return (
+        f"{columna} {direccion}, "
+        "agencia ASC, "
+        "nros DESC, "
+        "nratendimento DESC"
+    )
+
+
+# ============================================================
+# LISTADO PAGINADO
+# ============================================================
+
 
 class OrdenesFacturadasListView(APIView):
     authentication_classes = [
-        CRMJWTAuthentication,
+        CRMJWTAuthentication
     ]
 
     permission_classes = [
-        IsAuthenticated,
+        IsAuthenticated
     ]
 
     def get(self, request):
-        pagina = entero_parametro(
-            request,
-            "page",
-            1,
-            minimo=1,
-        )
-
-        tamano_pagina = entero_parametro(
-            request,
-            "page_size",
-            50,
-            minimo=1,
-            maximo=150000,
-        )
-
-        offset = (
-            pagina - 1
-        ) * tamano_pagina
-
         try:
             (
                 where_sql,
@@ -286,76 +732,54 @@ class OrdenesFacturadasListView(APIView):
         except ValueError as exc:
             return Response(
                 {
-                    "detail": str(exc),
+                    "detail":
+                        str(exc)
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        page = entero_parametro(
+            request,
+            "page",
+            1,
+            minimo=1,
+        )
+
+        page_size = entero_parametro(
+            request,
+            "page_size",
+            100,
+            minimo=1,
+            maximo=500,
+        )
+
+        offset = (
+            page - 1
+        ) * page_size
+
+        ordering_sql = construir_ordering(
+            request
+        )
+
         consulta = f"""
+            WITH Ordenes AS (
+                {
+                    sql_ordenes_agrupadas(
+                        where_sql
+                    )
+                }
+            )
+
             SELECT
-                fac.Agencia AS agencia,
-                fac.NrOS AS nros,
-                fac.NrReq AS nrreq,
-                fac.DtEmissao AS dtemissao,
-                fac.FuncResp AS funcresp,
-                fac.QtdeItens AS qtdeitens,
-                fac.QtdeAtend AS qtdeatend,
+                *,
 
-                ref.CodProd AS codprod,
-                prod.NmProduto AS nmproduto,
-                ref.PrecoUnit AS precounit,
-                ref.PercDesc AS percdesc,
-                ref.VrDesc AS vrdesc,
-                ref.VrProd AS vrprod,
+                COUNT(*) OVER()
+                    AS total_registros
 
-                os.VrAdicionais AS vradicionais,
-                os.VrDescPeca AS vrdescpeca,
-                os.VrTotalPecas AS vrtotalpecas,
-                os.TpOS AS tpos,
-                os.DtFechamento AS dtfechamento,
-                os.DtAbertura AS dtabertura,
-                os.Situacao AS situacao,
-                os.CodCondPgto AS codcondpgto,
-                os.CodOperFiscal AS codoperfiscal,
-                os.SitGarantia AS sitgarantia,
-                os.SubtipoOS AS subtipoos,
-
-                COUNT(*) OVER ()
-                    AS total_registros,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            ref.VrProd,
-                            0
-                        )
-                    ) OVER (),
-                    0
-                ) AS valor_productos
-
-            FROM {TABLA_HEADER} fac
-
-            INNER JOIN {TABLA_OS} os
-                ON os.Agencia = fac.Agencia
-                AND os.NrOS = fac.NrOS
-                AND os.NrAtendimento = fac.NrAtendim
-
-            INNER JOIN {TABLA_ITEMS} ref
-                ON ref.Agencia = fac.Agencia
-                AND ref.NrOS = fac.NrOS
-                AND ref.NrReq = fac.NrReq
-
-            INNER JOIN {TABLA_PRODUCTOS} prod
-                ON ref.CodProd = prod.CodProduto
-                AND ref.Agencia = prod.Agencia
-
-            {where_sql}
+            FROM Ordenes
 
             ORDER BY
-                fac.Agencia,
-                fac.NrOS DESC,
-                fac.NrReq DESC,
-                ref.CodProd
+                {ordering_sql}
 
             OFFSET %s ROWS
 
@@ -365,12 +789,13 @@ class OrdenesFacturadasListView(APIView):
         parametros_consulta = [
             *parametros,
             offset,
-            tamano_pagina,
+            page_size,
         ]
 
         with connections[
             DB_ALIAS
         ].cursor() as cursor:
+
             cursor.execute(
                 consulta,
                 parametros_consulta,
@@ -380,80 +805,763 @@ class OrdenesFacturadasListView(APIView):
                 cursor
             )
 
-        # ====================================================
-        # MÉTRICAS
-        # ====================================================
-
         if registros:
-            primero = registros[0]
-
-            total_registros = int(
-                primero.get(
+            total = int(
+                registros[0].get(
                     "total_registros",
                     0,
                 )
                 or 0
             )
-
-            metricas = {
-                "registros": total_registros,
-                "valor_productos": float(
-                    primero.get(
-                        "valor_productos",
-                        0,
-                    )
-                    or 0
-                ),
-            }
-
         else:
-            total_registros = 0
+            total = 0
 
-            metricas = {
-                "registros": 0,
-                "valor_productos": 0,
-            }
-
-        # Quitamos los campos auxiliares utilizados
-        # únicamente para paginación/métricas.
         for registro in registros:
             registro.pop(
                 "total_registros",
                 None,
             )
 
-            registro.pop(
-                "valor_productos",
-                None,
+        serializer = (
+            OrdenFacturadaResumenSerializer(
+                registros,
+                many=True,
             )
-
-        serializer = OrdenFacturadaSerializer(
-            registros,
-            many=True,
         )
 
         return Response(
             {
-                "count": total_registros,
-                "page": pagina,
-                "page_size": tamano_pagina,
-                "metricas": metricas,
-                "results": serializer.data,
+                "count":
+                    total,
+
+                "page":
+                    page,
+
+                "page_size":
+                    page_size,
+
+                "results":
+                    serializer.data,
             }
         )
 
 
 # ============================================================
-# OPCIONES PARA FILTROS
+# DETALLE DE UNA OS
 # ============================================================
 
-class OrdenesFacturadasOpcionesView(APIView):
+
+class OrdenFacturadaDetalleView(APIView):
     authentication_classes = [
-        CRMJWTAuthentication,
+        CRMJWTAuthentication
     ]
 
     permission_classes = [
-        IsAuthenticated,
+        IsAuthenticated
+    ]
+
+    def get(self, request):
+        agencia = texto_parametro(
+            request,
+            "agencia",
+        )
+
+        nros_texto = texto_parametro(
+            request,
+            "nros",
+        )
+
+        nratendimento_texto = texto_parametro(
+            request,
+            "nratendimento",
+        )
+
+        if not agencia:
+            return Response(
+                {
+                    "detail":
+                        "El parámetro 'agencia' es obligatorio."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not nros_texto:
+            return Response(
+                {
+                    "detail":
+                        "El parámetro 'nros' es obligatorio."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not nratendimento_texto:
+            return Response(
+                {
+                    "detail":
+                        "El parámetro 'nratendimento' es obligatorio."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            nros = int(
+                nros_texto
+            )
+
+            nratendimento = int(
+                nratendimento_texto
+            )
+
+        except (TypeError, ValueError):
+            return Response(
+                {
+                    "detail":
+                        "'nros' y 'nratendimento' deben ser numéricos."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        consulta = f"""
+            SELECT
+                fac.Agencia
+                    AS agencia,
+
+                fac.NrOS
+                    AS nros,
+
+                fac.NrAtendim
+                    AS nratendimento,
+
+                fac.NrReq
+                    AS nrreq,
+
+                fac.DtEmissao
+                    AS dtemissao,
+
+                fac.FuncResp
+                    AS funcresp,
+
+                fac.QtdeItens
+                    AS qtdeitens,
+
+                fac.QtdeAtend
+                    AS qtdeatend,
+
+                ref.CodProd
+                    AS codprod,
+
+                prod.NmProduto
+                    AS nmproduto,
+
+                ref.PrecoUnit
+                    AS precounit,
+
+                ref.PercDesc
+                    AS percdesc,
+
+                ref.VrDesc
+                    AS vrdesc,
+
+                ref.VrProd
+                    AS vrprod
+
+            FROM {TABLA_HEADER} fac
+
+            INNER JOIN {TABLA_ITEMS} ref
+                ON ref.Agencia = fac.Agencia
+                AND ref.NrOS = fac.NrOS
+                AND ref.NrReq = fac.NrReq
+
+            OUTER APPLY (
+                SELECT TOP 1
+                    p.NmProduto
+
+                FROM {TABLA_PRODUCTOS} p
+
+                WHERE
+                    p.Agencia = ref.Agencia
+                    AND p.CodProduto = ref.CodProd
+
+                ORDER BY
+                    p.NmProduto
+            ) prod
+
+            WHERE
+                fac.Agencia = %s
+                AND fac.NrOS = %s
+                AND fac.NrAtendim = %s
+
+            ORDER BY
+                fac.NrReq ASC,
+                ref.CodProd ASC
+        """
+
+        with connections[
+            DB_ALIAS
+        ].cursor() as cursor:
+
+            cursor.execute(
+                consulta,
+                [
+                    agencia,
+                    nros,
+                    nratendimento,
+                ],
+            )
+
+            registros = cursor_a_dicts(
+                cursor
+            )
+
+        requisiciones = {
+            registro.get(
+                "nrreq"
+            )
+            for registro in registros
+            if registro.get(
+                "nrreq"
+            )
+            is not None
+        }
+
+        resumen = {
+            "requisiciones":
+                len(
+                    requisiciones
+                ),
+
+            "partidas":
+                len(
+                    registros
+                ),
+
+            "valor_productos":
+                sum(
+                    float(
+                        registro.get(
+                            "vrprod"
+                        )
+                        or 0
+                    )
+                    for registro
+                    in registros
+                ),
+
+            "descuentos":
+                sum(
+                    float(
+                        registro.get(
+                            "vrdesc"
+                        )
+                        or 0
+                    )
+                    for registro
+                    in registros
+                ),
+        }
+
+        serializer = (
+            OrdenFacturadaDetalleSerializer(
+                registros,
+                many=True,
+            )
+        )
+
+        return Response(
+            {
+                "orden": {
+                    "agencia":
+                        agencia,
+
+                    "nros":
+                        nros,
+
+                    "nratendimento":
+                        nratendimento,
+                },
+
+                "resumen":
+                    resumen,
+
+                "results":
+                    serializer.data,
+            }
+        )
+
+
+# ============================================================
+# DASHBOARD
+# ============================================================
+
+
+class OrdenesFacturadasDashboardView(APIView):
+    authentication_classes = [
+        CRMJWTAuthentication
+    ]
+
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def get(self, request):
+        try:
+            (
+                where_sql,
+                parametros,
+            ) = construir_filtros(
+                request
+            )
+
+        except ValueError as exc:
+            return Response(
+                {
+                    "detail":
+                        str(exc)
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        with connections[
+            DB_ALIAS
+        ].cursor() as cursor:
+
+            try:
+                # Por si la misma conexión del pool conserva
+                # una tabla temporal de una ejecución anterior.
+                cursor.execute(
+                    """
+                    IF OBJECT_ID(
+                        'tempdb..#ordenes_dashboard'
+                    ) IS NOT NULL
+
+                    DROP TABLE
+                        #ordenes_dashboard;
+                    """
+                )
+
+                consulta_base = (
+                    sql_ordenes_agrupadas(
+                        where_sql,
+                        "#ordenes_dashboard",
+                    )
+                )
+
+                cursor.execute(
+                    consulta_base,
+                    parametros,
+                )
+
+                # ====================================================
+                # TOTALES
+                # ====================================================
+
+                cursor.execute(
+                    """
+                    SELECT
+                        COUNT(*)
+                            AS ordenes,
+
+                        COALESCE(
+                            SUM(requisiciones),
+                            0
+                        ) AS requisiciones,
+
+                        COALESCE(
+                            SUM(partidas),
+                            0
+                        ) AS partidas,
+
+                        COALESCE(
+                            SUM(valor_productos),
+                            0
+                        ) AS valor_productos,
+
+                        COALESCE(
+                            SUM(descuentos),
+                            0
+                        ) AS descuentos,
+
+                        COALESCE(
+                            SUM(ttmo),
+                            0
+                        ) AS mano_obra,
+
+                        COALESCE(
+                            SUM(
+                                valor_productos
+                                + ttmo
+                            ),
+                            0
+                        ) AS refacciones_mano_obra
+
+                    FROM
+                        #ordenes_dashboard
+                    """
+                )
+
+                filas = cursor_a_dicts(
+                    cursor
+                )
+
+                totales = (
+                    filas[0]
+                    if filas
+                    else {}
+                )
+
+                # ====================================================
+                # POR AGENCIA
+                # ====================================================
+
+                cursor.execute(
+                    """
+                    SELECT
+                        agencia,
+
+                        COUNT(*)
+                            AS ordenes,
+
+                        SUM(requisiciones)
+                            AS requisiciones,
+
+                        SUM(partidas)
+                            AS partidas,
+
+                        SUM(valor_productos)
+                            AS valor_productos,
+
+                        SUM(ttmo)
+                            AS mano_obra,
+
+                        SUM(
+                            valor_productos
+                            + ttmo
+                        ) AS total
+
+                    FROM
+                        #ordenes_dashboard
+
+                    GROUP BY
+                        agencia
+
+                    ORDER BY
+                        total DESC
+                    """
+                )
+
+                por_agencia = cursor_a_dicts(
+                    cursor
+                )
+
+                # ====================================================
+                # TIPO OS
+                # ====================================================
+
+                cursor.execute(
+                    """
+                    SELECT
+                        COALESCE(
+                            NULLIF(
+                                LTRIM(
+                                    RTRIM(tpos)
+                                ),
+                                ''
+                            ),
+                            'Sin tipo'
+                        ) AS tipo,
+
+                        COUNT(*)
+                            AS ordenes,
+
+                        SUM(valor_productos)
+                            AS valor_productos,
+
+                        SUM(ttmo)
+                            AS mano_obra
+
+                    FROM
+                        #ordenes_dashboard
+
+                    GROUP BY
+                        COALESCE(
+                            NULLIF(
+                                LTRIM(
+                                    RTRIM(tpos)
+                                ),
+                                ''
+                            ),
+                            'Sin tipo'
+                        )
+
+                    ORDER BY
+                        ordenes DESC
+                    """
+                )
+
+                por_tipo_os = cursor_a_dicts(
+                    cursor
+                )
+
+                # ====================================================
+                # SITUACIÓN
+                # ====================================================
+
+                cursor.execute(
+                    """
+                    SELECT
+                        COALESCE(
+                            NULLIF(
+                                LTRIM(
+                                    RTRIM(situacao)
+                                ),
+                                ''
+                            ),
+                            'Sin situación'
+                        ) AS situacion,
+
+                        COUNT(*)
+                            AS ordenes,
+
+                        SUM(valor_productos)
+                            AS valor_productos,
+
+                        SUM(ttmo)
+                            AS mano_obra
+
+                    FROM
+                        #ordenes_dashboard
+
+                    GROUP BY
+                        COALESCE(
+                            NULLIF(
+                                LTRIM(
+                                    RTRIM(situacao)
+                                ),
+                                ''
+                            ),
+                            'Sin situación'
+                        )
+
+                    ORDER BY
+                        ordenes DESC
+                    """
+                )
+
+                por_situacion = cursor_a_dicts(
+                    cursor
+                )
+
+                # ====================================================
+                # POR DÍA DE CIERRE
+                # ====================================================
+
+                cursor.execute(
+                    """
+                    SELECT
+                        dtfechamento
+                            AS fecha,
+
+                        COUNT(*)
+                            AS ordenes,
+
+                        SUM(valor_productos)
+                            AS valor_productos,
+
+                        SUM(ttmo)
+                            AS mano_obra,
+
+                        SUM(
+                            valor_productos
+                            + ttmo
+                        ) AS total
+
+                    FROM
+                        #ordenes_dashboard
+
+                    WHERE
+                        dtfechamento IS NOT NULL
+
+                    GROUP BY
+                        dtfechamento
+
+                    ORDER BY
+                        dtfechamento ASC
+                    """
+                )
+
+                por_dia = cursor_a_dicts(
+                    cursor
+                )
+
+                # ====================================================
+                # GARANTÍA
+                # ====================================================
+
+                cursor.execute(
+                    """
+                    SELECT
+                        COALESCE(
+                            NULLIF(
+                                LTRIM(
+                                    RTRIM(sitgarantia)
+                                ),
+                                ''
+                            ),
+                            'Sin dato'
+                        ) AS garantia,
+
+                        COUNT(*)
+                            AS ordenes,
+
+                        SUM(valor_productos)
+                            AS valor_productos,
+
+                        SUM(ttmo)
+                            AS mano_obra
+
+                    FROM
+                        #ordenes_dashboard
+
+                    GROUP BY
+                        COALESCE(
+                            NULLIF(
+                                LTRIM(
+                                    RTRIM(sitgarantia)
+                                ),
+                                ''
+                            ),
+                            'Sin dato'
+                        )
+
+                    ORDER BY
+                        ordenes DESC
+                    """
+                )
+
+                por_garantia = cursor_a_dicts(
+                    cursor
+                )
+
+                # ====================================================
+                # TOP PRODUCTOS
+                #
+                # Se parte de las OS ya filtradas.
+                # ====================================================
+
+                cursor.execute(
+                    f"""
+                    SELECT TOP 15
+                        ref.CodProd
+                            AS codprod,
+
+                        MAX(
+                            prod.NmProduto
+                        ) AS nmproduto,
+
+                        COUNT(*)
+                            AS partidas,
+
+                        COALESCE(
+                            SUM(
+                                ref.VrProd
+                            ),
+                            0
+                        ) AS importe
+
+                    FROM
+                        #ordenes_dashboard od
+
+                    INNER JOIN {TABLA_HEADER} fac
+                        ON fac.Agencia = od.agencia
+                        AND fac.NrOS = od.nros
+                        AND fac.NrAtendim = od.nratendimento
+
+                    INNER JOIN {TABLA_ITEMS} ref
+                        ON ref.Agencia = fac.Agencia
+                        AND ref.NrOS = fac.NrOS
+                        AND ref.NrReq = fac.NrReq
+
+                    OUTER APPLY (
+                        SELECT TOP 1
+                            p.NmProduto
+
+                        FROM {TABLA_PRODUCTOS} p
+
+                        WHERE
+                            p.Agencia = ref.Agencia
+                            AND p.CodProduto = ref.CodProd
+
+                        ORDER BY
+                            p.NmProduto
+                    ) prod
+
+                    GROUP BY
+                        ref.CodProd
+
+                    ORDER BY
+                        importe DESC
+                    """
+                )
+
+                top_productos = cursor_a_dicts(
+                    cursor
+                )
+
+            finally:
+                try:
+                    cursor.execute(
+                        """
+                        IF OBJECT_ID(
+                            'tempdb..#ordenes_dashboard'
+                        ) IS NOT NULL
+
+                        DROP TABLE
+                            #ordenes_dashboard;
+                        """
+                    )
+                except Exception:
+                    pass
+
+        return Response(
+            {
+                "totales":
+                    totales,
+
+                "graficas": {
+                    "por_agencia":
+                        por_agencia,
+
+                    "por_tipo_os":
+                        por_tipo_os,
+
+                    "por_situacion":
+                        por_situacion,
+
+                    "por_dia":
+                        por_dia,
+
+                    "por_garantia":
+                        por_garantia,
+
+                    "top_productos":
+                        top_productos,
+                },
+            }
+        )
+
+
+# ============================================================
+# OPCIONES
+# ============================================================
+
+
+class OrdenesFacturadasOpcionesView(APIView):
+    authentication_classes = [
+        CRMJWTAuthentication
+    ]
+
+    permission_classes = [
+        IsAuthenticated
     ]
 
     def get(self, request):
@@ -466,51 +1574,203 @@ class OrdenesFacturadasOpcionesView(APIView):
                 resultado_cache
             )
 
-        consulta = f"""
-            SELECT DISTINCT
-                fac.Agencia
+        where_con_partidas = f"""
+            EXISTS (
+                SELECT
+                    1
 
-            FROM {TABLA_HEADER} fac
+                FROM {TABLA_HEADER} fac_op
 
-            INNER JOIN {TABLA_OS} os
-                ON os.Agencia = fac.Agencia
-                AND os.NrOS = fac.NrOS
-                AND os.NrAtendimento = fac.NrAtendim
+                INNER JOIN {TABLA_ITEMS} ref_op
+                    ON ref_op.Agencia = fac_op.Agencia
+                    AND ref_op.NrOS = fac_op.NrOS
+                    AND ref_op.NrReq = fac_op.NrReq
 
-            WHERE
-                fac.Agencia IS NOT NULL
-
-                AND LTRIM(
-                    RTRIM(
-                        fac.Agencia
-                    )
-                ) <> ''
-
-            ORDER BY
-                fac.Agencia
+                WHERE
+                    fac_op.Agencia = os.Agencia
+                    AND fac_op.NrOS = os.NrOS
+                    AND fac_op.NrAtendim = os.NrAtendimento
+            )
         """
 
         with connections[
             DB_ALIAS
         ].cursor() as cursor:
-            cursor.execute(
-                consulta
+
+            def obtener_distintos(
+                columna,
+            ):
+                cursor.execute(
+                    f"""
+                    SELECT DISTINCT
+                        {columna}
+
+                    FROM {TABLA_OS} os
+
+                    WHERE
+                        {where_con_partidas}
+
+                        AND {columna} IS NOT NULL
+
+                        AND LTRIM(
+                            RTRIM(
+                                CAST(
+                                    {columna}
+                                    AS varchar(255)
+                                )
+                            )
+                        ) <> ''
+
+                    ORDER BY
+                        {columna}
+                    """
+                )
+
+                return [
+                    fila[0]
+                    for fila
+                    in cursor.fetchall()
+                    if fila[0]
+                    is not None
+                ]
+
+            agencias = obtener_distintos(
+                "os.Agencia"
             )
 
-            agencias = [
+            tpos = obtener_distintos(
+                "os.TpOS"
+            )
+
+            situaciones = obtener_distintos(
+                "os.Situacao"
+            )
+
+            subtipos = obtener_distintos(
+                "os.SubtipoOS"
+            )
+
+            garantias = obtener_distintos(
+                "os.SitGarantia"
+            )
+
+            condiciones_pago = obtener_distintos(
+                "os.CodCondPgto"
+            )
+
+            operaciones_fiscales = obtener_distintos(
+                "os.CodOperFiscal"
+            )
+
+            cursor.execute(
+                f"""
+                SELECT DISTINCT
+                    fac.FuncResp
+
+                FROM {TABLA_HEADER} fac
+
+                INNER JOIN {TABLA_ITEMS} ref
+                    ON ref.Agencia = fac.Agencia
+                    AND ref.NrOS = fac.NrOS
+                    AND ref.NrReq = fac.NrReq
+
+                INNER JOIN {TABLA_OS} os
+                    ON os.Agencia = fac.Agencia
+                    AND os.NrOS = fac.NrOS
+                    AND os.NrAtendimento = fac.NrAtendim
+
+                WHERE
+                    fac.FuncResp IS NOT NULL
+
+                ORDER BY
+                    fac.FuncResp
+                """
+            )
+
+            funcionarios = [
                 fila[0]
-                for fila in cursor.fetchall()
+                for fila
+                in cursor.fetchall()
                 if fila[0]
+                is not None
             ]
 
+            cursor.execute(
+                f"""
+                SELECT
+                    MIN(os.DtFechamento)
+                        AS minima,
+
+                    MAX(os.DtFechamento)
+                        AS maxima
+
+                FROM {TABLA_OS} os
+
+                WHERE
+                    {where_con_partidas}
+                """
+            )
+
+            fila_fecha = cursor.fetchone()
+
+            minima = (
+                fila_fecha[0]
+                if fila_fecha
+                else None
+            )
+
+            maxima = (
+                fila_fecha[1]
+                if fila_fecha
+                else None
+            )
+
         resultado = {
-            "agencias": agencias,
+            "agencias":
+                agencias,
+
+            "tpos":
+                tpos,
+
+            "situaciones":
+                situaciones,
+
+            "subtipos":
+                subtipos,
+
+            "garantias":
+                garantias,
+
+            "condiciones_pago":
+                condiciones_pago,
+
+            "operaciones_fiscales":
+                operaciones_fiscales,
+
+            "funcionarios":
+                funcionarios,
+
+            "fechas": {
+                "minima":
+                    (
+                        minima.isoformat()
+                        if minima
+                        else None
+                    ),
+
+                "maxima":
+                    (
+                        maxima.isoformat()
+                        if maxima
+                        else None
+                    ),
+            },
         }
 
         cache.set(
             CACHE_OPCIONES,
             resultado,
-            3600,
+            1800,
         )
 
         return Response(
