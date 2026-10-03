@@ -1,3 +1,4 @@
+# CompraRefacciones/views.py
 from datetime import timedelta
 from django.core.cache import cache
 from django.db import connections

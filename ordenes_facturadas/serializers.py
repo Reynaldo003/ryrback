@@ -1,49 +1,20 @@
-#CompraRefacciones/serializers.py
 from rest_framework import serializers
 
 
-# ============================================================
-# FACTURA
-# dbo.Matriz_FacturasRef
-# ============================================================
-
-class CompraRefaccionesSerializer(serializers.Serializer):
-    rowid__ = serializers.IntegerField(
-        allow_null=True,
-        required=False,
-    )
-
+class OrdenFacturadaSerializer(serializers.Serializer):
     agencia = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,
     )
 
-    nrnota = serializers.IntegerField(
+    nros = serializers.IntegerField(
         allow_null=True,
         required=False,
     )
 
-    serie = serializers.CharField(
+    nrreq = serializers.IntegerField(
         allow_null=True,
-        allow_blank=True,
-        required=False,
-    )
-
-    nrpedunpar = serializers.CharField(
-        allow_null=True,
-        allow_blank=True,
-        required=False,
-    )
-
-    qtprodutos = serializers.FloatField(
-        allow_null=True,
-        required=False,
-    )
-
-    proveedor = serializers.CharField(
-        allow_null=True,
-        allow_blank=True,
         required=False,
     )
 
@@ -52,93 +23,110 @@ class CompraRefaccionesSerializer(serializers.Serializer):
         required=False,
     )
 
-    dtentrada = serializers.DateField(
-        allow_null=True,
-        required=False,
-    )
-
-    subtotal = serializers.FloatField(
-        allow_null=True,
-        required=False,
-    )
-
-    total = serializers.FloatField(
-        allow_null=True,
-        required=False,
-    )
-
-class CompraRefaccionPiezaSerializer(serializers.Serializer):
-    rowid__ = serializers.IntegerField(
-        allow_null=True,
-        required=False,
-    )
-
-    agencia = serializers.CharField(
+    funcresp = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,
     )
 
-    nrnota = serializers.IntegerField(
+    qtdeitens = serializers.IntegerField(
         allow_null=True,
         required=False,
     )
 
-    serie = serializers.CharField(
-        allow_null=True,
-        allow_blank=True,
-        required=False,
-    )
-
-    seqitem = serializers.IntegerField(
+    qtdeatend = serializers.IntegerField(
         allow_null=True,
         required=False,
     )
 
-    prodserv = serializers.CharField(
+    codprod = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,
     )
 
-    descrprod = serializers.CharField(
+    nmproduto = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,
     )
 
-    unidade = serializers.CharField(
+    precounit = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    percdesc = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    vrdesc = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    vrprod = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    vradicionais = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    vrdescpeca = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    vrtotalpecas = serializers.FloatField(
+        allow_null=True,
+        required=False,
+    )
+
+    tpos = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,
     )
 
-    qtprodutos = serializers.FloatField(
+    dtfechamento = serializers.DateTimeField(
         allow_null=True,
         required=False,
     )
 
-    vrunitliq = serializers.FloatField(
+    dtabertura = serializers.DateTimeField(
         allow_null=True,
         required=False,
     )
 
-    vrunitbruto = serializers.FloatField(
+    situacao = serializers.CharField(
         allow_null=True,
+        allow_blank=True,
         required=False,
     )
 
-    vrliqtotal = serializers.FloatField(
+    codcondpgto = serializers.CharField(
         allow_null=True,
+        allow_blank=True,
         required=False,
     )
 
-    dtentrada = serializers.DateField(
+    codoperfiscal = serializers.CharField(
         allow_null=True,
+        allow_blank=True,
         required=False,
     )
 
-    nrpedcompra = serializers.CharField(
+    sitgarantia = serializers.CharField(
+        allow_null=True,
+        allow_blank=True,
+        required=False,
+    )
+
+    subtipoos = serializers.CharField(
         allow_null=True,
         allow_blank=True,
         required=False,

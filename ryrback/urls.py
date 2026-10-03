@@ -32,6 +32,7 @@ urlpatterns = [
     path("presupuestos/", include("presupuestos.urls"),),
     path("compra-refacciones/",include("CompraRefacciones.urls"),),
     path("gota/", include("gota.urls"),),
+    path("ordenes-facturadas/", include("ordenes_facturadas.urls"),),
 ]
 
 if settings.DEBUG:
