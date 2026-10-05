@@ -42,6 +42,18 @@ class AvaluoUsado(models.Model):
     tipo_toma = models.CharField(max_length=100, default="", null=True, blank=True)
     comentarios = models.TextField(max_length=2000, default="", null=True, blank=True)
 
+    # ── Cliente / solicitud (estilo Chevrolet) ──
+    tipo_valuacion = models.CharField(max_length=100, default="Valoración", null=True, blank=True)
+    vendedor = models.CharField(max_length=200, default="", null=True, blank=True)
+    agenda_valuacion = models.DateTimeField(null=True, blank=True)
+
+    # ── Seguimiento (sección Valores) ──
+    origen_valuacion = models.CharField(max_length=120, default="", null=True, blank=True)
+    fecha_toma_cuenta = models.DateTimeField(null=True, blank=True)
+    fecha_finalizacion = models.DateTimeField(null=True, blank=True)
+    observaciones = models.TextField(max_length=4000, default="", null=True, blank=True)
+    comentario_ticket = models.TextField(max_length=2000, default="Valuación", null=True, blank=True)
+
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:

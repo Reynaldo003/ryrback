@@ -95,6 +95,11 @@ class AvaluoUsadoViewSet(viewsets.ModelViewSet):
         "ganador_subasta",
         "etapa_proceso",
         "tipo_toma",
+        "tipo_valuacion",
+        "vendedor",
+        "origen_valuacion",
+        "observaciones",
+        "comentario_ticket",
     ]
 
     ordering = ["-creado"]
@@ -117,6 +122,11 @@ class AvaluoUsadoViewSet(viewsets.ModelViewSet):
         "etapa_proceso",
         "tipo_toma",
         "comentarios",
+        "tipo_valuacion",
+        "vendedor",
+        "origen_valuacion",
+        "observaciones",
+        "comentario_ticket",
         "conceptos__descripcion",
         "cliente__nombre",
         "cliente__telefono",
