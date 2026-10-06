@@ -33,3 +33,4 @@ class InventarioRefaccionesObsolescenciaSerializer(serializers.Serializer):
     dias_desde_ultimo_movimiento = serializers.IntegerField(allow_null=True, required=False)
     capa_obsolescencia = serializers.CharField(allow_null=True, allow_blank=True, required=False)
     categoria_movimiento = serializers.CharField(allow_null=True, allow_blank=True, required=False)
+    categoria_fiscal = serializers.CharField(allow_null=True, allow_blank=True, required=False)

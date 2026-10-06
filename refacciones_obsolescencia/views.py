@@ -290,27 +290,21 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
                 "Fecha_Ult_Actu_Prod" AS fecha_ult_actu_prod,
                 "Fecha_Regis_Refac" AS fecha_regis_refac,
                 "Fecha_Inventario_Refac" AS fecha_inventario_refac,
-                "Fecha_Primera_Compra_Refac"
-                    AS fecha_primera_compra_refac,
-                "Fecha_Actualizacion_Refac"
-                    AS fecha_actualizacion_refac,
+                "Fecha_Primera_Compra_Refac" AS fecha_primera_compra_refac,
+                "Fecha_Actualizacion_Refac" AS fecha_actualizacion_refac,
                 "VrUniUltCpa" AS vr_uni_ult_cpa,
                 "Fecha_Referencia" AS fecha_referencia,
-                "Dias_Desde_Ultimo_Movimiento"
-                    AS dias_desde_ultimo_movimiento,
+                "Dias_Desde_Ultimo_Movimiento" AS dias_desde_ultimo_movimiento,
                 "Capa_Obsolescencia" AS capa_obsolescencia,
-                "Categoria_Movimiento" AS categoria_movimiento
-
+                "Categoria_Movimiento" AS categoria_movimiento,
+                "Categoria_Fiscal" AS categoria_fiscal
             FROM {TABLA}
-
             {where_sql}
-
             ORDER BY
                 "Dias_Desde_Ultimo_Movimiento" DESC NULLS LAST,
                 "Agencia",
                 "CodProduto",
                 "Localizacao"
-
             LIMIT %s
             OFFSET %s
         """
@@ -345,7 +339,6 @@ class InventarioRefaccionesObsolescenciaListView(APIView):
             "page_size": tamano_pagina,
             "results": serializer.data,
         })
-
 
 class InventarioRefaccionesObsolescenciaDashboardView(APIView):
     authentication_classes = [CRMJWTAuthentication]
