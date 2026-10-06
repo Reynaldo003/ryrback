@@ -2,10 +2,12 @@
 from django.db.models import Q
 from django.utils.dateparse import parse_date
 from rest_framework import permissions, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.filters import OrderingFilter, SearchFilter
 from rest_framework.parsers import FormParser, JSONParser, MultiPartParser
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
+from .checklist_pdf import generar_checklist_cpo_pdf
 from .models import AvaluoUsado
 from .pagination import AvaluoPagination
 from .serializers import AvaluoUsadoSerializer
@@ -271,3 +273,9 @@ class AvaluoUsadoViewSet(viewsets.ModelViewSet):
         serializer.save(
             agencia=agencia_permitida
         )
+
+    @action(detail=True, methods=["get"], url_path="checklist-pdf")
+    def checklist_pdf(self, request, pk=None):
+        """Descarga el PDF de la lista de verificación CPO (114 puntos)."""
+        avaluo = self.get_object()
+        return generar_checklist_cpo_pdf(avaluo)

@@ -54,6 +54,11 @@ class AvaluoUsado(models.Model):
     observaciones = models.TextField(max_length=4000, default="", null=True, blank=True)
     comentario_ticket = models.TextField(max_length=2000, default="Valuación", null=True, blank=True)
 
+    # ── Lista de verificación CPO (114 puntos) ──
+    # Snapshot JSON de la pestaña "Lista de verificación":
+    # { estados, comentarios, datosVehiculo, danosAnteriores, mediciones, folio, vin }
+    checklist_cpo = models.JSONField(default=dict, blank=True)
+
     creado = models.DateTimeField(auto_now_add=True)
 
     class Meta:

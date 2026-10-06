@@ -167,6 +167,13 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         default="",
     )
 
+    checklist_cpo_json = serializers.CharField(
+        write_only=True,
+        required=False,
+        allow_blank=True,
+        default="",
+    )
+
     delete_evidencia_ids = serializers.ListField(
         child=serializers.IntegerField(),
         write_only=True,
@@ -209,9 +216,11 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
             "fecha_finalizacion",
             "observaciones",
             "comentario_ticket",
+            "checklist_cpo",
             "evidencias",
             "conceptos",
             "conceptos_json",
+            "checklist_cpo_json",
             "delete_evidencia_ids",
             "creado",
         )
@@ -296,6 +305,34 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
 
         return True, self._normalizar_conceptos(raw_conceptos)
 
+    def _obtener_checklist_desde_request(self, attrs):
+        """Devuelve (recibido, dict). Vacío en blanco = no recibido, para que
+        un update que no incluye el checklist no borre el guardado."""
+        request = self.context.get("request")
+        raw = attrs.get("checklist_cpo_json", "")
+
+        if request is not None and hasattr(request.data, "get"):
+            if "checklist_cpo_json" in request.data:
+                raw = request.data.get("checklist_cpo_json")
+
+        if raw in (None, ""):
+            return False, {}
+
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except json.JSONDecodeError:
+                raise serializers.ValidationError({
+                    "checklist_cpo_json": "El formato del checklist no es válido."
+                })
+
+        if not isinstance(raw, dict):
+            raise serializers.ValidationError({
+                "checklist_cpo_json": "El checklist debe ser un objeto JSON."
+            })
+
+        return True, raw
+
     def validate(self, attrs):
         attrs = super().validate(attrs)
 
@@ -366,6 +403,10 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         attrs["_evidencias_nuevas"] = archivos
         attrs["_delete_evidencia_ids"] = delete_ids_limpios
 
+        checklist_recibido, checklist = self._obtener_checklist_desde_request(attrs)
+        if checklist_recibido:
+            attrs["checklist_cpo"] = checklist
+
         return attrs
 
     def _inferir_tipo_archivo(self, archivo):
@@ -413,6 +454,7 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         validated_data.pop("_delete_evidencia_ids", None)
         validated_data.pop("delete_evidencia_ids", None)
         validated_data.pop("conceptos_json", None)
+        validated_data.pop("checklist_cpo_json", None)
 
         cliente = self._resolver_cliente(validated_data)
         avaluo = AvaluoUsado.objects.create(cliente=cliente, **validated_data)
@@ -431,6 +473,7 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
 
         validated_data.pop("delete_evidencia_ids", None)
         validated_data.pop("conceptos_json", None)
+        validated_data.pop("checklist_cpo_json", None)
 
         usar_cliente = (
             "cliente_id" in validated_data
@@ -470,6 +513,7 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
             "fecha_finalizacion",
             "observaciones",
             "comentario_ticket",
+            "checklist_cpo",
         ]
 
         for campo in campos:
