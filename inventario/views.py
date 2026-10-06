@@ -45,9 +45,9 @@ def _filtros_desde_request(
     condicion_uso="N",
 ):
     condiciones = [
-        "DN_Atual IS NOT NULL",
-        "LTRIM(RTRIM(DN_Atual)) <> ''",
-        "LTRIM(RTRIM(DN_Atual)) <> '0'",
+        '"DN_Atual" IS NOT NULL',
+        "BTRIM(\"DN_Atual\"::text) <> ''",
+        "BTRIM(\"DN_Atual\"::text) <> '0'",
     ]
 
     parametros = []
@@ -76,7 +76,7 @@ def _filtros_desde_request(
             """
             LTRIM(
                 RTRIM(
-                    COALESCE(CondUso, '')
+                    COALESCE("CondUso", '')
                 )
             ) = %s
             """
@@ -95,7 +95,7 @@ def _filtros_desde_request(
         agencia = agencia.strip()
 
         condiciones.append(
-            "LTRIM(RTRIM(DN_Atual)) = %s"
+            'BTRIM("DN_Atual"::text) = %s'
         )
 
         parametros.append(
@@ -113,7 +113,7 @@ def _filtros_desde_request(
                     UPPER(
                         LTRIM(
                             RTRIM(
-                                COALESCE(NmFamilia, '')
+                                COALESCE("NmFamilia", '')
                             )
                         )
                     ) LIKE UPPER(%s)
@@ -141,7 +141,7 @@ def _filtros_desde_request(
 
     if estatus:
         condiciones.append(
-            "LTRIM(RTRIM(StEstoque)) = %s"
+            'LTRIM(RTRIM("StEstoque")) = %s'
         )
 
         parametros.append(
@@ -172,7 +172,7 @@ def _filtros_desde_request(
                     UPPER(
                         LTRIM(
                             RTRIM(
-                                COALESCE(NmFamilia, '')
+                                COALESCE("NmFamilia", '')
                             )
                         )
                     ) LIKE UPPER(%s)
@@ -205,7 +205,7 @@ def _filtros_desde_request(
             LTRIM(
                 RTRIM(
                     COALESCE(
-                        StEstoque,
+                        "StEstoque",
                         ''
                     )
                 )
@@ -237,289 +237,158 @@ def _estatus_nombre(codigo):
 
 
 def get_inventario(request):
-    """
-    Regresa el inventario activo.
-
-    La antigüedad se calcula directamente en SQL Server porque
-    DtFaturamento está almacenado como nvarchar.
-
-    Soporta:
-    - YYYY-MM-DD HH:MM:SS
-    - YYYY-MM-DD
-    - YYYYMMDD
-    """
-
+    """Regresa el inventario activo desde PostgreSQL TDSQL_VW."""
     where_sql, parametros = _filtros_desde_request(
         request,
         solo_activos=True,
     )
-
     query = f"""
         SELECT
-            v.DN_Atual,
-            v.NrChassi,
-            v.NmFamilia,
-            v.NmMarca,
-            v.SitVeiculo,
-            v.StEstoque,
-            v.TpNacImp,
-            v.ModalVda,
-            v.EdiModelo,
-            v.CondUso,
-
+            v."DN_Atual",
+            v."NrChassi",
+            v."NmFamilia",
+            v."NmMarca",
+            v."SitVeiculo",
+            v."StEstoque",
+            v."TpNacImp",
+            v."ModalVda",
+            v."EdiModelo",
+            v."CondUso",
             CASE
-                WHEN f.FechaFacturacion IS NULL
-                    THEN NULL
-                WHEN f.FechaFacturacion < CONVERT(DATE, '19000101', 112)
-                    THEN NULL
-                ELSE CONVERT(
-                    VARCHAR(10),
-                    f.FechaFacturacion,
-                    23
-                )
-            END AS DtFaturamento,
-
+                WHEN v."DtFaturamento" IS NULL THEN NULL
+                WHEN v."DtFaturamento"::date < DATE '1900-01-01' THEN NULL
+                ELSE TO_CHAR(v."DtFaturamento"::date, 'YYYY-MM-DD')
+            END AS "DtFaturamento",
             CASE
-                WHEN f.FechaFacturacion IS NULL
-                    THEN NULL
-                WHEN f.FechaFacturacion < CONVERT(DATE, '19000101', 112)
-                    THEN NULL
-                WHEN f.FechaFacturacion > CAST(GETDATE() AS DATE)
-                    THEN NULL
-                ELSE DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                )
-            END AS diasEnStock,
-
-            v.VrNF_Compra
-
-        FROM dbo.Listado_Vehiculos_VW v
-
-        OUTER APPLY (
-            SELECT
-                COALESCE(
-                    TRY_CONVERT(
-                        DATE,
-                        LEFT(
-                            LTRIM(RTRIM(v.DtFaturamento)),
-                            10
-                        ),
-                        23
-                    ),
-                    TRY_CONVERT(
-                        DATE,
-                        LEFT(
-                            LTRIM(RTRIM(v.DtFaturamento)),
-                            8
-                        ),
-                        112
-                    )
-                ) AS FechaFacturacion
-        ) f
-
+                WHEN v."DtFaturamento" IS NULL THEN NULL
+                WHEN v."DtFaturamento"::date < DATE '1900-01-01' THEN NULL
+                WHEN v."DtFaturamento"::date > CURRENT_DATE THEN NULL
+                ELSE CURRENT_DATE - v."DtFaturamento"::date
+            END AS "diasEnStock",
+            v."VrNF_Compra"
+        FROM public.matriz_veiculosestoque v
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
-
+          AND v."NmMarca" = 'VOLKSWAGEN'
+          AND v."SitVeiculo" = 'L'
         ORDER BY
-            diasEnStock DESC,
-            v.DN_Atual,
-            v.NrChassi
+            "diasEnStock" DESC,
+            v."DN_Atual",
+            v."NrChassi"
     """
-
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
-
         columns = [
             column[0]
             for column in cursor.description
         ]
-
         rows = [
             dict(zip(columns, row))
             for row in cursor.fetchall()
         ]
-
     for row in rows:
         row["DN_Atual"] = str(
             row.get("DN_Atual") or ""
         ).strip()
-
         row["StEstoque"] = str(
             row.get("StEstoque") or ""
         ).strip()
-
         row["CondUso"] = str(
             row.get("CondUso") or ""
         ).strip()
-
         row["agenciaNombre"] = _agencia_nombre(
             row.get("DN_Atual")
         )
-
         row["estatusNombre"] = _estatus_nombre(
             row.get("StEstoque")
         )
-
         if row.get("VrNF_Compra") is not None:
             row["VrNF_Compra"] = float(
                 row["VrNF_Compra"]
             )
-
         if row.get("diasEnStock") is not None:
             row["diasEnStock"] = int(
                 row["diasEnStock"]
             )
-
     return JsonResponse({
         "data": rows
     })
-
 def get_inventario_usados(request):
-    """
-    Regresa el inventario activo de vehículos usados.
-
-    CondUso:
-    U = Usado
-
-    La estructura de respuesta es la misma que get_inventario()
-    para que el frontend pueda reutilizar los mismos componentes.
-    """
-
+    """Regresa el inventario activo desde PostgreSQL TDSQL_VW."""
     where_sql, parametros = _filtros_desde_request(
         request,
         solo_activos=True,
         condicion_uso="U",
     )
-
     query = f"""
         SELECT
-            v.DN_Atual,
-            v.NrChassi,
-            v.NmFamilia,
-            v.NmMarca,
-            v.SitVeiculo,
-            v.StEstoque,
-            v.TpNacImp,
-            v.ModalVda,
-            v.EdiModelo,
-            v.CondUso,
-
+            v."DN_Atual",
+            v."NrChassi",
+            v."NmFamilia",
+            v."NmMarca",
+            v."SitVeiculo",
+            v."StEstoque",
+            v."TpNacImp",
+            v."ModalVda",
+            v."EdiModelo",
+            v."CondUso",
             CASE
-                WHEN f.FechaFacturacion IS NULL
-                    THEN NULL
-                WHEN f.FechaFacturacion < CONVERT(DATE, '19000101', 112)
-                    THEN NULL
-                ELSE CONVERT(
-                    VARCHAR(10),
-                    f.FechaFacturacion,
-                    23
-                )
-            END AS DtFaturamento,
-
+                WHEN v."DtFaturamento" IS NULL THEN NULL
+                WHEN v."DtFaturamento"::date < DATE '1900-01-01' THEN NULL
+                ELSE TO_CHAR(v."DtFaturamento"::date, 'YYYY-MM-DD')
+            END AS "DtFaturamento",
             CASE
-                WHEN f.FechaFacturacion IS NULL
-                    THEN NULL
-                WHEN f.FechaFacturacion < CONVERT(DATE, '19000101', 112)
-                    THEN NULL
-                WHEN f.FechaFacturacion > CAST(GETDATE() AS DATE)
-                    THEN NULL
-                ELSE DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                )
-            END AS diasEnStock,
-
-            v.VrNF_Compra
-
-        FROM dbo.Listado_Vehiculos_VW v
-
-        OUTER APPLY (
-            SELECT
-                COALESCE(
-                    TRY_CONVERT(
-                        DATE,
-                        LEFT(
-                            LTRIM(RTRIM(v.DtFaturamento)),
-                            10
-                        ),
-                        23
-                    ),
-                    TRY_CONVERT(
-                        DATE,
-                        LEFT(
-                            LTRIM(RTRIM(v.DtFaturamento)),
-                            8
-                        ),
-                        112
-                    )
-                ) AS FechaFacturacion
-        ) f
-
+                WHEN v."DtFaturamento" IS NULL THEN NULL
+                WHEN v."DtFaturamento"::date < DATE '1900-01-01' THEN NULL
+                WHEN v."DtFaturamento"::date > CURRENT_DATE THEN NULL
+                ELSE CURRENT_DATE - v."DtFaturamento"::date
+            END AS "diasEnStock",
+            v."VrNF_Compra"
+        FROM public.matriz_veiculosestoque v
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
-
+          AND v."NmMarca" = 'VOLKSWAGEN'
+          AND v."SitVeiculo" = 'L'
         ORDER BY
-            diasEnStock DESC,
-            v.DN_Atual,
-            v.NrChassi
+            "diasEnStock" DESC,
+            v."DN_Atual",
+            v."NrChassi"
     """
-
-    with connections["sqlserver_inv"].cursor() as cursor:
-        cursor.execute(
-            query,
-            parametros,
-        )
-
+    with connections["tdsql"].cursor() as cursor:
+        cursor.execute(query, parametros)
         columns = [
             column[0]
             for column in cursor.description
         ]
-
         rows = [
             dict(zip(columns, row))
             for row in cursor.fetchall()
         ]
-
     for row in rows:
         row["DN_Atual"] = str(
             row.get("DN_Atual") or ""
         ).strip()
-
         row["StEstoque"] = str(
             row.get("StEstoque") or ""
         ).strip()
-
         row["CondUso"] = str(
             row.get("CondUso") or ""
         ).strip()
-
         row["agenciaNombre"] = _agencia_nombre(
             row.get("DN_Atual")
         )
-
         row["estatusNombre"] = _estatus_nombre(
             row.get("StEstoque")
         )
-
         if row.get("VrNF_Compra") is not None:
             row["VrNF_Compra"] = float(
                 row["VrNF_Compra"]
             )
-
         if row.get("diasEnStock") is not None:
             row["diasEnStock"] = int(
                 row["diasEnStock"]
             )
-
     return JsonResponse({
         "data": rows
     })
-
 def get_inventario_costo(request):
     where_sql, parametros = _filtros_desde_request(
         request,
@@ -529,18 +398,18 @@ def get_inventario_costo(request):
     query = f"""
         SELECT
             COALESCE(
-                SUM(VrNF_Compra),
+                SUM("VrNF_Compra"),
                 0
             ) AS costo_total
 
-        FROM dbo.Listado_Vehiculos_VW
+        FROM public.matriz_veiculosestoque
 
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
+        AND "NmMarca" = 'VOLKSWAGEN'
+        AND "SitVeiculo" = 'L'
     """
 
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
         row = cursor.fetchone()
 
@@ -556,127 +425,33 @@ def get_inventario_costo(request):
 
 
 def get_inventario_antiguedad(request):
-    """
-    Calcula directamente en SQL Server la antigüedad.
-
-    Así evitamos volver a convertir las fechas en Python.
-    """
-
+    """Calcula la antigüedad directamente en PostgreSQL."""
     where_sql, parametros = _filtros_desde_request(
         request,
         solo_activos=True,
     )
-
     query = f"""
         SELECT
             CASE
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 30
-                    THEN '0-30'
-
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 60
-                    THEN '31-60'
-
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 90
-                    THEN '61-90'
-
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 120
-                    THEN '91-120'
-
+                WHEN CURRENT_DATE - v."DtFaturamento"::date <= 30 THEN '0-30'
+                WHEN CURRENT_DATE - v."DtFaturamento"::date <= 60 THEN '31-60'
+                WHEN CURRENT_DATE - v."DtFaturamento"::date <= 90 THEN '61-90'
+                WHEN CURRENT_DATE - v."DtFaturamento"::date <= 120 THEN '91-120'
                 ELSE '+120'
             END AS rango,
-
             COUNT(*) AS total
-
-        FROM dbo.Listado_Vehiculos_VW v
-
-        OUTER APPLY (
-            SELECT
-                COALESCE(
-                    TRY_CONVERT(
-                        DATE,
-                        LEFT(
-                            LTRIM(RTRIM(v.DtFaturamento)),
-                            10
-                        ),
-                        23
-                    ),
-                    TRY_CONVERT(
-                        DATE,
-                        LEFT(
-                            LTRIM(RTRIM(v.DtFaturamento)),
-                            8
-                        ),
-                        112
-                    )
-                ) AS FechaFacturacion
-        ) f
-
+        FROM public.matriz_veiculosestoque v
         WHERE {where_sql}
-
-          AND f.FechaFacturacion IS NOT NULL
-
-          AND f.FechaFacturacion >=
-              CONVERT(DATE, '19000101', 112)
-
-          AND f.FechaFacturacion <=
-              CAST(GETDATE() AS DATE)
-          AND NmMarca = 'VOLKSWAGEN'
-          AND SitVeiculo = 'L'
-
-        GROUP BY
-            CASE
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 30
-                    THEN '0-30'
-
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 60
-                    THEN '31-60'
-
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 90
-                    THEN '61-90'
-
-                WHEN DATEDIFF(
-                    DAY,
-                    f.FechaFacturacion,
-                    CAST(GETDATE() AS DATE)
-                ) <= 120
-                    THEN '91-120'
-
-                ELSE '+120'
-            END
+          AND v."DtFaturamento" IS NOT NULL
+          AND v."DtFaturamento"::date >= DATE '1900-01-01'
+          AND v."DtFaturamento"::date <= CURRENT_DATE
+          AND v."NmMarca" = 'VOLKSWAGEN'
+          AND v."SitVeiculo" = 'L'
+        GROUP BY rango
     """
-
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
-
     buckets = {
         "0-30": 0,
         "31-60": 0,
@@ -684,11 +459,9 @@ def get_inventario_antiguedad(request):
         "91-120": 0,
         "+120": 0,
     }
-
     for rango, total in rows:
         if rango in buckets:
             buckets[rango] = int(total)
-
     data = [
         {
             "rango": rango,
@@ -696,12 +469,9 @@ def get_inventario_antiguedad(request):
         }
         for rango, total in buckets.items()
     ]
-
     return JsonResponse({
         "data": data
     })
-
-
 def get_inventario_por_agencia(request):
     where_sql, parametros = _filtros_desde_request(
         request,
@@ -710,21 +480,21 @@ def get_inventario_por_agencia(request):
 
     query = f"""
         SELECT
-            DN_Atual,
+            "DN_Atual",
             COUNT(*) AS total
 
-        FROM dbo.Listado_Vehiculos_VW
+        FROM public.matriz_veiculosestoque
 
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
+        AND "NmMarca" = 'VOLKSWAGEN'
+        AND "SitVeiculo" = 'L'
 
-        GROUP BY DN_Atual
+        GROUP BY "DN_Atual"
 
         ORDER BY total DESC
     """
 
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -750,21 +520,21 @@ def get_inventario_por_estatus(request):
 
     query = f"""
         SELECT
-            StEstoque,
+            "StEstoque",
             COUNT(*) AS total
 
-        FROM dbo.Listado_Vehiculos_VW
+        FROM public.matriz_veiculosestoque
 
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
+        AND "NmMarca" = 'VOLKSWAGEN'
+        AND "SitVeiculo" = 'L'
 
-        GROUP BY StEstoque
+        GROUP BY "StEstoque"
 
         ORDER BY total DESC
     """
 
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -790,24 +560,24 @@ def get_inventario_por_marca(request):
 
     query = f"""
         SELECT
-            NmMarca,
-            NmFamilia,
+            "NmMarca",
+            "NmFamilia",
             COUNT(*) AS total
 
-        FROM dbo.Listado_Vehiculos_VW
+        FROM public.matriz_veiculosestoque
 
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
+        AND "NmMarca" = 'VOLKSWAGEN'
+        AND "SitVeiculo" = 'L'
 
         GROUP BY
-            NmMarca,
-            NmFamilia
+            "NmMarca",
+            "NmFamilia"
 
         ORDER BY total DESC
     """
 
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
@@ -833,24 +603,24 @@ def get_inventario_nuevo_usado(request):
 
     query = f"""
         SELECT
-            DN_Atual,
-            CondUso,
+            "DN_Atual",
+            "CondUso",
             COUNT(*) AS total
 
-        FROM dbo.Listado_Vehiculos_VW
+        FROM public.matriz_veiculosestoque
 
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
+        AND "NmMarca" = 'VOLKSWAGEN'
+        AND "SitVeiculo" = 'L'
 
         GROUP BY
-            DN_Atual,
-            CondUso
+            "DN_Atual",
+            "CondUso"
 
-        ORDER BY DN_Atual
+        ORDER BY "DN_Atual"
     """
 
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(
             query,
             parametros,
@@ -903,21 +673,21 @@ def get_inventario_nacional_importado(request):
 
     query = f"""
         SELECT
-            TpNacImp,
+            "TpNacImp",
             COUNT(*) AS total
 
-        FROM dbo.Listado_Vehiculos_VW
+        FROM public.matriz_veiculosestoque
 
         WHERE {where_sql}
-        AND NmMarca = 'VOLKSWAGEN'
-        AND SitVeiculo = 'L'
+        AND "NmMarca" = 'VOLKSWAGEN'
+        AND "SitVeiculo" = 'L'
 
-        GROUP BY TpNacImp
+        GROUP BY "TpNacImp"
 
         ORDER BY total DESC
     """
 
-    with connections["sqlserver_inv"].cursor() as cursor:
+    with connections["tdsql"].cursor() as cursor:
         cursor.execute(query, parametros)
         rows = cursor.fetchall()
 
