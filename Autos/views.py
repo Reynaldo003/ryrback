@@ -17,7 +17,7 @@ from Digitales.models import ExpedienteDigital
 
 class VWVNListView(APIView):
     """
-    Consulta los registros de dbo.VW_VN.
+    Consulta los registros de public."VW_VN".
 
     Es un endpoint de solo lectura.
     No modifica información de la tabla original.
@@ -104,7 +104,7 @@ class VWVNListView(APIView):
 
 # Autos Nuevos: siempre excluir unidades usadas.
         condiciones = [
-            "CondUso = %s"
+            '"CondUso" = %s'
         ]
 
         parametros = [
@@ -138,38 +138,38 @@ class VWVNListView(APIView):
 
         if agencia:
             condiciones.append(
-                "AGENCIA = %s"
+                '"AGENCIA" = %s'
             )
             parametros.append(agencia)
 
         if asesor:
             condiciones.append(
-                "Asesor = %s"
+                '"Asesor" = %s'
             )
             parametros.append(asesor)
 
         if fecha_desde:
             condiciones.append(
-                "DtEmissao >= %s"
+                '"DtEmissao" >= %s'
             )
             parametros.append(fecha_desde)
 
         if fecha_hasta:
             condiciones.append(
-                "DtEmissao <= %s"
+                '"DtEmissao" <= %s'
             )
             parametros.append(fecha_hasta)
 
         if familia:
             condiciones.append(
-                "NmFamilia = %s"
+                '"NmFamilia" = %s'
             )
             parametros.append(familia)
 
 
         if condicion_pago:
             condiciones.append(
-                "NmCondPgto = %s"
+                '"NmCondPgto" = %s'
             )
             parametros.append(condicion_pago)
 
@@ -181,7 +181,7 @@ class VWVNListView(APIView):
         # Después consultamos únicamente ProdOuServ de autos nuevos
         # y hacemos la intersección en Python.
         #
-        # De esta forma evitamos enviar a SQL Server un IN con todos
+        # De esta forma evitamos enviar a PostgreSQL un IN con todos
         # los VIN de ExpedienteDigital, que resulta costoso en VW_VN.
 
         if venta_digital in ("1", "true", "si", "sí"):
@@ -196,12 +196,12 @@ class VWVNListView(APIView):
             vins_coincidentes = []
 
             if vins_digitales:
-                with connections["sqlserver_inv"].cursor() as cursor:
+                with connections["tdsql"].cursor() as cursor:
                     cursor.execute(
                         """
-                        SELECT ProdOuServ
-                        FROM dbo.VW_VN
-                        WHERE CondUso = %s
+                        SELECT "ProdOuServ"
+                        FROM public."VW_VN"
+                        WHERE "CondUso" = %s
                         """,
                         [cond_uso],
                     )
@@ -221,7 +221,7 @@ class VWVNListView(APIView):
                 )
 
                 condiciones.append(
-                    f"ProdOuServ IN ({placeholders})"
+                    f'"ProdOuServ" IN ({placeholders})'
                 )
                 parametros.extend(vins_coincidentes)
             else:
@@ -238,11 +238,11 @@ class VWVNListView(APIView):
 
         consulta_total = f"""
             SELECT COUNT(*)
-            FROM dbo.VW_VN
+            FROM public."VW_VN"
             {where_sql}
         """
 
-        with connections["sqlserver_inv"].cursor() as cursor:
+        with connections["tdsql"].cursor() as cursor:
             cursor.execute(
                 consulta_total,
                 parametros,
@@ -254,59 +254,58 @@ class VWVNListView(APIView):
         # ---------------------------------------------------------
         # 5. CONSULTAMOS LOS REGISTROS
         #
-        # Los "AS" cambian los nombres originales de SQL Server
+        # Los "AS" cambian los nombres originales de PostgreSQL
         # por nombres más cómodos para usar desde React.
         # ---------------------------------------------------------
 
         consulta = f"""
             SELECT
-                Serie AS serie,
-                NrNota AS nr_nota,
-                TpProduto AS tp_producto,
-                ProdOuServ AS producto_servicio,
-                PrcUnitario AS precio_unitario,
-                VrBrutoItem AS valor_bruto_item,
-                InfluiEstat AS influye_estadistica,
-                VrDescItem AS valor_descuento_item,
-                CodCondPgto AS codigo_condicion_pago,
-                ValorFactura AS valor_factura,
-                ValorFacturaSnIva AS valor_factura_sin_iva,
-                ValorCompra AS valor_compra,
-                ISAN AS isan,
-                IVA AS iva,
-                CodEntidade AS codigo_entidad,
-                DtEmissao AS fecha_emision,
-                Situacao AS situacion,
-                TpNF AS tipo_nf,
-                NrMov AS nr_mov,
-                DrUltVenda AS fecha_ultima_venta,
-                RazaoSocial AS razon_social,
-                TpPessoa AS tipo_persona,
-                VrTotalProds AS valor_total_productos,
-                CodMarca AS codigo_marca,
-                NmMarca AS nombre_marca,
-                NmFamilia AS nombre_familia,
-                CondUso AS condicion_uso,
-                NmCondPgto AS nombre_condicion_pago,
-                Asesor AS asesor,
-                AGENCIA AS agencia
-            FROM dbo.VW_VN
+                "Serie" AS serie,
+                "NrNota" AS nr_nota,
+                "TpProduto" AS tp_producto,
+                "ProdOuServ" AS producto_servicio,
+                "PrcUnitario" AS precio_unitario,
+                "VrBrutoItem" AS valor_bruto_item,
+                "InfluiEstat" AS influye_estadistica,
+                "VrDescItem" AS valor_descuento_item,
+                "CodCondPgto" AS codigo_condicion_pago,
+                "ValorFactura" AS valor_factura,
+                "ValorFacturaSnIva" AS valor_factura_sin_iva,
+                "ValorCompra" AS valor_compra,
+                "ISAN" AS isan,
+                "IVA" AS iva,
+                "CodEntidade" AS codigo_entidad,
+                "DtEmissao" AS fecha_emision,
+                "Situacao" AS situacion,
+                "TpNF" AS tipo_nf,
+                "NrMov" AS nr_mov,
+                "DrUltVenda" AS fecha_ultima_venta,
+                "RazaoSocial" AS razon_social,
+                "TpPessoa" AS tipo_persona,
+                "VrTotalProds" AS valor_total_productos,
+                "CodMarca" AS codigo_marca,
+                "NmMarca" AS nombre_marca,
+                "NmFamilia" AS nombre_familia,
+                "CondUso" AS condicion_uso,
+                "NmCondPgto" AS nombre_condicion_pago,
+                "Asesor" AS asesor,
+                "AGENCIA" AS agencia
+            FROM public."VW_VN"
 
             {where_sql}
 
             ORDER BY
-                DtEmissao DESC,
-                NrNota DESC
+                "DtEmissao" DESC,
+                "NrNota" DESC
 
-            OFFSET %s ROWS
-            FETCH NEXT %s ROWS ONLY
+            LIMIT %s OFFSET %s
         """
 
 
         parametros_consulta = [
             *parametros,
-            offset,
             tamano_pagina,
+            offset,
         ]
 
 
@@ -314,7 +313,7 @@ class VWVNListView(APIView):
         # 6. EJECUTAMOS LA CONSULTA
         # ---------------------------------------------------------
 
-        with connections["sqlserver_inv"].cursor() as cursor:
+        with connections["tdsql"].cursor() as cursor:
             cursor.execute(
                 consulta,
                 parametros_consulta,
@@ -423,7 +422,7 @@ class VWVNListView(APIView):
 
 class VWVNDashboardView(APIView):
     """
-    Dashboard de Autos Nuevos basado en dbo.VW_VN.
+    Dashboard de Autos Nuevos basado en public."VW_VN".
 
     Reglas comerciales confirmadas:
 
@@ -501,7 +500,7 @@ class VWVNDashboardView(APIView):
         # ==========================================================
 
         condiciones = [
-            "CondUso = %s"
+            '"CondUso" = %s'
         ]
 
         parametros = [
@@ -512,7 +511,7 @@ class VWVNDashboardView(APIView):
         # Fecha inicial
         if fecha_desde:
             condiciones.append(
-                "DtEmissao >= %s"
+                '"DtEmissao" >= %s'
             )
             parametros.append(fecha_desde)
 
@@ -520,7 +519,7 @@ class VWVNDashboardView(APIView):
         # Fecha final
         if fecha_hasta:
             condiciones.append(
-                "DtEmissao <= %s"
+                '"DtEmissao" <= %s'
             )
             parametros.append(fecha_hasta)
 
@@ -528,7 +527,7 @@ class VWVNDashboardView(APIView):
         # Agencia
         if agencia:
             condiciones.append(
-                "AGENCIA = %s"
+                '"AGENCIA" = %s'
             )
             parametros.append(agencia)
 
@@ -536,7 +535,7 @@ class VWVNDashboardView(APIView):
         # Asesor
         if asesor:
             condiciones.append(
-                "Asesor = %s"
+                '"Asesor" = %s'
             )
             parametros.append(asesor)
 
@@ -544,7 +543,7 @@ class VWVNDashboardView(APIView):
         # Familia / modelo
         if familia:
             condiciones.append(
-                "NmFamilia = %s"
+                '"NmFamilia" = %s'
             )
             parametros.append(familia)
 
@@ -552,7 +551,7 @@ class VWVNDashboardView(APIView):
         # Condición de pago
         if condicion_pago:
             condiciones.append(
-                "NmCondPgto = %s"
+                '"NmCondPgto" = %s'
             )
             parametros.append(condicion_pago)
         # Venta digital
@@ -571,7 +570,7 @@ class VWVNDashboardView(APIView):
                 )
 
                 condiciones.append(
-                    f"ProdOuServ IN ({placeholders})"
+                    f'"ProdOuServ" IN ({placeholders})'
                 )
 
                 parametros.extend(
@@ -612,10 +611,10 @@ class VWVNDashboardView(APIView):
 
 
         # ==========================================================
-        # USAMOS EL SQL SERVER REAL DE VW_VN
+        # USAMOS EL POSTGRESQL REAL DE VW_VN
         # ==========================================================
 
-        with connections["sqlserver_inv"].cursor() as cursor:
+        with connections["tdsql"].cursor() as cursor:
 
             # ======================================================
             # 3. TOTALES PRINCIPALES
@@ -624,40 +623,40 @@ class VWVNDashboardView(APIView):
             consulta_totales = f"""
                 SELECT
 
-                    -- Cantidad de registros que tienen ProdOuServ.
-                    COUNT(ProdOuServ) AS productos,
+                    -- Cantidad de registros que tienen "ProdOuServ".
+                    COUNT("ProdOuServ") AS productos,
 
                     -- Emulación exacta del DAX de Rey.
                     COALESCE(
                         SUM(
                             CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
+                                WHEN "Situacao" = 'E' THEN 1
+                                WHEN "Situacao" = 'X' THEN 0
                                 ELSE NULL
                             END
                         ),
                         0
                     ) AS unidades_vendidas,
 
-                    -- IMPORTE = ValorFacturaSnIva - ISAN
+                    -- IMPORTE = "ValorFacturaSnIva" - "ISAN"
                     COALESCE(
                         SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
+                            COALESCE("ValorFacturaSnIva", 0)
                             -
-                            COALESCE(ISAN, 0)
+                            COALESCE("ISAN", 0)
                         ),
                         0
                     ) AS ingresos,
 
-                    -- COSTO = ValorCompra
+                    -- COSTO = "ValorCompra"
                     COALESCE(
                         SUM(
-                            COALESCE(ValorCompra, 0)
+                            COALESCE("ValorCompra", 0)
                         ),
                         0
                     ) AS costo
 
-                FROM dbo.VW_VN
+                FROM public."VW_VN"
 
                 {where_sql}
             """
@@ -700,8 +699,8 @@ class VWVNDashboardView(APIView):
             }
 
             consulta_vins_dashboard = f"""
-                SELECT ProdOuServ
-                FROM dbo.VW_VN
+                SELECT "ProdOuServ"
+                FROM public."VW_VN"
                 {where_sql}
             """
 
@@ -725,17 +724,17 @@ class VWVNDashboardView(APIView):
             consulta_meses = f"""
                 SELECT
 
-                    YEAR(DtEmissao) AS anio,
+                    EXTRACT(YEAR FROM "DtEmissao") AS anio,
 
-                    MONTH(DtEmissao) AS mes,
+                    EXTRACT(MONTH FROM "DtEmissao") AS mes,
 
-                    COUNT(ProdOuServ) AS productos,
+                    COUNT("ProdOuServ") AS productos,
 
                     COALESCE(
                         SUM(
                             CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
+                                WHEN "Situacao" = 'E' THEN 1
+                                WHEN "Situacao" = 'X' THEN 0
                                 ELSE NULL
                             END
                         ),
@@ -744,33 +743,33 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
+                            COALESCE("ValorFacturaSnIva", 0)
                             -
-                            COALESCE(ISAN, 0)
+                            COALESCE("ISAN", 0)
                         ),
                         0
                     ) AS ingresos,
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorCompra, 0)
+                            COALESCE("ValorCompra", 0)
                         ),
                         0
                     ) AS costo
 
-                FROM dbo.VW_VN
+                FROM public."VW_VN"
 
                 {where_sql}
 
-                    AND DtEmissao IS NOT NULL
+                    AND "DtEmissao" IS NOT NULL
 
                 GROUP BY
-                    YEAR(DtEmissao),
-                    MONTH(DtEmissao)
+                    EXTRACT(YEAR FROM "DtEmissao"),
+                    EXTRACT(MONTH FROM "DtEmissao")
 
                 ORDER BY
-                    YEAR(DtEmissao),
-                    MONTH(DtEmissao)
+                    EXTRACT(YEAR FROM "DtEmissao"),
+                    EXTRACT(MONTH FROM "DtEmissao")
             """
 
             cursor.execute(
@@ -807,19 +806,19 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         NULLIF(
-                            LTRIM(RTRIM(Asesor)),
+                            LTRIM(RTRIM("Asesor")),
                             ''
                         ),
                         'Sin asesor'
                     ) AS asesor,
 
-                    COUNT(ProdOuServ) AS productos,
+                    COUNT("ProdOuServ") AS productos,
 
                     COALESCE(
                         SUM(
                             CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
+                                WHEN "Situacao" = 'E' THEN 1
+                                WHEN "Situacao" = 'X' THEN 0
                                 ELSE NULL
                             END
                         ),
@@ -828,28 +827,28 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
+                            COALESCE("ValorFacturaSnIva", 0)
                             -
-                            COALESCE(ISAN, 0)
+                            COALESCE("ISAN", 0)
                         ),
                         0
                     ) AS ingresos,
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorCompra, 0)
+                            COALESCE("ValorCompra", 0)
                         ),
                         0
                     ) AS costo
 
-                FROM dbo.VW_VN
+                FROM public."VW_VN"
 
                 {where_sql}
 
                 GROUP BY
                     COALESCE(
                         NULLIF(
-                            LTRIM(RTRIM(Asesor)),
+                            LTRIM(RTRIM("Asesor")),
                             ''
                         ),
                         'Sin asesor'
@@ -876,19 +875,19 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         NULLIF(
-                            LTRIM(RTRIM(NmFamilia)),
+                            LTRIM(RTRIM("NmFamilia")),
                             ''
                         ),
                         'Sin familia'
                     ) AS familia,
 
-                    COUNT(ProdOuServ) AS productos,
+                    COUNT("ProdOuServ") AS productos,
 
                     COALESCE(
                         SUM(
                             CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
+                                WHEN "Situacao" = 'E' THEN 1
+                                WHEN "Situacao" = 'X' THEN 0
                                 ELSE NULL
                             END
                         ),
@@ -897,28 +896,28 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
+                            COALESCE("ValorFacturaSnIva", 0)
                             -
-                            COALESCE(ISAN, 0)
+                            COALESCE("ISAN", 0)
                         ),
                         0
                     ) AS ingresos,
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorCompra, 0)
+                            COALESCE("ValorCompra", 0)
                         ),
                         0
                     ) AS costo
 
-                FROM dbo.VW_VN
+                FROM public."VW_VN"
 
                 {where_sql}
 
                 GROUP BY
                     COALESCE(
                         NULLIF(
-                            LTRIM(RTRIM(NmFamilia)),
+                            LTRIM(RTRIM("NmFamilia")),
                             ''
                         ),
                         'Sin familia'
@@ -945,19 +944,19 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         NULLIF(
-                            LTRIM(RTRIM(NmCondPgto)),
+                            LTRIM(RTRIM("NmCondPgto")),
                             ''
                         ),
                         'Sin condición'
                     ) AS condicion_pago,
 
-                    COUNT(ProdOuServ) AS productos,
+                    COUNT("ProdOuServ") AS productos,
 
                     COALESCE(
                         SUM(
                             CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
+                                WHEN "Situacao" = 'E' THEN 1
+                                WHEN "Situacao" = 'X' THEN 0
                                 ELSE NULL
                             END
                         ),
@@ -966,28 +965,28 @@ class VWVNDashboardView(APIView):
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
+                            COALESCE("ValorFacturaSnIva", 0)
                             -
-                            COALESCE(ISAN, 0)
+                            COALESCE("ISAN", 0)
                         ),
                         0
                     ) AS ingresos,
 
                     COALESCE(
                         SUM(
-                            COALESCE(ValorCompra, 0)
+                            COALESCE("ValorCompra", 0)
                         ),
                         0
                     ) AS costo
 
-                FROM dbo.VW_VN
+                FROM public."VW_VN"
 
                 {where_sql}
 
                 GROUP BY
                     COALESCE(
                         NULLIF(
-                            LTRIM(RTRIM(NmCondPgto)),
+                            LTRIM(RTRIM("NmCondPgto")),
                             ''
                         ),
                         'Sin condición'
@@ -1018,12 +1017,12 @@ class VWVNDashboardView(APIView):
             def opciones_distintas(columna):
                 consulta = f"""
                     SELECT DISTINCT
-                        {columna} AS valor
-                    FROM dbo.VW_VN
-                    WHERE CondUso = %s
-                    AND {columna} IS NOT NULL
-                    AND LTRIM(RTRIM({columna})) <> ''
-                    ORDER BY {columna}
+                        "{columna}" AS valor
+                    FROM public."VW_VN"
+                    WHERE "CondUso" = %s
+                    AND "{columna}" IS NOT NULL
+                    AND BTRIM("{columna}") <> ''
+                    ORDER BY "{columna}"
                 """
 
                 cursor.execute(
