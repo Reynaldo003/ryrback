@@ -1,5 +1,6 @@
 # CompraRefacciones/views.py
 from datetime import timedelta
+
 from django.core.cache import cache
 from django.db import connections
 from django.utils.dateparse import parse_date
@@ -7,13 +8,22 @@ from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-from .serializers import CompraRefaccionesSerializer, CompraRefaccionPiezaSerializer
 
-DB_ALIAS = "sqlserver_inv"
-TABLA = "dbo.Matriz_FacturasRef"
-TABLA_PIEZAS = "dbo.Matriz_CompraRef"
-CACHE_OPCIONES = "compra_refacciones_facturas_opciones_v1"
+from CrmConformidad.jwt_authentication import CRMJWTAuthentication
+from .serializers import (
+    CompraRefaccionesSerializer,
+    CompraRefaccionPiezaSerializer,
+)
+
+
+DB_ALIAS = "tdsql"
+
+# PostgreSQL / tdsql_vw
+TABLA = "matriz_facturasref"
+TABLA_PIEZAS = "matriz_compraref"
+
+CACHE_OPCIONES = "compra_refacciones_facturas_postgresql_v1"
+
 
 # ============================================================
 # HELPERS
@@ -21,12 +31,9 @@ CACHE_OPCIONES = "compra_refacciones_facturas_opciones_v1"
 
 def texto_parametro(request, nombre):
     return str(
-        request.query_params.get(
-            nombre,
-            "",
-        )
-        or ""
+        request.query_params.get(nombre, "") or ""
     ).strip()
+
 
 def entero_parametro(
     request,
@@ -46,30 +53,19 @@ def entero_parametro(
         valor = default
 
     if minimo is not None:
-        valor = max(
-            minimo,
-            valor,
-        )
+        valor = max(minimo, valor)
 
     if maximo is not None:
-        valor = min(
-            maximo,
-            valor,
-        )
+        valor = min(maximo, valor)
 
     return valor
 
 
-def validar_fecha(
-    valor,
-    nombre,
-):
+def validar_fecha(valor, nombre):
     if not valor:
         return None
 
-    fecha = parse_date(
-        valor
-    )
+    fecha = parse_date(valor)
 
     if not fecha:
         raise ValueError(
@@ -82,29 +78,22 @@ def validar_fecha(
 def cursor_a_dicts(cursor):
     columnas = [
         columna[0]
-        for columna
-        in cursor.description
+        for columna in cursor.description
     ]
 
     return [
-        dict(
-            zip(
-                columnas,
-                fila,
-            )
-        )
-        for fila
-        in cursor.fetchall()
+        dict(zip(columnas, fila))
+        for fila in cursor.fetchall()
     ]
 
 
 # ============================================================
 # FILTROS
 #
-# TpItensNFE = '1' y SitNF = 'V'
-# SIEMPRE se aplican.
+# TpItensNFE = '1'
+# SitNF = 'V'
 #
-# El frontend NO puede cambiarlos.
+# Siempre se aplican desde el backend.
 # ============================================================
 
 def construir_filtros(request):
@@ -147,13 +136,9 @@ def construir_filtros(request):
             "'fecha_desde' no puede ser mayor que 'fecha_hasta'."
         )
 
-    # ========================================================
-    # FILTROS OBLIGATORIOS
-    # ========================================================
-
     condiciones = [
-        "TpItensNFE = %s",
-        "SitNF = %s",
+        '"TpItensNFE"::text = %s',
+        '"SitNF"::text = %s',
     ]
 
     parametros = [
@@ -163,13 +148,11 @@ def construir_filtros(request):
 
     # ========================================================
     # AGENCIA
-    #
-    # Solo si viene desde React.
     # ========================================================
 
     if agencia:
         condiciones.append(
-            "Agencia = %s"
+            '"Agencia" = %s'
         )
 
         parametros.append(
@@ -182,12 +165,19 @@ def construir_filtros(request):
 
     if fecha_desde:
         condiciones.append(
-            "DtEntrada >= %s"
+            '"DtEntrada" >= %s'
         )
 
         parametros.append(
             fecha_desde
         )
+
+    # ========================================================
+    # FECHA HASTA
+    #
+    # Se usa límite exclusivo para soportar tanto DATE como
+    # TIMESTAMP.
+    # ========================================================
 
     if fecha_hasta:
         fecha_hasta_exclusiva = (
@@ -196,7 +186,7 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            "DtEntrada < %s"
+            '"DtEntrada" < %s'
         )
 
         parametros.append(
@@ -205,21 +195,25 @@ def construir_filtros(request):
 
     # ========================================================
     # BUSCADOR
+    #
+    # SQL Server:
+    # CONVERT(VARCHAR(50), NrNota)
+    #
+    # PostgreSQL:
+    # "NrNota"::text
     # ========================================================
 
     if busqueda:
-        termino = (
-            f"%{busqueda}%"
-        )
+        termino = f"%{busqueda}%"
 
         condiciones.append(
             """
             (
-                Agencia LIKE %s
-                OR CONVERT(VARCHAR(50), NrNota) LIKE %s
-                OR Serie LIKE %s
-                OR NrPedUnPar LIKE %s
-                OR Proveedor LIKE %s
+                COALESCE("Agencia"::text, '') ILIKE %s
+                OR COALESCE("NrNota"::text, '') ILIKE %s
+                OR COALESCE("Serie"::text, '') ILIKE %s
+                OR COALESCE("NrPedUnPar"::text, '') ILIKE %s
+                OR COALESCE("Proveedor"::text, '') ILIKE %s
             )
             """
         )
@@ -234,19 +228,14 @@ def construir_filtros(request):
 
     where_sql = (
         "WHERE "
-        + " AND ".join(
-            condiciones
-        )
+        + " AND ".join(condiciones)
     )
 
-    return (
-        where_sql,
-        parametros,
-    )
+    return where_sql, parametros
 
 
 # ============================================================
-# LISTADO
+# LISTADO DE FACTURAS
 # ============================================================
 
 class CompraRefaccionesListView(APIView):
@@ -294,36 +283,29 @@ class CompraRefaccionesListView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # ====================================================
-        # UNA SOLA CONSULTA
-        #
-        # COUNT y SUM se calculan sobre todos los registros
-        # filtrados, aunque únicamente regresemos una página.
-        # ====================================================
-
         consulta = f"""
             SELECT
-                rowid__,
+                "rowid__" AS rowid__,
 
-                Agencia AS agencia,
+                "Agencia" AS agencia,
 
-                NrNota AS nrnota,
+                "NrNota" AS nrnota,
 
-                Serie AS serie,
+                "Serie" AS serie,
 
-                NrPedUnPar AS nrpedunpar,
+                "NrPedUnPar" AS nrpedunpar,
 
-                QtProdutos AS qtprodutos,
+                "QtProdutos" AS qtprodutos,
 
-                Proveedor AS proveedor,
+                "Proveedor" AS proveedor,
 
-                DtEmissao AS dtemissao,
+                "DtEmissao"::date AS dtemissao,
 
-                DtEntrada AS dtentrada,
+                "DtEntrada"::date AS dtentrada,
 
-                Subtotal AS subtotal,
+                "Subtotal" AS subtotal,
 
-                Total AS total,
+                "Total" AS total,
 
                 COUNT(*) OVER ()
                     AS total_registros,
@@ -331,7 +313,7 @@ class CompraRefaccionesListView(APIView):
                 COALESCE(
                     SUM(
                         COALESCE(
-                            QtProdutos,
+                            "QtProdutos",
                             0
                         )
                     ) OVER (),
@@ -341,7 +323,7 @@ class CompraRefaccionesListView(APIView):
                 COALESCE(
                     SUM(
                         COALESCE(
-                            Subtotal,
+                            "Subtotal",
                             0
                         )
                     ) OVER (),
@@ -351,7 +333,7 @@ class CompraRefaccionesListView(APIView):
                 COALESCE(
                     SUM(
                         COALESCE(
-                            Total,
+                            "Total",
                             0
                         )
                     ) OVER (),
@@ -363,24 +345,21 @@ class CompraRefaccionesListView(APIView):
             {where_sql}
 
             ORDER BY
-                DtEntrada DESC,
-                NrNota DESC,
-                rowid__ DESC
+                "DtEntrada" DESC NULLS LAST,
+                "NrNota" DESC NULLS LAST,
+                "rowid__" DESC NULLS LAST
 
-            OFFSET %s ROWS
-
-            FETCH NEXT %s ROWS ONLY
+            LIMIT %s
+            OFFSET %s
         """
 
         parametros_consulta = [
             *parametros,
-            offset,
             tamano_pagina,
+            offset,
         ]
 
-        with connections[
-            DB_ALIAS
-        ].cursor() as cursor:
+        with connections[DB_ALIAS].cursor() as cursor:
             cursor.execute(
                 consulta,
                 parametros_consulta,
@@ -441,6 +420,7 @@ class CompraRefaccionesListView(APIView):
                 "total": 0,
             }
 
+        # Quitamos las columnas auxiliares de las ventanas.
         for registro in registros:
             registro.pop(
                 "total_registros",
@@ -462,11 +442,9 @@ class CompraRefaccionesListView(APIView):
                 None,
             )
 
-        serializer = (
-            CompraRefaccionesSerializer(
-                registros,
-                many=True,
-            )
+        serializer = CompraRefaccionesSerializer(
+            registros,
+            many=True,
         )
 
         return Response(
@@ -487,6 +465,11 @@ class CompraRefaccionesListView(APIView):
                     serializer.data,
             }
         )
+
+
+# ============================================================
+# OPCIONES / AGENCIAS
+# ============================================================
 
 class CompraRefaccionesOpcionesView(APIView):
     authentication_classes = [
@@ -509,28 +492,24 @@ class CompraRefaccionesOpcionesView(APIView):
 
         consulta = f"""
             SELECT DISTINCT
-                Agencia
+                TRIM("Agencia"::text) AS agencia
 
             FROM {TABLA}
 
             WHERE
-                TpItensNFE = %s
+                "TpItensNFE"::text = %s
 
-                AND SitNF = %s
+                AND "SitNF"::text = %s
 
-                AND Agencia IS NOT NULL
+                AND "Agencia" IS NOT NULL
 
-                AND LTRIM(
-                    RTRIM(Agencia)
-                ) <> ''
+                AND TRIM("Agencia"::text) <> ''
 
             ORDER BY
-                Agencia
+                agencia
         """
 
-        with connections[
-            DB_ALIAS
-        ].cursor() as cursor:
+        with connections[DB_ALIAS].cursor() as cursor:
             cursor.execute(
                 consulta,
                 [
@@ -541,8 +520,7 @@ class CompraRefaccionesOpcionesView(APIView):
 
             agencias = [
                 fila[0]
-                for fila
-                in cursor.fetchall()
+                for fila in cursor.fetchall()
                 if fila[0]
             ]
 
@@ -561,72 +539,161 @@ class CompraRefaccionesOpcionesView(APIView):
             resultado
         )
 
+
+# ============================================================
+# PIEZAS DE UNA FACTURA
+# ============================================================
+
 class CompraRefaccionesPiezasView(APIView):
-    authentication_classes = [CRMJWTAuthentication]
-    permission_classes = [IsAuthenticated]
+    authentication_classes = [
+        CRMJWTAuthentication,
+    ]
+
+    permission_classes = [
+        IsAuthenticated,
+    ]
 
     def get(self, request):
-        agencia = texto_parametro(request,"agencia",)
-        nrnota_texto = texto_parametro(request,"nrnota",)
+        agencia = texto_parametro(
+            request,
+            "agencia",
+        )
+
+        nrnota_texto = texto_parametro(
+            request,
+            "nrnota",
+        )
+
         if not agencia:
-            return Response({"detail": "El parámetro 'agencia' es obligatorio."},status=status.HTTP_400_BAD_REQUEST,)
+            return Response(
+                {
+                    "detail":
+                        "El parámetro 'agencia' es obligatorio."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         if not nrnota_texto:
-            return Response({"detail": "El parámetro 'nrnota' es obligatorio."},status=status.HTTP_400_BAD_REQUEST,)
+            return Response(
+                {
+                    "detail":
+                        "El parámetro 'nrnota' es obligatorio."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         try:
-            nrnota = int(nrnota_texto)
-        except (TypeError,ValueError,):
-            return Response({"detail": "El parámetro 'nrnota' debe ser numérico."},status=status.HTTP_400_BAD_REQUEST,)
+            nrnota = int(
+                nrnota_texto
+            )
+
+        except (TypeError, ValueError):
+            return Response(
+                {
+                    "detail":
+                        "El parámetro 'nrnota' debe ser numérico."
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
 
         consulta = f"""
             SELECT
-                cr.rowid__ AS rowid__,
-                cr.Agencia AS agencia,
-                cr.NrNota AS nrnota,
-                cr.Serie AS serie,
-                cr.SeqItem AS seqitem,
-                cr.ProdServ AS prodserv,
-                cr.DescrProd AS descrprod,
-                cr.Unidade AS unidade,
-                cr.QtProdutos AS qtprodutos,
-                cr.VrUnitLiq AS vrunitliq,
-                cr.VrUnitBruto AS vrunitbruto,
-                cr.VrLiqTotal AS vrliqtotal,
-                cr.DtEntrada AS dtentrada,
-                cr.NrPedCompra AS nrpedcompra,
+                cr."rowid__" AS rowid__,
+
+                cr."Agencia" AS agencia,
+
+                cr."NrNota" AS nrnota,
+
+                cr."Serie" AS serie,
+
+                cr."SeqItem" AS seqitem,
+
+                cr."ProdServ" AS prodserv,
+
+                cr."DescrProd" AS descrprod,
+
+                cr."Unidade" AS unidade,
+
+                cr."QtProdutos" AS qtprodutos,
+
+                cr."VrUnitLiq" AS vrunitliq,
+
+                cr."VrUnitBruto" AS vrunitbruto,
+
+                cr."VrLiqTotal" AS vrliqtotal,
+
+                cr."DtEntrada"::date AS dtentrada,
+
+                cr."NrPedCompra" AS nrpedcompra,
+
                 COUNT(*) OVER ()
                     AS total_partidas,
-                COALESCE(SUM(COALESCE(cr.QtProdutos,0)) OVER (), 0) AS cantidad_total,
-                COALESCE(SUM(COALESCE(cr.VrLiqTotal,0)) OVER (),0) AS importe_total
+
+                COALESCE(
+                    SUM(
+                        COALESCE(
+                            cr."QtProdutos",
+                            0
+                        )
+                    ) OVER (),
+                    0
+                ) AS cantidad_total,
+
+                COALESCE(
+                    SUM(
+                        COALESCE(
+                            cr."VrLiqTotal",
+                            0
+                        )
+                    ) OVER (),
+                    0
+                ) AS importe_total
 
             FROM {TABLA_PIEZAS} cr
 
             WHERE
-                cr.Agencia = %s
-                AND cr.NrNota = %s
-                AND (cr.Unidade <> 'UN' OR cr.QtProdutos <> 1)
+                cr."Agencia" = %s
+
+                AND cr."NrNota" = %s
+
+                AND (
+                    cr."Unidade" <> 'UN'
+                    OR cr."QtProdutos" <> 1
+                )
 
                 AND EXISTS (
-                SELECT
+                    SELECT
                         1
+
                     FROM {TABLA} fr
+
                     WHERE
-                        fr.Agencia = cr.Agencia
-                        AND fr.NrNota = cr.NrNota
-                        AND fr.TpItensNFE = '1'
-                        AND fr.SitNF = 'V'
+                        fr."Agencia" = cr."Agencia"
+
+                        AND fr."NrNota" = cr."NrNota"
+
+                        AND fr."TpItensNFE"::text = '1'
+
+                        AND fr."SitNF"::text = 'V'
                 )
+
             ORDER BY
-                cr.SeqItem ASC,
-                cr.rowid__ ASC
+                cr."SeqItem" ASC NULLS LAST,
+                cr."rowid__" ASC NULLS LAST
         """
 
         with connections[DB_ALIAS].cursor() as cursor:
             cursor.execute(
-                consulta,[agencia, nrnota],
+                consulta,
+                [
+                    agencia,
+                    nrnota,
+                ],
             )
-            registros = cursor_a_dicts(cursor)
+
+            registros = cursor_a_dicts(
+                cursor
+            )
 
         # ====================================================
         # TOTALES
@@ -636,28 +703,76 @@ class CompraRefaccionesPiezasView(APIView):
             primero = registros[0]
 
             resumen = {
-                "partidas": int(primero.get("total_partidas",0,)or 0),
-                "cantidad_total": float(primero.get("cantidad_total",0,)or 0),
-                "importe_total": float(primero.get("importe_total",0,)or 0),
+                "partidas":
+                    int(
+                        primero.get(
+                            "total_partidas",
+                            0,
+                        )
+                        or 0
+                    ),
+
+                "cantidad_total":
+                    float(
+                        primero.get(
+                            "cantidad_total",
+                            0,
+                        )
+                        or 0
+                    ),
+
+                "importe_total":
+                    float(
+                        primero.get(
+                            "importe_total",
+                            0,
+                        )
+                        or 0
+                    ),
             }
 
         else:
-            resumen = {"partidas": 0,"cantidad_total": 0,"importe_total": 0,}
-
+            resumen = {
+                "partidas": 0,
+                "cantidad_total": 0,
+                "importe_total": 0,
+            }
 
         for registro in registros:
-            registro.pop("total_partidas",None,)
-            registro.pop("cantidad_total",None,)
-            registro.pop("importe_total",None,)
-        serializer = (CompraRefaccionPiezaSerializer(registros,many=True,))
+            registro.pop(
+                "total_partidas",
+                None,
+            )
+
+            registro.pop(
+                "cantidad_total",
+                None,
+            )
+
+            registro.pop(
+                "importe_total",
+                None,
+            )
+
+        serializer = CompraRefaccionPiezaSerializer(
+            registros,
+            many=True,
+        )
 
         return Response(
             {
                 "factura": {
-                    "agencia": agencia,
-                    "nrnota": nrnota,
+                    "agencia":
+                        agencia,
+
+                    "nrnota":
+                        nrnota,
                 },
-                "resumen": resumen,
-                "results": serializer.data,
+
+                "resumen":
+                    resumen,
+
+                "results":
+                    serializer.data,
             }
         )
