@@ -270,7 +270,15 @@ DATABASES = {
         "HOST": "45.82.73.31",
         "PORT": "5432",
     },
-
+    "tdsql": {
+        "ENGINE": "django.db.backends.postgresql",
+        "NAME": "tdsql_vw",
+        "USER": "israel",
+        "PASSWORD": "KVMR&R2026@",
+#        "HOST": "127.0.0.1",
+        "HOST": "45.82.73.31",
+        "PORT": "5432",
+    },
     'sqlserver': {
         'ENGINE': 'mssql',
         'NAME': 'TotalDealer_CO',
