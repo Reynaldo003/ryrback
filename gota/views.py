@@ -12,9 +12,9 @@ from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from .serializers import MatrizOSActivasSerializer
 
 
-DB_ALIAS = "sqlserver_inv"
+DB_ALIAS = "tdsql"
 
-TABLA_OS_ACTIVAS = "dbo.Matriz_OSActivas"
+TABLA_OS_ACTIVAS = "public.matriz_osactivas"
 
 CACHE_OPCIONES = "gota_opciones_v1"
 
@@ -23,21 +23,21 @@ CACHE_OPCIONES = "gota_opciones_v1"
 # Se usa una lista blanca para que el parámetro `ordering` nunca
 # llegue directo desde el cliente a la cláusula ORDER BY.
 ORDENAMIENTO_PERMITIDO = {
-    "agencia": "Agencia",
-    "nr_os": "NrOS",
-    "nr_atendimento": "NrAtendimento",
-    "tp_os": "TpOS",
-    "situacao": "Situacao",
-    "subtipo_os": "SubtipoOS",
-    "dt_abertura": "DtAbertura",
-    "hr_abertura": "HrAbertura",
-    "dt_fechamento": "DtFechamento",
-    "vr_total_pecas": "VrTotalPecas",
-    "vr_pecas": "VrPecas",
-    "vr_om": "VrOM",
-    "vr_adicionais": "VrAdicionais",
-    "vr_adiantam": "VrAdiantam",
-    "rowid": "rowid__",
+    "agencia": '"Agencia"',
+    "nr_os": '"NrOS"',
+    "nr_atendimento": '"NrAtendimento"',
+    "tp_os": '"TpOS"',
+    "situacao": '"Situacao"',
+    "subtipo_os": '"SubtipoOS"',
+    "dt_abertura": '"DtAbertura"',
+    "hr_abertura": '"HrAbertura"',
+    "dt_fechamento": '"DtFechamento"',
+    "vr_total_pecas": '"VrTotalPecas"',
+    "vr_pecas": '"VrPecas"',
+    "vr_om": '"VrOM"',
+    "vr_adicionais": '"VrAdicionais"',
+    "vr_adiantam": '"VrAdiantam"',
+    "rowid": '"rowid__"',
 }
 
 ORDENAMIENTO_POR_DEFECTO = "rowid"
@@ -48,50 +48,50 @@ ORDENAMIENTO_POR_DEFECTO_SQL = ORDENAMIENTO_PERMITIDO[
 
 SELECT_BASE = f"""
     SELECT
-        Agencia AS agencia,
-        NrAtendimento AS nr_atendimento,
-        NrOS AS nr_os,
-        TpOS AS tp_os,
-        DtFechamento AS dt_fechamento,
-        HrFechamento AS hr_fechamento,
-        Situacao AS situacao,
-        CodPagador AS cod_pagador,
-        VrAdicionais AS vr_adicionais,
-        VrAdiantam AS vr_adiantam,
-        VrTotalPecas AS vr_total_pecas,
-        VrPecas AS vr_pecas,
-        VrAcessor AS vr_acessor,
-        VrOM AS vr_om,
-        VrLubrif AS vr_lubrif,
-        VrCascos AS vr_cascos,
-        VrDescPeca AS vr_desc_peca,
-        MotivoCancel AS motivo_cancel,
-        PercDescPcs AS perc_desc_pcs,
-        CodCondPgto AS cod_cond_pgto,
-        CodOperFiscal AS cod_oper_fiscal,
-        SitGarantia AS sit_garantia,
-        SitFISS AS sit_fiss,
-        SubtipoOS AS subtipo_os,
-        DtAbertura AS dt_abertura,
-        HrAbertura AS hr_abertura,
-        TipoGolpe AS tipo_golpe,
-        TemFunPin AS tem_fun_pin,
-        NrGarHda AS nr_gar_hda,
-        Filler01 AS filler01,
-        Func_Cancel AS func_cancel,
-        Filler03 AS filler03,
-        TpServMarca AS tp_serv_marca,
-        CheckGM AS check_gm,
-        Flag_Pago AS flag_pago,
-        Uso_CFDI AS uso_cfdi,
-        AutoriCrhysler AS autori_crhysler,
-        FormaPago AS forma_pago,
-        DtDebloq AS dt_debloq,
-        Dt_Emi_Prefact AS dt_emi_prefact,
-        Hr_Emi_Prefact AS hr_emi_prefact,
-        HoraLLegada AS hora_llegada,
-        Id_Job AS id_job,
-        rowid__ AS rowid
+        \"Agencia\" AS agencia,
+        \"NrAtendimento\" AS nr_atendimento,
+        \"NrOS\" AS nr_os,
+        \"TpOS\" AS tp_os,
+        \"DtFechamento\" AS dt_fechamento,
+        \"HrFechamento\" AS hr_fechamento,
+        \"Situacao\" AS situacao,
+        \"CodPagador\" AS cod_pagador,
+        \"VrAdicionais\" AS vr_adicionais,
+        \"VrAdiantam\" AS vr_adiantam,
+        \"VrTotalPecas\" AS vr_total_pecas,
+        \"VrPecas\" AS vr_pecas,
+        \"VrAcessor\" AS vr_acessor,
+        \"VrOM\" AS vr_om,
+        \"VrLubrif\" AS vr_lubrif,
+        \"VrCascos\" AS vr_cascos,
+        \"VrDescPeca\" AS vr_desc_peca,
+        \"MotivoCancel\" AS motivo_cancel,
+        \"PercDescPcs\" AS perc_desc_pcs,
+        \"CodCondPgto\" AS cod_cond_pgto,
+        \"CodOperFiscal\" AS cod_oper_fiscal,
+        \"SitGarantia\" AS sit_garantia,
+        \"SitFISS\" AS sit_fiss,
+        \"SubtipoOS\" AS subtipo_os,
+        \"DtAbertura\" AS dt_abertura,
+        \"HrAbertura\" AS hr_abertura,
+        \"TipoGolpe\" AS tipo_golpe,
+        \"TemFunPin\" AS tem_fun_pin,
+        \"NrGarHda\" AS nr_gar_hda,
+        \"Filler01\" AS filler01,
+        \"Func_Cancel\" AS func_cancel,
+        \"Filler03\" AS filler03,
+        \"TpServMarca\" AS tp_serv_marca,
+        \"CheckGM\" AS check_gm,
+        \"Flag_Pago\" AS flag_pago,
+        \"Uso_CFDI\" AS uso_cfdi,
+        \"AutoriCrhysler\" AS autori_crhysler,
+        \"FormaPago\" AS forma_pago,
+        \"DtDebloq\" AS dt_debloq,
+        \"Dt_Emi_Prefact\" AS dt_emi_prefact,
+        \"Hr_Emi_Prefact\" AS hr_emi_prefact,
+        \"HoraLLegada\" AS hora_llegada,
+        \"Id_Job\" AS id_job,
+        \"rowid__\" AS rowid
     FROM {TABLA_OS_ACTIVAS}
 """
 
@@ -380,10 +380,10 @@ def construir_filtros(request):
         condiciones.append(
             """
             (
-                Agencia LIKE %s
-                OR CAST(NrOS AS VARCHAR(50)) LIKE %s
-                OR CAST(NrAtendimento AS VARCHAR(50)) LIKE %s
-                OR CAST(Id_Job AS VARCHAR(50)) LIKE %s
+                \"Agencia\" ILIKE %s
+                OR CAST(\"NrOS\" AS VARCHAR(50)) ILIKE %s
+                OR CAST(\"NrAtendimento\" AS VARCHAR(50)) ILIKE %s
+                OR CAST(\"Id_Job\" AS VARCHAR(50)) ILIKE %s
             )
             """
         )
@@ -398,12 +398,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f"Agencia IN ({marcadores})"
+            f'"Agencia" IN ({marcadores})'
         )
         parametros.extend(agencias_in)
     elif agencia:
         condiciones.append(
-            "Agencia = %s"
+            '"Agencia" = %s'
         )
         parametros.append(
             agencia
@@ -411,7 +411,7 @@ def construir_filtros(request):
 
     if nr_os is not None:
         condiciones.append(
-            "NrOS = %s"
+            '"NrOS" = %s'
         )
         parametros.append(
             nr_os
@@ -419,7 +419,7 @@ def construir_filtros(request):
 
     if nr_atendimento is not None:
         condiciones.append(
-            "NrAtendimento = %s"
+            '"NrAtendimento" = %s'
         )
         parametros.append(
             nr_atendimento
@@ -431,12 +431,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f"TpOS IN ({marcadores})"
+            f'"TpOS" IN ({marcadores})'
         )
         parametros.extend(tipos_os_in)
     elif tp_os:
         condiciones.append(
-            "TpOS = %s"
+            '"TpOS" = %s'
         )
         parametros.append(
             tp_os
@@ -448,12 +448,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f"Situacao IN ({marcadores})"
+            f'"Situacao" IN ({marcadores})'
         )
         parametros.extend(situaciones_in)
     elif situacao:
         condiciones.append(
-            "Situacao = %s"
+            '"Situacao" = %s'
         )
         parametros.append(
             situacao
@@ -465,12 +465,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f"SubtipoOS IN ({marcadores})"
+            f'"SubtipoOS" IN ({marcadores})'
         )
         parametros.extend(subtipos_os_in)
     elif subtipo_os:
         condiciones.append(
-            "SubtipoOS = %s"
+            '"SubtipoOS" = %s'
         )
         parametros.append(
             subtipo_os
@@ -478,7 +478,7 @@ def construir_filtros(request):
 
     if uso_cfdi:
         condiciones.append(
-            "Uso_CFDI = %s"
+            '"Uso_CFDI" = %s'
         )
         parametros.append(
             uso_cfdi
@@ -486,7 +486,7 @@ def construir_filtros(request):
 
     if forma_pago:
         condiciones.append(
-            "FormaPago = %s"
+            '"FormaPago" = %s'
         )
         parametros.append(
             forma_pago
@@ -494,7 +494,7 @@ def construir_filtros(request):
 
     if sit_garantia:
         condiciones.append(
-            "SitGarantia = %s"
+            '"SitGarantia" = %s'
         )
         parametros.append(
             sit_garantia
@@ -502,7 +502,7 @@ def construir_filtros(request):
 
     if cod_oper_fiscal is not None:
         condiciones.append(
-            "CodOperFiscal = %s"
+            '"CodOperFiscal" = %s'
         )
         parametros.append(
             cod_oper_fiscal
@@ -514,7 +514,7 @@ def construir_filtros(request):
     # compara por la parte de fecha para que el rango sea inclusivo completo.
     if fecha_desde:
         condiciones.append(
-            "CAST(DtAbertura AS DATE) >= %s"
+            "CAST(\"DtAbertura\" AS DATE) >= %s"
         )
         parametros.append(
             fecha_desde
@@ -522,7 +522,7 @@ def construir_filtros(request):
 
     if fecha_hasta:
         condiciones.append(
-            "CAST(DtAbertura AS DATE) <= %s"
+            "CAST(\"DtAbertura\" AS DATE) <= %s"
         )
         parametros.append(
             fecha_hasta
@@ -589,8 +589,7 @@ class GotaOrdenesListView(APIView):
             {where_sql}
             ORDER BY
                 {ordenamiento}
-            OFFSET %s ROWS
-            FETCH NEXT %s ROWS ONLY
+            LIMIT %s OFFSET %s
         """
 
         with connections[
@@ -608,8 +607,8 @@ class GotaOrdenesListView(APIView):
                 consulta,
                 [
                     *parametros,
-                    offset,
                     tamano_pagina,
+                    offset,
                 ],
             )
 
@@ -658,581 +657,165 @@ class GotaDashboardView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        consulta = f"""
-            SET NOCOUNT ON;
-
-            IF OBJECT_ID(
-                'tempdb..#BaseOS'
-            ) IS NOT NULL
-                DROP TABLE #BaseOS;
-
-
-            SELECT
-                *
-            INTO #BaseOS
-            FROM {TABLA_OS_ACTIVAS}
-            {where_sql};
-
-
-            -- =====================================================
-            -- 1. KPIs GENERALES
-            -- =====================================================
-
-            SELECT
-                COUNT(*) AS ordenes,
-
-                COUNT(
-                    DISTINCT Agencia
-                ) AS agencias,
-
-                COUNT(
-                    DISTINCT NrOS
-                ) AS ordenes_unicas,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrPecas,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_pecas,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrOM,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_mano_obra,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrLubrif,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_lubricantes,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrAcessor,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_accesorios,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrCascos,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_cascos,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrAdicionais,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_adicionales,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrAdiantam,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_adiantamientos,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrDescPeca,
-                            0
-                        )
-                    ),
-                    0
-                ) AS descuento_pecas,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrPecas,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrOM,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrLubrif,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrAcessor,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrCascos,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrAdicionais,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_total,
-
-                CAST(
-                    AVG(
-                        CAST(
-                            DATEDIFF(
-                                DAY,
-                                DtAbertura,
-                                GETDATE()
-                            ) AS FLOAT
-                        )
-                    ) AS DECIMAL(18, 2)
-                ) AS dias_promedio,
-
-                MAX(
-                    DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    )
-                ) AS dias_maximo
-            FROM #BaseOS;
-
-
-            -- =====================================================
-            -- 2. POR AGENCIA
-            -- =====================================================
-
-            SELECT
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(Agencia)
-                        ),
-                        ''
-                    ),
-                    'Sin agencia'
-                ) AS agencia,
-
-                COUNT(*) AS ordenes,
-
-                COALESCE(
-                    SUM(
-                        COALESCE(
-                            VrPecas,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrOM,
-                            0
-                        )
-                        +
-                        COALESCE(
-                            VrAdicionais,
-                            0
-                        )
-                    ),
-                    0
-                ) AS monto_total
-            FROM #BaseOS
-
-            GROUP BY
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(Agencia)
-                        ),
-                        ''
-                    ),
-                    'Sin agencia'
-                )
-
-            ORDER BY
-                ordenes DESC;
-
-
-            -- =====================================================
-            -- 3. POR TIPO DE ORDEN
-            -- =====================================================
-
-            SELECT
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(TpOS)
-                        ),
-                        ''
-                    ),
-                    'Sin tipo'
-                ) AS tp_os,
-
-                COUNT(*) AS ordenes
-            FROM #BaseOS
-
-            GROUP BY
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(TpOS)
-                        ),
-                        ''
-                    ),
-                    'Sin tipo'
-                )
-
-            ORDER BY
-                ordenes DESC;
-
-
-            -- =====================================================
-            -- 4. POR SUBTIPO
-            -- =====================================================
-
-            SELECT TOP 15
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(SubtipoOS)
-                        ),
-                        ''
-                    ),
-                    'Sin subtipo'
-                ) AS subtipo_os,
-
-                COUNT(*) AS ordenes
-            FROM #BaseOS
-
-            GROUP BY
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(SubtipoOS)
-                        ),
-                        ''
-                    ),
-                    'Sin subtipo'
-                )
-
-            ORDER BY
-                ordenes DESC;
-
-
-            -- =====================================================
-            -- 5. ANTIGÜEDAD (DÍAS EN TALLER)
-            -- =====================================================
-
-            SELECT
-                CASE
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 1
-                        THEN '0-1 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 3
-                        THEN '2-3 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 7
-                        THEN '4-7 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 15
-                        THEN '8-15 días'
-
-                    ELSE 'Más de 15 días'
-                END AS rango,
-
-                DATEDIFF(
-                    DAY,
-                    DtAbertura,
-                    GETDATE()
-                ) AS orden_dias,
-
-                COUNT(*) AS ordenes
-            FROM #BaseOS
-            WHERE
-                DtAbertura IS NOT NULL
-
-            GROUP BY
-                CASE
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 1
-                        THEN '0-1 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 3
-                        THEN '2-3 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 7
-                        THEN '4-7 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 15
-                        THEN '8-15 días'
-
-                    ELSE 'Más de 15 días'
-                END,
-
-                DATEDIFF(
-                    DAY,
-                    DtAbertura,
-                    GETDATE()
-                )
-            ORDER BY
-                orden_dias;
-
-
-            -- =====================================================
-            -- 6. APERTURAS POR DÍA
-            -- =====================================================
-
-            SELECT TOP 30
-                DtAbertura AS dia,
-
-                COUNT(*) AS ordenes
-            FROM #BaseOS
-            WHERE
-                DtAbertura IS NOT NULL
-
-            GROUP BY
-                DtAbertura
-
-            ORDER BY
-                DtAbertura DESC;
-
-
-            -- =====================================================
-            -- 7. PERMANENCIA POR AGENCIA Y TIPO DE ORDEN
-            --    Barra horizontal apilada: una fila por agencia, un
-            --    segmento por rango de permanencia y, dentro de cada
-            --    segmento, el desglose por tipo de orden para el tooltip.
-            -- =====================================================
-
-            SELECT TOP 3000
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(Agencia)
-                        ),
-                        ''
-                    ),
-                    'Sin agencia'
-                ) AS agencia,
-
-                CASE
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 1
-                        THEN '0-1 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 3
-                        THEN '2-3 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 7
-                        THEN '4-7 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 15
-                        THEN '8-15 días'
-
-                    ELSE 'Más de 15 días'
-                END AS rango,
-
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(TpOS)
-                        ),
-                        ''
-                    ),
-                    'Sin tipo'
-                ) AS tp_os,
-
-                COUNT(*) AS ordenes
-            FROM #BaseOS
-            WHERE
-                DtAbertura IS NOT NULL
-
-            GROUP BY
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(Agencia)
-                        ),
-                        ''
-                    ),
-                    'Sin agencia'
-                ),
-
-                CASE
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 1
-                        THEN '0-1 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 3
-                        THEN '2-3 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 7
-                        THEN '4-7 días'
-
-                    WHEN DATEDIFF(
-                        DAY,
-                        DtAbertura,
-                        GETDATE()
-                    ) <= 15
-                        THEN '8-15 días'
-
-                    ELSE 'Más de 15 días'
-                END,
-
-                COALESCE(
-                    NULLIF(
-                        LTRIM(
-                            RTRIM(TpOS)
-                        ),
-                        ''
-                    ),
-                    'Sin tipo'
-                )
-
-            ORDER BY
-                ordenes DESC;
-
-
-            DROP TABLE #BaseOS;
+        base = f"""
+            WITH base_os AS (
+                SELECT *
+                FROM {TABLA_OS_ACTIVAS}
+                {where_sql}
+            )
         """
 
-        def avanzar_hasta_resultado(cursor):
-            while cursor.description is None:
-                if not cursor.nextset():
-                    return False
+        dias = '(CURRENT_DATE - "DtAbertura"::date)'
 
-            return True
+        rango = f"""
+            CASE
+                WHEN {dias} <= 1 THEN '0-1 días'
+                WHEN {dias} <= 3 THEN '2-3 días'
+                WHEN {dias} <= 7 THEN '4-7 días'
+                WHEN {dias} <= 15 THEN '8-15 días'
+                ELSE 'Más de 15 días'
+            END
+        """
 
-        def leer_resultado(cursor):
-            if not avanzar_hasta_resultado(
-                cursor
-            ):
-                return []
-
-            filas = cursor_a_dicts(cursor)
-
-            cursor.nextset()
-
-            return filas
+        consultas = {
+            "totales": base + f"""
+                SELECT
+                    COUNT(*) AS ordenes,
+                    COUNT(DISTINCT "Agencia") AS agencias,
+                    COUNT(DISTINCT "NrOS") AS ordenes_unicas,
+                    COALESCE(SUM(COALESCE("VrPecas", 0)), 0) AS monto_pecas,
+                    COALESCE(SUM(COALESCE("VrOM", 0)), 0) AS monto_mano_obra,
+                    COALESCE(SUM(COALESCE("VrLubrif", 0)), 0) AS monto_lubricantes,
+                    COALESCE(SUM(COALESCE("VrAcessor", 0)), 0) AS monto_accesorios,
+                    COALESCE(SUM(COALESCE("VrCascos", 0)), 0) AS monto_cascos,
+                    COALESCE(SUM(COALESCE("VrAdicionais", 0)), 0) AS monto_adicionales,
+                    COALESCE(SUM(COALESCE("VrAdiantam", 0)), 0) AS monto_adiantamientos,
+                    COALESCE(SUM(COALESCE("VrDescPeca", 0)), 0) AS descuento_pecas,
+                    COALESCE(
+                        SUM(
+                            COALESCE("VrPecas", 0)
+                            + COALESCE("VrOM", 0)
+                            + COALESCE("VrLubrif", 0)
+                            + COALESCE("VrAcessor", 0)
+                            + COALESCE("VrCascos", 0)
+                            + COALESCE("VrAdicionais", 0)
+                        ),
+                        0
+                    ) AS monto_total,
+                    CAST(
+                        AVG(CAST({dias} AS DOUBLE PRECISION))
+                        AS NUMERIC(18, 2)
+                    ) AS dias_promedio,
+                    MAX({dias}) AS dias_maximo
+                FROM base_os
+            """,
+            "agencia": base + """
+                SELECT
+                    COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia') AS agencia,
+                    COUNT(*) AS ordenes,
+                    COALESCE(
+                        SUM(
+                            COALESCE("VrPecas", 0)
+                            + COALESCE("VrOM", 0)
+                            + COALESCE("VrAdicionais", 0)
+                        ),
+                        0
+                    ) AS monto_total
+                FROM base_os
+                GROUP BY COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia')
+                ORDER BY ordenes DESC
+            """,
+            "tipo": base + """
+                SELECT
+                    COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo') AS tp_os,
+                    COUNT(*) AS ordenes
+                FROM base_os
+                GROUP BY COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo')
+                ORDER BY ordenes DESC
+            """,
+            "subtipo": base + """
+                SELECT
+                    COALESCE(NULLIF(BTRIM("SubtipoOS"), ''), 'Sin subtipo') AS subtipo_os,
+                    COUNT(*) AS ordenes
+                FROM base_os
+                GROUP BY COALESCE(NULLIF(BTRIM("SubtipoOS"), ''), 'Sin subtipo')
+                ORDER BY ordenes DESC
+                LIMIT 15
+            """,
+            "antiguedad": base + f"""
+                SELECT
+                    {rango} AS rango,
+                    {dias} AS orden_dias,
+                    COUNT(*) AS ordenes
+                FROM base_os
+                WHERE "DtAbertura" IS NOT NULL
+                GROUP BY {rango}, {dias}
+                ORDER BY orden_dias
+            """,
+            "dia": base + """
+                SELECT
+                    "DtAbertura" AS dia,
+                    COUNT(*) AS ordenes
+                FROM base_os
+                WHERE "DtAbertura" IS NOT NULL
+                GROUP BY "DtAbertura"
+                ORDER BY "DtAbertura" DESC
+                LIMIT 30
+            """,
+            "permanencia": base + f"""
+                SELECT
+                    COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia') AS agencia,
+                    {rango} AS rango,
+                    COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo') AS tp_os,
+                    COUNT(*) AS ordenes
+                FROM base_os
+                WHERE "DtAbertura" IS NOT NULL
+                GROUP BY
+                    COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia'),
+                    {rango},
+                    COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo')
+                ORDER BY ordenes DESC
+                LIMIT 3000
+            """,
+        }
 
         with connections[
             DB_ALIAS
         ].cursor() as cursor:
 
-            cursor.execute(
-                consulta,
-                parametros,
+            def ejecutar(consulta):
+                cursor.execute(
+                    consulta,
+                    parametros,
+                )
+                return cursor_a_dicts(cursor)
+
+            resultados_totales = ejecutar(
+                consultas["totales"]
             )
 
-            resultados_totales = leer_resultado(
-                cursor
+            por_agencia = ejecutar(
+                consultas["agencia"]
             )
 
-            por_agencia = leer_resultado(
-                cursor
+            por_tipo = ejecutar(
+                consultas["tipo"]
             )
 
-            por_tipo = leer_resultado(
-                cursor
+            por_subtipo = ejecutar(
+                consultas["subtipo"]
             )
 
-            por_subtipo = leer_resultado(
-                cursor
+            por_antiguedad = ejecutar(
+                consultas["antiguedad"]
             )
 
-            por_antiguedad = leer_resultado(
-                cursor
+            por_dia = ejecutar(
+                consultas["dia"]
             )
 
-            por_dia = leer_resultado(
-                cursor
-            )
-
-            por_agencia_permanencia_tipo = leer_resultado(
-                cursor
+            por_agencia_permanencia_tipo = ejecutar(
+                consultas["permanencia"]
             )
 
         totales = (
@@ -1312,14 +895,14 @@ class GotaOpcionesView(APIView):
                     f"""
                     SELECT DISTINCT
                         LTRIM(
-                            RTRIM([{columna}])
+                            RTRIM(\"{columna}\")
                         ) AS valor
                     FROM {TABLA_OS_ACTIVAS}
 
                     WHERE
-                        [{columna}] IS NOT NULL
+                        \"{columna}\" IS NOT NULL
                         AND LTRIM(
-                                RTRIM([{columna}])
+                                RTRIM(\"{columna}\")
                             ) <> ''
 
                     ORDER BY
@@ -1336,8 +919,8 @@ class GotaOpcionesView(APIView):
             cursor.execute(
                 f"""
                 SELECT DISTINCT
-                    Situacao,
-                    SitGarantia
+                    \"Situacao\",
+                    \"SitGarantia\"
                 FROM {TABLA_OS_ACTIVAS}
                 """
             )
@@ -1354,11 +937,11 @@ class GotaOpcionesView(APIView):
             cursor.execute(
                 f"""
                 SELECT
-                    MIN(DtAbertura) AS fecha_minima,
-                    MAX(DtAbertura) AS fecha_maxima
+                    MIN(\"DtAbertura\") AS fecha_minima,
+                    MAX(\"DtAbertura\") AS fecha_maxima
                 FROM {TABLA_OS_ACTIVAS}
                 WHERE
-                    DtAbertura IS NOT NULL
+                    \"DtAbertura\" IS NOT NULL
                 """
             )
 
