@@ -1453,7 +1453,7 @@ def _buscar_campana_meta_por_source_id(source_id: str):
         return None
     try:
         return (
-            CampanaMeta.objects.using("sqlserver")
+            CampanaMeta.objects.using("tdsql")
             .filter(id_campana=id_campana)
             .only("id_campana", "sucursal", "nombre_campana")
             .first()
@@ -4323,7 +4323,7 @@ def campanas_meta_recientes(request):
         days = 30
 
     cutoff = date.today() - timedelta(days=days)
-    qs = CampanaMeta.objects.using("sqlserver").filter(
+    qs = CampanaMeta.objects.using("tdsql").filter(
         Q(inicio_campana__gte=cutoff) | Q(fin_campana__gte=cutoff)
     ).order_by("-inicio_campana", "-fin_campana")
 
