@@ -85,7 +85,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         params = self.request.query_params
-        qs = CampanaMeta.objects.using("postgres_meta").all()
+        qs = CampanaMeta.objects.using("tdsql").all()
 
         q = (params.get("q") or "").strip()
         sucursal = (params.get("sucursal") or "").strip()
@@ -244,7 +244,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
 
     @action(detail=False, methods=["get"], url_path="opciones")
     def opciones(self, request):
-        qs = CampanaMeta.objects.using("postgres_meta").all()
+        qs = CampanaMeta.objects.using("tdsql").all()
 
         sucursales = (
             qs.exclude(sucursal__isnull=True)
