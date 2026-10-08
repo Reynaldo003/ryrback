@@ -17,6 +17,7 @@ from .consumers import (
     obtener_numeros_telefono,
 )
 from .models import Notificacion
+from .conteos import obtener_conteos, invalidar_conteos
 from .serializers import FirebaseTokenSerializer, NotificacionSerializer
 from .services import notificar_mensaje_whatsapp
 
@@ -199,13 +200,7 @@ class ListadoNotificacionesView(APIView):
 
         return Response({
             "items": NotificacionSerializer(items, many=True).data,
-            "no_leidas": Notificacion.objects.filter(
-                usuario=request.user,
-                leida=False,
-            ).count(),
-            "total": Notificacion.objects.filter(
-                usuario=request.user,
-            ).count(),
+            **obtener_conteos(request.user.pk),
         })
 
 
@@ -219,15 +214,7 @@ class ConteoNoLeidasView(APIView):
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        return Response({
-            "no_leidas": Notificacion.objects.filter(
-                usuario=request.user,
-                leida=False,
-            ).count(),
-            "total": Notificacion.objects.filter(
-                usuario=request.user,
-            ).count(),
-        })
+        return Response(obtener_conteos(request.user.pk))
 
 
 class MarcarLeidaView(APIView):
@@ -281,14 +268,14 @@ class MarcarLeidaView(APIView):
 
             marcadas = (
                 usuario_qs
-                .filter(pk__in=ids_int)
+                .filter(pk__in=ids_int, leida=False)
                 .update(leida=True)
             )
 
+        if marcadas:
+            invalidar_conteos(request.user.pk)
         return Response({
             "ok": True,
             "marcadas": marcadas,
-            "no_leidas": (
-                usuario_qs.filter(leida=False).count()
-            ),
+            "no_leidas": obtener_conteos(request.user.pk)["no_leidas"],
         })

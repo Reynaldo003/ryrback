@@ -1,6 +1,7 @@
 #volkswagen
 #Digitales/views.py
 import json
+from time import perf_counter
 import logging
 import mimetypes
 import os
@@ -11,6 +12,7 @@ from datetime import date, timedelta
 import re
 
 from django.conf import settings
+from django.core.cache import cache
 from django.db import close_old_connections
 from django.core.files.storage import default_storage
 from django.db.models import (
@@ -2315,7 +2317,25 @@ def media_descargar_mp3_view(request, media_id: str):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def chats_list(request):
+    inicio = perf_counter()
+    ultimo_punto = inicio
+    tiempos = []
+
+    def medir(nombre):
+        nonlocal ultimo_punto
+        actual = perf_counter()
+        tiempos.append(f"{nombre};dur={(actual - ultimo_punto) * 1000:.2f}")
+        ultimo_punto = actual
+
+    def responder(respuesta):
+        respuesta["Server-Timing"] = ", ".join(
+            tiempos + [f"total;dur={(perf_counter() - inicio) * 1000:.2f}"]
+        )
+        return respuesta
+
     numero_asesor = _get_numero_asesor_request(request)
+    solo_conteos = str(request.query_params.get("solo_conteos", "0")).lower() in {"1", "true"}
+    incluir_conteos = solo_conteos or str(request.query_params.get("incluir_conteos", "1")).lower() not in {"0", "false"}
 
     paginado = (
         str(request.query_params.get("paginado", "0") or "")
@@ -2418,156 +2438,156 @@ def chats_list(request):
         cfg_linea.get("asesor_digital") or ""
     ).strip()
 
-    filtro_linea = Q(
-        cliente__mensajes_whatsapp__numero_asesor=numero_asesor
+    # EXISTS evita multiplicar expedientes por cada mensaje del cliente.
+    mensajes_linea = MensajeWhatsApp.objects.filter(
+        cliente_id=OuterRef("cliente_id"), numero_asesor=numero_asesor
     )
-
+    cualquier_mensaje = MensajeWhatsApp.objects.filter(cliente_id=OuterRef("cliente_id"))
+    qs = ExpedienteDigital.objects.select_related("cliente").annotate(
+        _tiene_mensaje_linea=Exists(mensajes_linea),
+        _tiene_cualquier_mensaje=Exists(cualquier_mensaje),
+    )
+    filtro_linea = Q(_tiene_mensaje_linea=True)
     if agencia_linea:
-        filtro_manual = (
-            Q(
-                cliente__mensajes_whatsapp__isnull=True
-            )
-            & Q(
-                agencia__iexact=agencia_linea
-            )
-        )
-
-        if (
-            not linea_tiene_reparto(numero_asesor)
-            and asesor_linea
-        ):
-            filtro_manual &= Q(
-                asesor_digital__iexact=asesor_linea
-            )
-
+        filtro_manual = Q(_tiene_cualquier_mensaje=False) & Q(agencia__iexact=agencia_linea)
+        if not linea_tiene_reparto(numero_asesor) and asesor_linea:
+            filtro_manual &= Q(asesor_digital__iexact=asesor_linea)
         filtro_linea |= filtro_manual
-
-    # ---------------------------------------------------------
-    # QUERYSET BASE
-    # ---------------------------------------------------------
-
-    qs = (
-        ExpedienteDigital.objects
-        .select_related("cliente")
-        .filter(filtro_linea)
-        .distinct()
-    )
+    qs = qs.filter(filtro_linea)
 
     qs = _filtrar_expedientes_por_asignacion(
         request=request,
         queryset=qs,
         numero_asesor=numero_asesor,
     )
+    medir("permisos")
 
     # ---------------------------------------------------------
     # CONTEOS DE LOS FILTROS
     # ---------------------------------------------------------
 
-    conteo_estados = qs.aggregate(
-        todos=Count(
-            "id",
-            distinct=True,
-        ),
-        pendiente_cotizacion=Count(
-            "id",
-            filter=(
-                Q(
-                    estado__icontains="pendiente de cotizaci"
-                )
-                |
-                Q(
-                    estado__icontains="pendiente cotizaci"
-                )
-            ),
-            distinct=True,
-        ),
-        seguimiento=Count(
-            "id",
-            filter=Q(
-                estado__icontains="seguimiento"
-            ),
-            distinct=True,
-        ),
-        calificado=Count(
-            "id",
-            filter=(
-                Q(
-                    estado__icontains="calificado"
-                )
-                & ~Q(
-                    estado__icontains="descalificado"
-                )
-            ),
-            distinct=True,
-        ),
-    )
+    conteos = None
+    cache_key = f"digitales:conteos:chats:v3:{getattr(request.user, 'pk', '')}:{numero_asesor}"
+    if incluir_conteos:
+        if solo_conteos:
+            conteos = cache.get(cache_key)
+            if conteos is not None:
+                medir("conteos_cache")
+        if conteos is None:
+            conteo_estados = qs.aggregate(
+                todos=Count(
+                    "id",
+            
+                ),
+                pendiente_cotizacion=Count(
+                    "id",
+                    filter=(
+                        Q(
+                            estado__icontains="pendiente de cotizaci"
+                        )
+                        |
+                        Q(
+                            estado__icontains="pendiente cotizaci"
+                        )
+                    ),
+            
+                ),
+                seguimiento=Count(
+                    "id",
+                    filter=Q(
+                        estado__icontains="seguimiento"
+                    ),
+            
+                ),
+                calificado=Count(
+                    "id",
+                    filter=(
+                        Q(
+                            estado__icontains="calificado"
+                        )
+                        & ~Q(
+                            estado__icontains="descalificado"
+                        )
+                    ),
+            
+                ),
+            )
 
-    # ---------------------------------------------------------
-    # TOTAL NO LEÍDOS
-    # ---------------------------------------------------------
+            medir("conteos_estados")
 
-    sub_lectura = (
-        LecturaWhatsApp.objects
-        .filter(
-            expediente_id=OuterRef("pk"),
-            numero_asesor=numero_asesor,
-        )
-        .values(
-            "last_read_at"
-        )[:1]
-    )
+            # ---------------------------------------------------------
+            # TOTAL NO LEÍDOS
+            # ---------------------------------------------------------
 
-    sub_entrantes = (
-        MensajeWhatsApp.objects
-        .filter(
-            telefono=OuterRef(
-                "cliente__telefono"
-            ),
-            numero_asesor=numero_asesor,
-            direction=MensajeWhatsApp.Direccion.IN,
-        )
-    )
+            sub_lectura = (
+                LecturaWhatsApp.objects
+                .filter(
+                    expediente_id=OuterRef("pk"),
+                    numero_asesor=numero_asesor,
+                )
+                .values(
+                    "last_read_at"
+                )[:1]
+            )
 
-    total_no_leidos = (
-        qs.annotate(
-            _last_read=Subquery(
-                sub_lectura
-            ),
-            _tiene_in=Exists(
-                sub_entrantes
-            ),
-            _tiene_in_nuevo=Exists(
-                sub_entrantes.filter(
-                    created_at__gt=OuterRef(
-                        "_last_read"
+            sub_entrantes = (
+                MensajeWhatsApp.objects
+                .filter(
+                    telefono=OuterRef(
+                        "cliente__telefono"
+                    ),
+                    numero_asesor=numero_asesor,
+                    direction=MensajeWhatsApp.Direccion.IN,
+                )
+            )
+
+            total_no_leidos = (
+                qs.annotate(
+                    _last_read=Subquery(
+                        sub_lectura
+                    ),
+                    _tiene_in=Exists(
+                        sub_entrantes
+                    ),
+                    _tiene_in_nuevo=Exists(
+                        sub_entrantes.filter(
+                            created_at__gt=OuterRef(
+                                "_last_read"
+                            )
+                        )
+                    ),
+                )
+                .filter(
+                    Q(
+                        _last_read__isnull=True,
+                        _tiene_in=True,
+                    )
+                    |
+                    Q(
+                        _last_read__isnull=False,
+                        _tiene_in_nuevo=True,
                     )
                 )
-            ),
-        )
-        .filter(
-            Q(
-                _last_read__isnull=True,
-                _tiene_in=True,
+                .count()
             )
-            |
-            Q(
-                _last_read__isnull=False,
-                _tiene_in_nuevo=True,
-            )
-        )
-        .count()
-    )
 
-    conteos = {
-        "todos": conteo_estados["todos"] or 0,
-        "no_leidos": total_no_leidos or 0,
-        "pendiente_cotizacion":
-            conteo_estados["pendiente_cotizacion"] or 0,
-        "seguimiento":
-            conteo_estados["seguimiento"] or 0,
-        "calificado":
-            conteo_estados["calificado"] or 0,
-    }
+            medir("conteo_no_leidos_global")
+
+            conteos = {
+                "todos": conteo_estados["todos"] or 0,
+                "no_leidos": total_no_leidos or 0,
+                "pendiente_cotizacion":
+                    conteo_estados["pendiente_cotizacion"] or 0,
+                "seguimiento":
+                    conteo_estados["seguimiento"] or 0,
+                "calificado":
+                    conteo_estados["calificado"] or 0,
+            }
+
+            cache.set(cache_key, conteos, timeout=120)
+
+    if solo_conteos:
+        return responder(Response({"ok": True, "conteos": conteos}))
 
     # ---------------------------------------------------------
     # FILTROS DE CHAT
@@ -2665,7 +2685,7 @@ def chats_list(request):
             "last_time",
             "creado",
         ),
-    ).distinct()
+    )
 
     # ---------------------------------------------------------
     # FILTRO SOLO NO LEÍDOS
@@ -2871,6 +2891,8 @@ def chats_list(request):
 
         has_more = False
 
+    medir("consulta_pagina")
+
     # ---------------------------------------------------------
     # NO LEÍDOS DE LOS RESULTADOS
     # ---------------------------------------------------------
@@ -2879,6 +2901,8 @@ def chats_list(request):
         expedientes,
         numero_asesor,
     )
+
+    medir("no_leidos_pagina")
 
     ids_expedientes = [exp.id for exp in expedientes]
     bloqueos_whatsapp = {
@@ -2889,6 +2913,18 @@ def chats_list(request):
         )
     }
 
+    # Una única consulta para configuración y otra para las conversaciones IA
+    # de la página, en lugar de dos consultas por chat.
+    from .ia_config import obtener_config_ia_para_numero
+    configuracion_ia, origen_configuracion_ia = obtener_config_ia_para_numero(numero_asesor)
+    conversaciones_ia = {
+        item.expediente_id: item
+        for item in ConversacionIA.objects.filter(
+            expediente_id__in=ids_expedientes, numero_asesor=numero_asesor
+        )
+    }
+
+    medir("precarga_ia")
     data = []
 
     # ---------------------------------------------------------
@@ -2911,6 +2947,9 @@ def chats_list(request):
         estado_ia = obtener_estado_ia_conversacion(
             numero_asesor=numero_asesor,
             expediente=exp,
+            config_precargada=configuracion_ia,
+            origen_config_precargado=origen_configuracion_ia,
+            conversacion_precargada=conversaciones_ia.get(exp.id),
         )
 
         data.append({
@@ -2970,13 +3009,13 @@ def chats_list(request):
     # ---------------------------------------------------------
 
     if not paginado:
-        return Response(
+        return responder(Response(
             {
                 "results": data,
                 "conteos": conteos,
             },
             status=status.HTTP_200_OK,
-        )
+        ))
 
     ultimo = (
         expedientes[-1]
@@ -2994,7 +3033,7 @@ def chats_list(request):
         else ""
     )
 
-    return Response(
+    return responder(Response(
         {
             "ok": True,
             "results": data,
@@ -3027,7 +3066,7 @@ def chats_list(request):
             },
         },
         status=status.HTTP_200_OK,
-    )
+    ))
 
 
 def _obtener_origen_preview_para_contacto(*, expediente, tel, numero_asesor):

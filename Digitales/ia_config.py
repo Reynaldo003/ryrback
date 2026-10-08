@@ -150,16 +150,19 @@ def _ia_esta_en_horario(horarios: dict) -> bool:
     return False
 
 
-def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expediente=None) -> dict[str, Any]:
+def obtener_estado_ia_conversacion(*, numero_asesor: str, tel: str = "", expediente=None, config_precargada=Ellipsis, origen_config_precargado="", conversacion_precargada=Ellipsis) -> dict[str, Any]:
     numero_asesor = normaliza_tel_mx(numero_asesor or "")
     tel = normaliza_tel_mx(tel or "")
 
-    config, config_origen = obtener_config_ia_para_numero(numero_asesor)
+    if config_precargada is Ellipsis:
+        config, config_origen = obtener_config_ia_para_numero(numero_asesor)
+    else:
+        config, config_origen = config_precargada, origen_config_precargado
     if expediente is None and tel:
         expediente = _obtener_expediente_por_tel(tel)
 
-    conversacion = None
-    if expediente and numero_asesor:
+    conversacion = None if conversacion_precargada is Ellipsis else conversacion_precargada
+    if conversacion_precargada is Ellipsis and expediente and numero_asesor:
         conversacion = ConversacionIA.objects.filter(
             expediente=expediente,
             numero_asesor=numero_asesor,

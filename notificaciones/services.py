@@ -9,6 +9,7 @@ from channels.layers import get_channel_layer
 from citas.models import normaliza_tel_mx
 from CrmConformidad.models import FirebaseToken, Usuario
 from Digitales.sett import WHATSAPP_LINES
+from .conteos import invalidar_conteos
 
 
 def _texto(valor):
@@ -260,6 +261,7 @@ def notificar_mensaje_whatsapp(
                 ),
                 url=payload_ws["url"],
             )
+            invalidar_conteos(notificado.pk)
 
         print("NOTIFICACION BD:", {
             "linea": numero_asesor,
