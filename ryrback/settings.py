@@ -192,7 +192,18 @@ CHANNEL_LAYERS = {
         }
     },
 }
+# ==========================================
+# CACHÉ COMPARTIDA DE DJANGO - REDIS
+# ==========================================
 
+CACHES = {
+    "default": {
+        "BACKEND": "django.core.cache.backends.redis.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6380/1",
+        "TIMEOUT": 60,
+        "KEY_PREFIX": "crm_ryr",
+    }
+}
 # Modo local sin Redis: python manage.py runserver usa un solo proceso,
 # así que un channel layer en memoria alcanza para probar notificaciones.
 # En producción (daphne/uvicorn, Redis accesible) se usa Redis.
