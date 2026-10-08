@@ -13,7 +13,7 @@ from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from Digitales.models import ExpedienteDigital
 from .serializers import VWVNSerializer
 
-BASE_DATOS = "tdsql_vw"
+BASE_DATOS = "tdsql"
 TABLA = 'public."VW_VN"'
 # Coincide con la clasificación visual que ya utiliza VentasVN.jsx.
 FAMILIAS_COMERCIALES = ("CADDY", "CRAFTER", "TRANSPORTER", "AMAROK", "CARAVELLE")
