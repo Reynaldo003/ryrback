@@ -1075,7 +1075,7 @@ def _normalizar_modelo(value: str) -> str:
 
 def _campanas_mes(*, inicio, fin, agencia_filtro: str = "") -> list[dict]:
     inicio_date, fin_date = inicio.date(), fin.date()
-    qs = CampanaMetaAds.objects.using("sqlserver").filter(
+    qs = CampanaMetaAds.objects.using("tdsql").filter(
         Q(inicio_informe__lt=fin_date, fin_informe__gte=inicio_date)
         | Q(inicio_campana__lt=fin_date, fin_campana__gte=inicio_date)
         | Q(inicio_campana__gte=inicio_date, inicio_campana__lt=fin_date)

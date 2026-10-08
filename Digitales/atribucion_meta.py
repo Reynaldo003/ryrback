@@ -146,7 +146,7 @@ def buscar_campana_por_id_campana(id_campana):
 
     try:
         return (
-            CampanaMeta.objects.using("sqlserver")
+            CampanaMeta.objects.using("tdsql")
             .filter(id_campana=id_campana_int)
             .only("id_campana", "sucursal", "nombre_campana")
             .first()
