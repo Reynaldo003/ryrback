@@ -280,6 +280,48 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             numero_asesor=numero_asesor,
         )
 
+    def _queryset_coordinador_todas_las_lineas(self, user):
+        # Los permisos salen del usuario autenticado, NUNCA de números enviados por React.
+        numeros = [
+            numero for numero in _numeros_whatsapp_usuario(user)
+            if numero in WHATSAPP_LINES
+        ]
+        queryset = self._base_queryset()
+        if not numeros:
+            return queryset.none()
+
+        # Un solo EXISTS para las líneas autorizadas, sin JOIN ni DISTINCT.
+        mensajes_permitidos = MensajeWhatsApp.objects.filter(
+            cliente_id=OuterRef("cliente_id"),
+            numero_asesor__in=numeros,
+        )
+        cualquier_mensaje = MensajeWhatsApp.objects.filter(
+            cliente_id=OuterRef("cliente_id"),
+        )
+        queryset = queryset.annotate(
+            _mensajes_lineas_permitidas=Exists(mensajes_permitidos),
+            _tiene_cualquier_mensaje=Exists(cualquier_mensaje),
+        )
+        filtro = Q(_mensajes_lineas_permitidas=True)
+
+        # Conserva el caso de expedientes manuales sin mensajes de WhatsApp.
+        filtros_manuales = Q()
+        for numero in numeros:
+            cfg = WHATSAPP_LINES.get(numero) or {}
+            agencia = str(cfg.get("agencia") or "").strip()
+            asesor = str(cfg.get("asesor_digital") or "").strip()
+            if not agencia:
+                continue
+            condicion = Q(agencia__iexact=agencia)
+            if not linea_tiene_reparto(numero) and asesor:
+                condicion &= Q(asesor_digital__iexact=asesor)
+            filtros_manuales |= condicion
+
+        if filtros_manuales.children:
+            filtro |= Q(_tiene_cualquier_mensaje=False) & filtros_manuales
+
+        return queryset.filter(filtro)
+
     def _aplicar_filtros_listado(self, queryset):
         params = self.request.query_params
 
@@ -475,59 +517,34 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         return datos
 
     def get_queryset(self):
-        user = getattr(
-            self.request,
-            "user",
-            None,
-        )
-
-        es_admin = _usuario_es_admin(
-            user
-        )
-
-        accion = getattr(
-            self,
-            "action",
-            "",
-        )
+        user = getattr(self.request, "user", None)
+        es_admin = _usuario_es_admin(user)
+        accion = getattr(self, "action", "")
 
         if es_admin:
             if accion in {
-                "retrieve",
-                "update",
-                "partial_update",
-                "destroy",
-                "evidencias",
-                "eliminar_evidencia",
+                "retrieve", "update", "partial_update", "destroy",
+                "evidencias", "eliminar_evidencia",
             }:
                 return self._base_queryset()
-
             if self._solicita_todos():
                 queryset = self._base_queryset()
+                return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
 
-                if accion == "list":
-                    queryset = self._aplicar_filtros_listado(
-                        queryset
-                    )
+        # Solo coordinadores digitales autenticados pueden reunir sus líneas;
+        # los demás usuarios continúan usando la validación original por línea.
+        if (
+            accion == "list"
+            and not es_admin
+            and self._solicita_todos()
+            and _usuario_puede_ver_toda_linea(user)
+        ):
+            queryset = self._queryset_coordinador_todas_las_lineas(user)
+            return self._aplicar_filtros_listado(queryset)
 
-                return queryset
-
-        numero_asesor = (
-            _get_numero_asesor_request(
-                self.request
-            )
-        )
-
-        queryset = self._queryset_por_linea(
-            numero_asesor
-        )
-
-        if accion == "list":
-            queryset = self._aplicar_filtros_listado(
-                queryset
-            )
-
-        return queryset
+        numero_asesor = _get_numero_asesor_request(self.request)
+        queryset = self._queryset_por_linea(numero_asesor)
+        return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
 
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(
