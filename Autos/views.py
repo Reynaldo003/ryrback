@@ -1,1090 +1,362 @@
-#Autos/views.py
-from django.shortcuts import render
-
-# Create your views here.
-
+# Autos/views.py
+from django.core.cache import cache
 from django.db import connections
-
+from django.db.models import F
+from django.db.models.functions import Trim, Upper
+from django.utils.dateparse import parse_date
 from rest_framework import status
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-
-from .serializers import VWVNSerializer
 from Digitales.models import ExpedienteDigital
+from .serializers import VWVNSerializer
+
+BASE_DATOS = "tdsql_vw"
+TABLA = 'public."VW_VN"'
+# Coincide con la clasificación visual que ya utiliza VentasVN.jsx.
+FAMILIAS_COMERCIALES = ("CADDY", "CRAFTER", "TRANSPORTER", "AMAROK", "CARAVELLE")
+CONDICION_COMERCIAL = "(" + " OR ".join(
+    f'"NmFamilia" ILIKE \'%{modelo}%\'' for modelo in FAMILIAS_COMERCIALES
+) + ")"
+EXPRESION_VIN = 'UPPER(BTRIM("ProdOuServ"))'
+EXPRESION_AGENCIA = f'CASE WHEN {CONDICION_COMERCIAL} THEN \'R&R VC\' ELSE "AGENCIA" END'
+
+
+def cursor_a_dicts(cursor):
+    columnas = [columna[0] for columna in cursor.description]
+    return [dict(zip(columnas, fila)) for fila in cursor.fetchall()]
+
+
+def normalizar_vin(valor):
+    return str(valor or "").strip().upper()
+
+
+def obtener_vins_digitales():
+    """Lee los VIN de CRM. Caché corta para evitar repetir el cruce por cada filtro."""
+    clave = "vw_vn_vins_digitales"
+    vins_cache = cache.get(clave)
+    if vins_cache is not None:
+        return vins_cache
+    consulta = (
+        ExpedienteDigital.objects
+        .exclude(vin_facturado__isnull=True)
+        .exclude(vin_facturado="")
+        .values_list("vin_facturado", flat=True)
+    )
+    vins = sorted({
+        vin for valor in consulta.iterator(chunk_size=2000)
+        if (vin := normalizar_vin(valor))
+    })
+    cache.set(clave, vins, timeout=60)
+    return vins
+
+
+def leer_filtros(request, fecha_desde=None, fecha_hasta=None):
+    """Normaliza los filtros comunes a detalle y dashboard."""
+    parametros = request.query_params
+    cond_uso = str(parametros.get("cond_uso", "N") or "N").strip().upper()
+    if cond_uso not in ("N", "U"):
+        cond_uso = "N"
+
+    valores = {
+        "cond_uso": cond_uso,
+        "q": str(parametros.get("q", "") or "").strip(),
+        "agencia": str(parametros.get("agencia", "") or "").strip(),
+        "asesor": str(parametros.get("asesor", "") or "").strip(),
+        "familia": str(parametros.get("familia", "") or "").strip(),
+        "condicion_pago": str(parametros.get("condicion_pago", "") or "").strip(),
+        "fecha_desde": fecha_desde if fecha_desde is not None else str(parametros.get("fecha_desde", "") or "").strip(),
+        "fecha_hasta": fecha_hasta if fecha_hasta is not None else str(parametros.get("fecha_hasta", "") or "").strip(),
+        "venta_digital": str(parametros.get("venta_digital", "") or "").strip().lower(),
+    }
+    for clave in ("fecha_desde", "fecha_hasta"):
+        if valores[clave] and parse_date(valores[clave]) is None:
+            raise ValueError(f"{clave} debe tener formato AAAA-MM-DD")
+    return valores
+
+
+def construir_where(filtros, vins_digitales=None):
+    """SQL parametrizado; las únicas expresiones dinámicas proceden de constantes internas."""
+    # N y U se validan en leer_filtros. El literal permite utilizar índices parciales.
+    condiciones = [f'"CondUso" = {filtros["cond_uso"]!r}']
+    parametros = []
+    if filtros["fecha_desde"]:
+        condiciones.append('"DtEmissao" >= %s')
+        parametros.append(filtros["fecha_desde"])
+    if filtros["fecha_hasta"]:
+        condiciones.append('"DtEmissao" <= %s')
+        parametros.append(filtros["fecha_hasta"])
+
+    agencia = filtros["agencia"]
+    if agencia == "R&R VC":
+        condiciones.append(CONDICION_COMERCIAL)
+    elif agencia:
+        condiciones.append('"AGENCIA" = %s')
+        condiciones.append(f'("NmFamilia" IS NULL OR NOT {CONDICION_COMERCIAL})')
+        parametros.append(agencia)
+
+    for clave, columna in (
+        ("asesor", '"Asesor"'),
+        ("familia", '"NmFamilia"'),
+        ("condicion_pago", '"NmCondPgto"'),
+    ):
+        if filtros[clave]:
+            condiciones.append(f"{columna} = %s")
+            parametros.append(filtros[clave])
+
+    if filtros["q"]:
+        columnas = ('"Serie"', '"RazaoSocial"', '"Asesor"', '"AGENCIA"', '"NmFamilia"', '"ProdOuServ"')
+        condiciones.append("(" + " OR ".join(f"{campo} ILIKE %s" for campo in columnas) + ")")
+        parametros.extend([f'%{filtros["q"]}%'] * len(columnas))
+
+    if filtros["venta_digital"] in ("1", "true", "si", "sí"):
+        if vins_digitales:
+            condiciones.append(f"{EXPRESION_VIN} = ANY(%s::text[])")
+            parametros.append(vins_digitales)
+        else:
+            condiciones.append("FALSE")
+
+    return "WHERE " + " AND ".join(condiciones), parametros
+
+
+def obtener_opciones(cond_uso):
+    """Una consulta y caché corta para no calcular 4 DISTINCT en cada carga."""
+    clave = f"vw_vn_opciones_{cond_uso}"
+    opciones = cache.get(clave)
+    if opciones is not None:
+        return opciones
+
+    consulta = f'''
+        SELECT
+            ARRAY_AGG(DISTINCT "AGENCIA" ORDER BY "AGENCIA") FILTER
+                (WHERE "AGENCIA" IS NOT NULL AND BTRIM("AGENCIA") <> '') AS agencias,
+            ARRAY_AGG(DISTINCT "Asesor" ORDER BY "Asesor") FILTER
+                (WHERE "Asesor" IS NOT NULL AND BTRIM("Asesor") <> '') AS asesores,
+            ARRAY_AGG(DISTINCT "NmFamilia" ORDER BY "NmFamilia") FILTER
+                (WHERE "NmFamilia" IS NOT NULL AND BTRIM("NmFamilia") <> '') AS familias,
+            ARRAY_AGG(DISTINCT "NmCondPgto" ORDER BY "NmCondPgto") FILTER
+                (WHERE "NmCondPgto" IS NOT NULL AND BTRIM("NmCondPgto") <> '') AS condiciones_pago
+        FROM {TABLA}
+        WHERE "CondUso" = %s
+    '''
+    with connections[BASE_DATOS].cursor() as cursor:
+        cursor.execute(consulta, [cond_uso])
+        fila = cursor.fetchone()
+    opciones = {
+        "agencias": list(fila[0] or []),
+        "asesores": list(fila[1] or []),
+        "familias": list(fila[2] or []),
+        "condiciones_pago": list(fila[3] or []),
+    }
+    cache.set(clave, opciones, timeout=1800)
+    return opciones
+
 
 class VWVNListView(APIView):
-    """
-    Consulta los registros de dbo.VW_VN.
-
-    Es un endpoint de solo lectura.
-    No modifica información de la tabla original.
-    """
-
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
-        # ---------------------------------------------------------
-        # 1. RECIBIMOS LOS FILTROS DEL FRONTEND
-        # ---------------------------------------------------------
-
-        busqueda = str(
-            request.query_params.get("q", "") or ""
-        ).strip()
-
-        agencia = str(
-            request.query_params.get("agencia", "") or ""
-        ).strip()
-
-        asesor = str(
-            request.query_params.get("asesor", "") or ""
-        ).strip()
-
-        fecha_desde = str(
-            request.query_params.get("fecha_desde", "") or ""
-        ).strip()
-
-        fecha_hasta = str(
-            request.query_params.get("fecha_hasta", "") or ""
-        ).strip()
-
-        familia = str(
-            request.query_params.get("familia", "") or ""
-        ).strip()
-
-        condicion_pago = str(
-            request.query_params.get("condicion_pago", "") or ""
-        ).strip()
-        venta_digital = str(
-            request.query_params.get("venta_digital", "") or ""
-        ).strip().lower()
-
-        cond_uso = str(
-            request.query_params.get("cond_uso", "N") or "N"
-        ).strip().upper()
-
-        if cond_uso not in ("N", "U"):
-            cond_uso = "N"
-
-        # ---------------------------------------------------------
-        # 2. PAGINACIÓN
-        # ---------------------------------------------------------
+        try:
+            filtros = leer_filtros(request)
+        except ValueError as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            pagina = max(
-                int(request.query_params.get("page", 1)),
-                1,
-            )
-        except (TypeError, ValueError):
-            pagina = 1
+            pagina = max(1, int(request.query_params.get("page", 1)))
+            tamano = max(1, min(100, int(request.query_params.get("page_size", 50))))
+        except (ValueError, TypeError):
+            pagina, tamano = 1, 50
+        offset = (pagina - 1) * tamano
 
-        try:
-            tamano_pagina = int(
-                request.query_params.get("page_size", 50)
-            )
-        except (TypeError, ValueError):
-            tamano_pagina = 50
+        aplicar_digital = filtros["venta_digital"] in ("1", "true", "si", "sí")
+        vins_digitales = obtener_vins_digitales() if aplicar_digital else None
+        where_sql, parametros = construir_where(filtros, vins_digitales)
 
-        # Evitamos que alguien solicite miles de registros
-        # de golpe desde el navegador.
-        tamano_pagina = max(
-            1,
-            min(tamano_pagina, 100),
-        )
-
-        offset = (pagina - 1) * tamano_pagina
-
-
-        # ---------------------------------------------------------
-        # 3. CONSTRUIMOS LOS FILTROS SQL
-        # ---------------------------------------------------------
-
-# Autos Nuevos: siempre excluir unidades usadas.
-        condiciones = [
-            "CondUso = %s"
-        ]
-
-        parametros = [
-            cond_uso
-        ]
-
-        if busqueda:
-            termino = f"%{busqueda}%"
-
-            condiciones.append(
-                """
-                (
-                    Serie LIKE %s
-                    OR RazaoSocial LIKE %s
-                    OR Asesor LIKE %s
-                    OR AGENCIA LIKE %s
-                    OR NmFamilia LIKE %s
-                    OR ProdOuServ LIKE %s
-                )
-                """
-            )
-
-            parametros.extend([
-                termino,
-                termino,
-                termino,
-                termino,
-                termino,
-                termino,
-            ])
-
-        if agencia:
-            condiciones.append(
-                "AGENCIA = %s"
-            )
-            parametros.append(agencia)
-
-        if asesor:
-            condiciones.append(
-                "Asesor = %s"
-            )
-            parametros.append(asesor)
-
-        if fecha_desde:
-            condiciones.append(
-                "DtEmissao >= %s"
-            )
-            parametros.append(fecha_desde)
-
-        if fecha_hasta:
-            condiciones.append(
-                "DtEmissao <= %s"
-            )
-            parametros.append(fecha_hasta)
-
-        if familia:
-            condiciones.append(
-                "NmFamilia = %s"
-            )
-            parametros.append(familia)
-
-
-        if condicion_pago:
-            condiciones.append(
-                "NmCondPgto = %s"
-            )
-            parametros.append(condicion_pago)
-
-        # ---------------------------------------------------------
-        # FILTRO DE VENTAS DIGITALES
-        # ---------------------------------------------------------
-        # ExpedienteDigital y VW_VN viven en bases distintas.
-        # Primero obtenemos los VIN facturados digitales.
-        # Después consultamos únicamente ProdOuServ de autos nuevos
-        # y hacemos la intersección en Python.
-        #
-        # De esta forma evitamos enviar a SQL Server un IN con todos
-        # los VIN de ExpedienteDigital, que resulta costoso en VW_VN.
-
-        if venta_digital in ("1", "true", "si", "sí"):
-            vins_digitales = {
-                str(vin).strip().upper()
-                for vin in ExpedienteDigital.objects
-                .exclude(vin_facturado="")
-                .values_list("vin_facturado", flat=True)
-                if str(vin or "").strip()
-            }
-
-            vins_coincidentes = []
-
-            if vins_digitales:
-                with connections["sqlserver_inv"].cursor() as cursor:
-                    cursor.execute(
-                        """
-                        SELECT ProdOuServ
-                        FROM dbo.VW_VN
-                        WHERE CondUso = %s
-                        """,
-                        [cond_uso],
-                    )
-
-                    for fila in cursor.fetchall():
-                        vin = str(fila[0] or "").strip().upper()
-
-                        if vin and vin in vins_digitales:
-                            vins_coincidentes.append(vin)
-
-            # Quitamos posibles VIN repetidos.
-            vins_coincidentes = list(set(vins_coincidentes))
-
-            if vins_coincidentes:
-                placeholders = ", ".join(
-                    ["%s"] * len(vins_coincidentes)
-                )
-
-                condiciones.append(
-                    f"ProdOuServ IN ({placeholders})"
-                )
-                parametros.extend(vins_coincidentes)
-            else:
-                condiciones.append("1 = 0")
-
-        # Si no hay filtros, no agregamos WHERE.
-        where_sql = (
-            "WHERE "
-            + " AND ".join(condiciones)
-        )
-        # ---------------------------------------------------------
-        # 4. CONTAMOS CUÁNTOS REGISTROS EXISTEN
-        # ---------------------------------------------------------
-
-        consulta_total = f"""
-            SELECT COUNT(*)
-            FROM dbo.VW_VN
-            {where_sql}
-        """
-
-        with connections["sqlserver_inv"].cursor() as cursor:
-            cursor.execute(
-                consulta_total,
-                parametros,
-            )
-
-            total = cursor.fetchone()[0]
-
-
-        # ---------------------------------------------------------
-        # 5. CONSULTAMOS LOS REGISTROS
-        #
-        # Los "AS" cambian los nombres originales de SQL Server
-        # por nombres más cómodos para usar desde React.
-        # ---------------------------------------------------------
-
-        consulta = f"""
+        consulta = f'''
             SELECT
-                Serie AS serie,
-                NrNota AS nr_nota,
-                TpProduto AS tp_producto,
-                ProdOuServ AS producto_servicio,
-                PrcUnitario AS precio_unitario,
-                VrBrutoItem AS valor_bruto_item,
-                InfluiEstat AS influye_estadistica,
-                VrDescItem AS valor_descuento_item,
-                CodCondPgto AS codigo_condicion_pago,
-                ValorFactura AS valor_factura,
-                ValorFacturaSnIva AS valor_factura_sin_iva,
-                ValorCompra AS valor_compra,
-                ISAN AS isan,
-                IVA AS iva,
-                CodEntidade AS codigo_entidad,
-                DtEmissao AS fecha_emision,
-                Situacao AS situacion,
-                TpNF AS tipo_nf,
-                NrMov AS nr_mov,
-                DrUltVenda AS fecha_ultima_venta,
-                RazaoSocial AS razon_social,
-                TpPessoa AS tipo_persona,
-                VrTotalProds AS valor_total_productos,
-                CodMarca AS codigo_marca,
-                NmMarca AS nombre_marca,
-                NmFamilia AS nombre_familia,
-                CondUso AS condicion_uso,
-                NmCondPgto AS nombre_condicion_pago,
-                Asesor AS asesor,
-                AGENCIA AS agencia
-            FROM dbo.VW_VN
-
+                "Serie" AS serie, "NrNota" AS nr_nota, "TpProduto" AS tp_producto,
+                "ProdOuServ" AS producto_servicio, "PrcUnitario" AS precio_unitario,
+                "VrBrutoItem" AS valor_bruto_item, "InfluiEstat" AS influye_estadistica,
+                "VrDescItem" AS valor_descuento_item, "CodCondPgto" AS codigo_condicion_pago,
+                "ValorFactura" AS valor_factura, "ValorFacturaSnIva" AS valor_factura_sin_iva,
+                "ValorCompra" AS valor_compra, "ISAN" AS isan, "IVA" AS iva,
+                "CodEntidade" AS codigo_entidad, "DtEmissao" AS fecha_emision,
+                "Situacao" AS situacion, "TpNF" AS tipo_nf, "NrMov" AS nr_mov,
+                "DrUltVenda" AS fecha_ultima_venta, "RazaoSocial" AS razon_social,
+                "TpPessoa" AS tipo_persona, "VrTotalProds" AS valor_total_productos,
+                "CodMarca" AS codigo_marca, "NmMarca" AS nombre_marca,
+                "NmFamilia" AS nombre_familia, "CondUso" AS condicion_uso,
+                "NmCondPgto" AS nombre_condicion_pago, "Asesor" AS asesor,
+                {EXPRESION_AGENCIA} AS agencia
+            FROM {TABLA}
             {where_sql}
+            ORDER BY "DtEmissao" DESC NULLS LAST, "NrNota" DESC NULLS LAST,
+                     "Serie" DESC NULLS LAST, "ProdOuServ" DESC NULLS LAST
+            LIMIT %s OFFSET %s
+        '''
+        with connections[BASE_DATOS].cursor() as cursor:
+            cursor.execute(f"SELECT COUNT(*) FROM {TABLA} {where_sql}", parametros)
+            total = cursor.fetchone()[0]
+            cursor.execute(consulta, [*parametros, tamano, offset])
+            registros = cursor_a_dicts(cursor)
 
-            ORDER BY
-                DtEmissao DESC,
-                NrNota DESC
-
-            OFFSET %s ROWS
-            FETCH NEXT %s ROWS ONLY
-        """
-
-
-        parametros_consulta = [
-            *parametros,
-            offset,
-            tamano_pagina,
-        ]
-
-
-        # ---------------------------------------------------------
-        # 6. EJECUTAMOS LA CONSULTA
-        # ---------------------------------------------------------
-
-        with connections["sqlserver_inv"].cursor() as cursor:
-            cursor.execute(
-                consulta,
-                parametros_consulta,
+        vins_pagina = {
+            normalizar_vin(fila["producto_servicio"])
+            for fila in registros if fila["producto_servicio"]
+        }
+        expedientes_por_vin = {}
+        if vins_pagina:
+            expedientes = (
+                ExpedienteDigital.objects
+                .annotate(vin_normalizado=Upper(Trim(F("vin_facturado"))))
+                .filter(vin_normalizado__in=vins_pagina)
+                .select_related("cliente")
             )
+            for expediente in expedientes:
+                expedientes_por_vin[normalizar_vin(expediente.vin_facturado)] = expediente
 
-            columnas = [
-                columna[0]
-                for columna in cursor.description
-            ]
+        for registro in registros:
+            expediente = expedientes_por_vin.get(normalizar_vin(registro["producto_servicio"]))
+            registro["es_venta_digital"] = expediente is not None
+            registro["tipo_venta"] = "Venta digital" if expediente else ""
+            registro["prospecto_digital"] = None
+            if expediente:
+                cliente = expediente.cliente
+                registro["prospecto_digital"] = {
+                    "id": expediente.id,
+                    "cliente_id": expediente.cliente_id,
+                    "nombre": cliente.nombre if cliente else "",
+                    "telefono": cliente.telefono if cliente else "",
+                    "correo": cliente.correo if cliente else "",
+                    "agencia": expediente.agencia,
+                    "estado": expediente.estado,
+                    "auto_interes": expediente.auto_interes,
+                    "asesor_digital": expediente.asesor_digital,
+                    "asesor_ventas": expediente.asesor_ventas,
+                    "enganche_monto": expediente.enganche_monto,
+                    "presupuesto_mensual": expediente.presupuesto_mensual,
+                    "forma_pago": expediente.forma_pago,
+                    "plazo_compra": expediente.plazo_compra,
+                    "vin_facturado": expediente.vin_facturado,
+                    "facturado_at": expediente.facturado_at,
+                }
 
-            registros = [
-                dict(zip(columnas, fila))
-                for fila in cursor.fetchall()
-            ]
-            # ---------------------------------------------------------
-            # 7. IDENTIFICAMOS VENTAS DIGITALES POR VIN
-            # ---------------------------------------------------------
+        return Response({
+            "count": total, "page": pagina, "page_size": tamano,
+            "results": VWVNSerializer(registros, many=True).data,
+        })
 
-            # VW_VN guarda el VIN en "ProdOuServ", expuesto como
-            # "producto_servicio" en los resultados de esta consulta.
-            # ExpedienteDigital guarda el VIN en "vin_facturado".
-            #
-            # Como ambas tablas pertenecen a conexiones distintas,
-            # el cruce se realiza desde Django y no mediante un JOIN SQL.
-
-            def normalizar_vin(valor):
-                return str(valor or "").strip().upper()
-
-            vins_pagina = {
-                normalizar_vin(registro.get("producto_servicio"))
-                for registro in registros
-                if normalizar_vin(registro.get("producto_servicio"))
-            }
-
-            expedientes_por_vin = {}
-
-            if vins_pagina:
-                expedientes = (
-                    ExpedienteDigital.objects
-                    .filter(vin_facturado__in=vins_pagina)
-                    .select_related("cliente")
-                )
-
-                for expediente in expedientes:
-                    vin = normalizar_vin(expediente.vin_facturado)
-
-                    if not vin:
-                        continue
-
-                    expedientes_por_vin[vin] = expediente
-
-            for registro in registros:
-                vin = normalizar_vin(registro.get("producto_servicio"))
-                expediente = expedientes_por_vin.get(vin)
-
-                if expediente:
-                    registro["tipo_venta"] = "Venta digital"
-                    registro["es_venta_digital"] = True
-                    registro["prospecto_digital"] = {
-                        "id": expediente.id,
-                        "cliente_id": expediente.cliente_id,
-                        "nombre": expediente.cliente.nombre if expediente.cliente else "",
-                        "telefono": expediente.cliente.telefono if expediente.cliente else "",
-                        "correo": expediente.cliente.correo if expediente.cliente else "",
-                        "agencia": expediente.agencia,
-                        "estado": expediente.estado,
-                        "auto_interes": expediente.auto_interes,
-                        "asesor_digital": expediente.asesor_digital,
-                        "asesor_ventas": expediente.asesor_ventas,
-                        "enganche_monto": expediente.enganche_monto,
-                        "presupuesto_mensual": expediente.presupuesto_mensual,
-                        "forma_pago": expediente.forma_pago,
-                        "plazo_compra": expediente.plazo_compra,
-                        "vin_facturado": expediente.vin_facturado,
-                        "facturado_at": expediente.facturado_at,
-                    }
-                else:
-                    registro["tipo_venta"] = ""
-                    registro["es_venta_digital"] = False
-                    registro["prospecto_digital"] = None
-
-
-        # ---------------------------------------------------------
-        # 7. SERIALIZAMOS LOS DATOS
-        # ---------------------------------------------------------
-
-        serializer = VWVNSerializer(
-            registros,
-            many=True,
-        )
-
-
-        # ---------------------------------------------------------
-        # 8. RESPUESTA QUE RECIBIRÁ REACT
-        # ---------------------------------------------------------
-
-        return Response(
-            {
-                "count": total,
-                "page": pagina,
-                "page_size": tamano_pagina,
-                "results": serializer.data,
-            },
-            status=status.HTTP_200_OK,
-        )
 
 class VWVNDashboardView(APIView):
-    """
-    Dashboard de Autos Nuevos basado en dbo.VW_VN.
-
-    Reglas comerciales confirmadas:
-
-    - Solo autos nuevos:
-        CondUso = 'N'
-
-    - Unidades vendidas:
-        Situacao = 'E' -> 1
-        Situacao = 'X' -> 0
-        Otro valor     -> NULL
-
-    - Importe / Ingresos:
-        ValorFacturaSnIva - ISAN
-
-    - Costo:
-        ValorCompra
-
-    Filtros:
-        DtEmissao
-        AGENCIA
-        Asesor
-        NmFamilia
-        NmCondPgto
-    """
-
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
 
     def get(self, request):
+        try:
+            filtros = leer_filtros(request)
+            anio_tendencia = request.query_params.get("anio_tendencia", "")
+            if anio_tendencia:
+                anio_tendencia = int(anio_tendencia)
+                if not 2000 <= anio_tendencia <= 2100:
+                    raise ValueError("anio_tendencia fuera de rango")
+        except (ValueError, TypeError) as error:
+            return Response({"detail": str(error)}, status=status.HTTP_400_BAD_REQUEST)
 
-        # ==========================================================
-        # 1. FILTROS RECIBIDOS DESDE REACT
-        # ==========================================================
+        # Los VIN están en crm_ryr; VW_VN está en tdsql_vw.
+        vins_digitales = obtener_vins_digitales()
+        where_sql, parametros = construir_where(filtros, vins_digitales)
 
-        fecha_desde = str(
-            request.query_params.get("fecha_desde", "") or ""
-        ).strip()
-
-        fecha_hasta = str(
-            request.query_params.get("fecha_hasta", "") or ""
-        ).strip()
-
-        agencia = str(
-            request.query_params.get("agencia", "") or ""
-        ).strip()
-
-        asesor = str(
-            request.query_params.get("asesor", "") or ""
-        ).strip()
-
-        familia = str(
-            request.query_params.get("familia", "") or ""
-        ).strip()
-
-        condicion_pago = str(
-            request.query_params.get("condicion_pago", "") or ""
-        ).strip()
-
-        venta_digital = str(
-            request.query_params.get("venta_digital", "") or ""
-        ).strip().lower()
-
-        cond_uso = str(
-            request.query_params.get("cond_uso", "N") or "N"
-        ).strip().upper()
-
-        if cond_uso not in ("N", "U"):
-            cond_uso = "N"
-
-        # ==========================================================
-        # 2. WHERE DINÁMICO
-        #
-        # CondUso = N SIEMPRE.
-        # El usuario no podrá cambiar este filtro desde el frontend.
-        # ==========================================================
-
-        condiciones = [
-            "CondUso = %s"
-        ]
-
-        parametros = [
-            cond_uso
-        ]
-
-
-        # Fecha inicial
-        if fecha_desde:
-            condiciones.append(
-                "DtEmissao >= %s"
-            )
-            parametros.append(fecha_desde)
-
-
-        # Fecha final
-        if fecha_hasta:
-            condiciones.append(
-                "DtEmissao <= %s"
-            )
-            parametros.append(fecha_hasta)
-
-
-        # Agencia
-        if agencia:
-            condiciones.append(
-                "AGENCIA = %s"
-            )
-            parametros.append(agencia)
-
-
-        # Asesor
-        if asesor:
-            condiciones.append(
-                "Asesor = %s"
-            )
-            parametros.append(asesor)
-
-
-        # Familia / modelo
-        if familia:
-            condiciones.append(
-                "NmFamilia = %s"
-            )
-            parametros.append(familia)
-
-
-        # Condición de pago
-        if condicion_pago:
-            condiciones.append(
-                "NmCondPgto = %s"
-            )
-            parametros.append(condicion_pago)
-        # Venta digital
-        if venta_digital in ("1", "true", "si", "sí"):
-            vins_digitales_filtro = [
-                str(vin or "").strip().upper()
-                for vin in ExpedienteDigital.objects
-                .exclude(vin_facturado="")
-                .values_list("vin_facturado", flat=True)
-                if str(vin or "").strip()
-            ]
-
-            if vins_digitales_filtro:
-                placeholders = ", ".join(
-                    ["%s"] * len(vins_digitales_filtro)
-                )
-
-                condiciones.append(
-                    f"ProdOuServ IN ({placeholders})"
-                )
-
-                parametros.extend(
-                    vins_digitales_filtro
-                )
-            else:
-                # Si no existen VIN digitales, la consulta
-                # debe regresar cero resultados.
-                condiciones.append("1 = 0")
-
-        where_sql = (
-            "WHERE "
-            + " AND ".join(condiciones)
-        )
-
-        # ==========================================================
-        # FUNCIÓN INTERNA
-        #
-        # Convierte:
-        #
-        # [(dato1, dato2), ...]
-        #
-        # en:
-        #
-        # [{"columna1": dato1, "columna2": dato2}, ...]
-        # ==========================================================
-
-        def cursor_a_dicts(cursor):
-            columnas = [
-                columna[0]
-                for columna in cursor.description
-            ]
-
-            return [
-                dict(zip(columnas, fila))
-                for fila in cursor.fetchall()
-            ]
-
-
-        # ==========================================================
-        # USAMOS EL SQL SERVER REAL DE VW_VN
-        # ==========================================================
-
-        with connections["sqlserver_inv"].cursor() as cursor:
-
-            # ======================================================
-            # 3. TOTALES PRINCIPALES
-            # ======================================================
-
-            consulta_totales = f"""
+        # GROUPING SETS calcula cinco niveles de agregación sobre el mismo filtrado.
+        consulta = f'''
+            WITH filtrado AS (
                 SELECT
-
-                    -- Cantidad de registros que tienen ProdOuServ.
-                    COUNT(ProdOuServ) AS productos,
-
-                    -- Emulación exacta del DAX de Rey.
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
-                                ELSE NULL
-                            END
-                        ),
-                        0
-                    ) AS unidades_vendidas,
-
-                    -- IMPORTE = ValorFacturaSnIva - ISAN
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
-                            -
-                            COALESCE(ISAN, 0)
-                        ),
-                        0
-                    ) AS ingresos,
-
-                    -- COSTO = ValorCompra
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorCompra, 0)
-                        ),
-                        0
-                    ) AS costo
-
-                FROM dbo.VW_VN
-
+                    DATE_TRUNC('month', "DtEmissao"::timestamp) AS periodo_mes,
+                    COALESCE(NULLIF(BTRIM("Asesor"), ''), 'Sin asesor') AS asesor,
+                    COALESCE(NULLIF(BTRIM("NmFamilia"), ''), 'Sin familia') AS familia,
+                    COALESCE(NULLIF(BTRIM("NmCondPgto"), ''), 'Sin condición') AS condicion_pago,
+                    "ProdOuServ" AS producto_servicio,
+                    "Situacao" AS situacion,
+                    "ValorFacturaSnIva" AS factura_sin_iva,
+                    "ISAN" AS isan,
+                    "ValorCompra" AS costo,
+                    {EXPRESION_VIN} AS vin_normalizado
+                FROM {TABLA}
                 {where_sql}
-            """
-
-            cursor.execute(
-                consulta_totales,
-                parametros,
             )
+            SELECT
+                GROUPING(periodo_mes) AS g_mes,
+                GROUPING(asesor) AS g_asesor,
+                GROUPING(familia) AS g_familia,
+                GROUPING(condicion_pago) AS g_pago,
+                periodo_mes, asesor, familia, condicion_pago,
+                COUNT(producto_servicio) AS productos,
+                COUNT(*) FILTER (WHERE situacion = 'E') AS unidades_vendidas,
+                COALESCE(SUM(COALESCE(factura_sin_iva, 0) - COALESCE(isan, 0)), 0) AS ingresos,
+                COALESCE(SUM(COALESCE(costo, 0)), 0) AS costo,
+                COUNT(*) FILTER (WHERE vin_normalizado = ANY(%s::text[])) AS ventas_digitales
+            FROM filtrado
+            GROUP BY GROUPING SETS ((), (periodo_mes), (asesor), (familia), (condicion_pago))
+        '''
 
-            columnas_totales = [
-                columna[0]
-                for columna in cursor.description
-            ]
+        totales = {"productos": 0, "unidades_vendidas": 0, "ingresos": 0, "costo": 0, "ventas_digitales": 0}
+        graficas = {"por_mes": [], "por_asesor": [], "por_familia": [], "por_condicion_pago": [], "tendencia_anual": []}
+        with connections[BASE_DATOS].cursor() as cursor:
+            cursor.execute(consulta, [*parametros, vins_digitales])
+            filas = cursor_a_dicts(cursor)
 
-            fila_totales = cursor.fetchone()
-
-            totales = dict(
-                zip(
-                    columnas_totales,
-                    fila_totales,
-                )
-            )
-
-            # ======================================================
-            # 3.1 VENTAS DIGITALES
-            # ======================================================
-            #
-            # ExpedienteDigital y VW_VN están en bases distintas.
-            # Obtenemos los VIN facturados digitales y los cruzamos
-            # contra ProdOuServ respetando los mismos filtros activos
-            # del dashboard.
-            # ======================================================
-
-            vins_digitales = {
-                str(vin or "").strip().upper()
-                for vin in ExpedienteDigital.objects
-                .exclude(vin_facturado="")
-                .values_list("vin_facturado", flat=True)
-                if str(vin or "").strip()
-            }
-
-            consulta_vins_dashboard = f"""
-                SELECT ProdOuServ
-                FROM dbo.VW_VN
-                {where_sql}
-            """
-
-            cursor.execute(
-                consulta_vins_dashboard,
-                parametros,
-            )
-
-            ventas_digitales = sum(
-                1
-                for fila in cursor.fetchall()
-                if str(fila[0] or "").strip().upper() in vins_digitales
-            )
-
-            totales["ventas_digitales"] = ventas_digitales
-
-            # ======================================================
-            # 4. GRÁFICA POR MES
-            # ======================================================
-
-            consulta_meses = f"""
-                SELECT
-
-                    YEAR(DtEmissao) AS anio,
-
-                    MONTH(DtEmissao) AS mes,
-
-                    COUNT(ProdOuServ) AS productos,
-
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
-                                ELSE NULL
-                            END
-                        ),
-                        0
-                    ) AS unidades_vendidas,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
-                            -
-                            COALESCE(ISAN, 0)
-                        ),
-                        0
-                    ) AS ingresos,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorCompra, 0)
-                        ),
-                        0
-                    ) AS costo
-
-                FROM dbo.VW_VN
-
-                {where_sql}
-
-                    AND DtEmissao IS NOT NULL
-
-                GROUP BY
-                    YEAR(DtEmissao),
-                    MONTH(DtEmissao)
-
-                ORDER BY
-                    YEAR(DtEmissao),
-                    MONTH(DtEmissao)
-            """
-
-            cursor.execute(
-                consulta_meses,
-                parametros,
-            )
-
-            por_mes = cursor_a_dicts(cursor)
-
-
-            # Agregamos "periodo":
-            # 2026-01
-            # 2026-02
-            # etc.
-            for item in por_mes:
-
-                anio = item.get("anio")
-                mes = item.get("mes")
-
-                if anio and mes:
-                    item["periodo"] = (
-                        f"{int(anio)}-{int(mes):02d}"
-                    )
+            for fila in filas:
+                datos = {campo: fila[campo] for campo in totales}
+                if fila["g_mes"] == 0:
+                    periodo = fila["periodo_mes"]
+                    if periodo is not None:
+                        graficas["por_mes"].append({
+                            **datos, "anio": periodo.year, "mes": periodo.month,
+                            "periodo": periodo.strftime("%Y-%m"),
+                        })
+                elif fila["g_asesor"] == 0:
+                    graficas["por_asesor"].append({**datos, "asesor": fila["asesor"]})
+                elif fila["g_familia"] == 0:
+                    graficas["por_familia"].append({**datos, "familia": fila["familia"]})
+                elif fila["g_pago"] == 0:
+                    graficas["por_condicion_pago"].append({**datos, "condicion_pago": fila["condicion_pago"]})
                 else:
-                    item["periodo"] = ""
+                    totales = datos
 
+            # La tendencia anual evita la segunda llamada HTTP al endpoint completo.
+            if anio_tendencia:
+                anual = dict(filtros)
+                anual["fecha_desde"] = f"{anio_tendencia}-01-01"
+                anual["fecha_hasta"] = f"{anio_tendencia}-12-31"
+                where_anual, parametros_anual = construir_where(anual, vins_digitales)
+                consulta_anual = f'''
+                    SELECT DATE_TRUNC('month', "DtEmissao"::timestamp) AS periodo_mes,
+                           COUNT("ProdOuServ") AS productos,
+                           COUNT(*) FILTER (WHERE "Situacao" = 'E') AS unidades_vendidas,
+                           COALESCE(SUM(COALESCE("ValorFacturaSnIva", 0) - COALESCE("ISAN", 0)), 0) AS ingresos,
+                           COALESCE(SUM(COALESCE("ValorCompra", 0)), 0) AS costo
+                    FROM {TABLA}
+                    {where_anual}
+                    GROUP BY 1
+                    ORDER BY 1
+                '''
+                cursor.execute(consulta_anual, parametros_anual)
+                for fila in cursor_a_dicts(cursor):
+                    periodo = fila.pop("periodo_mes")
+                    graficas["tendencia_anual"].append({
+                        **fila, "anio": periodo.year, "mes": periodo.month,
+                        "periodo": periodo.strftime("%Y-%m"),
+                    })
 
-            # ======================================================
-            # 5. GRÁFICA POR ASESOR
-            # ======================================================
+        graficas["por_mes"].sort(key=lambda dato: (dato["anio"], dato["mes"]))
+        for nombre in ("por_asesor", "por_familia", "por_condicion_pago"):
+            graficas[nombre].sort(key=lambda dato: dato["unidades_vendidas"], reverse=True)
 
-            consulta_asesores = f"""
-                SELECT
-
-                    COALESCE(
-                        NULLIF(
-                            LTRIM(RTRIM(Asesor)),
-                            ''
-                        ),
-                        'Sin asesor'
-                    ) AS asesor,
-
-                    COUNT(ProdOuServ) AS productos,
-
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
-                                ELSE NULL
-                            END
-                        ),
-                        0
-                    ) AS unidades_vendidas,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
-                            -
-                            COALESCE(ISAN, 0)
-                        ),
-                        0
-                    ) AS ingresos,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorCompra, 0)
-                        ),
-                        0
-                    ) AS costo
-
-                FROM dbo.VW_VN
-
-                {where_sql}
-
-                GROUP BY
-                    COALESCE(
-                        NULLIF(
-                            LTRIM(RTRIM(Asesor)),
-                            ''
-                        ),
-                        'Sin asesor'
-                    )
-
-                ORDER BY
-                    ingresos DESC
-            """
-
-            cursor.execute(
-                consulta_asesores,
-                parametros,
-            )
-
-            por_asesor = cursor_a_dicts(cursor)
-
-
-            # ======================================================
-            # 6. GRÁFICA POR FAMILIA / MODELO
-            # ======================================================
-
-            consulta_familias = f"""
-                SELECT
-
-                    COALESCE(
-                        NULLIF(
-                            LTRIM(RTRIM(NmFamilia)),
-                            ''
-                        ),
-                        'Sin familia'
-                    ) AS familia,
-
-                    COUNT(ProdOuServ) AS productos,
-
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
-                                ELSE NULL
-                            END
-                        ),
-                        0
-                    ) AS unidades_vendidas,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
-                            -
-                            COALESCE(ISAN, 0)
-                        ),
-                        0
-                    ) AS ingresos,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorCompra, 0)
-                        ),
-                        0
-                    ) AS costo
-
-                FROM dbo.VW_VN
-
-                {where_sql}
-
-                GROUP BY
-                    COALESCE(
-                        NULLIF(
-                            LTRIM(RTRIM(NmFamilia)),
-                            ''
-                        ),
-                        'Sin familia'
-                    )
-
-                ORDER BY
-                    unidades_vendidas DESC
-            """
-
-            cursor.execute(
-                consulta_familias,
-                parametros,
-            )
-
-            por_familia = cursor_a_dicts(cursor)
-
-
-            # ======================================================
-            # 7. GRÁFICA POR CONDICIÓN DE PAGO
-            # ======================================================
-
-            consulta_condiciones_pago = f"""
-                SELECT
-
-                    COALESCE(
-                        NULLIF(
-                            LTRIM(RTRIM(NmCondPgto)),
-                            ''
-                        ),
-                        'Sin condición'
-                    ) AS condicion_pago,
-
-                    COUNT(ProdOuServ) AS productos,
-
-                    COALESCE(
-                        SUM(
-                            CASE
-                                WHEN Situacao = 'E' THEN 1
-                                WHEN Situacao = 'X' THEN 0
-                                ELSE NULL
-                            END
-                        ),
-                        0
-                    ) AS unidades_vendidas,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorFacturaSnIva, 0)
-                            -
-                            COALESCE(ISAN, 0)
-                        ),
-                        0
-                    ) AS ingresos,
-
-                    COALESCE(
-                        SUM(
-                            COALESCE(ValorCompra, 0)
-                        ),
-                        0
-                    ) AS costo
-
-                FROM dbo.VW_VN
-
-                {where_sql}
-
-                GROUP BY
-                    COALESCE(
-                        NULLIF(
-                            LTRIM(RTRIM(NmCondPgto)),
-                            ''
-                        ),
-                        'Sin condición'
-                    )
-
-                ORDER BY
-                    unidades_vendidas DESC
-            """
-
-            cursor.execute(
-                consulta_condiciones_pago,
-                parametros,
-            )
-
-            por_condicion_pago = cursor_a_dicts(
-                cursor
-            )
-
-
-            # ======================================================
-            # 8. OPCIONES PARA LOS FILTROS DEL FRONT
-            #
-            # Estas opciones se consultan con CondUso = N,
-            # pero NO dependen de los filtros actuales.
-            # Así los selectores siempre muestran todas las opciones.
-            # ======================================================
-
-            def opciones_distintas(columna):
-                consulta = f"""
-                    SELECT DISTINCT
-                        {columna} AS valor
-                    FROM dbo.VW_VN
-                    WHERE CondUso = %s
-                    AND {columna} IS NOT NULL
-                    AND LTRIM(RTRIM({columna})) <> ''
-                    ORDER BY {columna}
-                """
-
-                cursor.execute(
-                    consulta,
-                    [cond_uso],
-                )
-
-                return [
-                    fila[0]
-                    for fila in cursor.fetchall()
-                    if fila[0] is not None
-                ]
-
-            agencias = opciones_distintas(
-                "AGENCIA"
-            )
-
-            asesores = opciones_distintas(
-                "Asesor"
-            )
-
-            familias = opciones_distintas(
-                "NmFamilia"
-            )
-
-            condiciones_pago = opciones_distintas(
-                "NmCondPgto"
-            )
-
-
-        # ==========================================================
-        # 9. RESPUESTA PARA REACT
-        # ==========================================================
-
-        return Response(
-            {
-                "filtros_aplicados": {
-                    "fecha_desde": fecha_desde,
-                    "fecha_hasta": fecha_hasta,
-                    "agencia": agencia,
-                    "asesor": asesor,
-                    "familia": familia,
-                    "condicion_pago": condicion_pago,
-                    "venta_digital": venta_digital,
-                    "cond_uso": cond_uso,
-                },
-
-                "totales": totales,
-
-                "graficas": {
-                    "por_mes": por_mes,
-                    "por_asesor": por_asesor,
-                    "por_familia": por_familia,
-                    "por_condicion_pago": por_condicion_pago,
-                },
-
-                "opciones": {
-                    "agencias": agencias,
-                    "asesores": asesores,
-                    "familias": familias,
-                    "condiciones_pago": condiciones_pago,
-                },
-            }
-        )
+        return Response({
+            "filtros_aplicados": filtros,
+            "totales": totales,
+            "graficas": graficas,
+            "opciones": obtener_opciones(filtros["cond_uso"]),
+        })
