@@ -16,12 +16,27 @@ from .serializers import VWVNSerializer
 BASE_DATOS = "tdsql"
 TABLA = 'public."VW_VN"'
 # Coincide con la clasificación visual que ya utiliza VentasVN.jsx.
-FAMILIAS_COMERCIALES = ("CADDY", "CRAFTER", "TRANSPORTER", "AMAROK", "CARAVELLE")
+
+FAMILIAS_COMERCIALES = (
+    "CADDY",
+    "CRAFTER",
+    "TRANSPORTER",
+    "AMAROK",
+    "CARAVELLE",
+)
+
 CONDICION_COMERCIAL = "(" + " OR ".join(
-    f'"NmFamilia" ILIKE \'%{modelo}%\'' for modelo in FAMILIAS_COMERCIALES
+    f'''STRPOS(UPPER("NmFamilia"), '{modelo}') > 0'''
+    for modelo in FAMILIAS_COMERCIALES
 ) + ")"
+
 EXPRESION_VIN = 'UPPER(BTRIM("ProdOuServ"))'
-EXPRESION_AGENCIA = f'CASE WHEN {CONDICION_COMERCIAL} THEN \'R&R VC\' ELSE "AGENCIA" END'
+
+EXPRESION_AGENCIA = (
+    f"CASE WHEN {CONDICION_COMERCIAL} "
+    'THEN \'R&R VC\' ELSE "AGENCIA" END'
+)
+
 
 
 def cursor_a_dicts(cursor):
