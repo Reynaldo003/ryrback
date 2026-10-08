@@ -4,6 +4,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 from .resultados_ia import resultados_ia_view
 from .prospectos_stats import prospecto_stats_view
+from .bdc_resumen import bdc_resumen_view
 from .productividad_asesores import productividad_asesores_view
 from .lineas_negocio import lineas_negocio_view
 from .pautas_origen import pautas_origen_view
@@ -128,6 +129,7 @@ urlpatterns = [
 
     path("analitica/resultados-ia/",resultados_ia_view,name="digitales-resultados-ia",),
     path("analitica/prospectos-stats/", prospecto_stats_view, name="digitales-prospectos-stats"),
+    path("analitica/bdc-resumen/", bdc_resumen_view, name="digitales-bdc-resumen"),
     path("analitica/productividad-asesores/", productividad_asesores_view, name="digitales-productividad-asesores"),
     path("analitica/lineas-negocio/", lineas_negocio_view, name="digitales-lineas-negocio"),
     path("analitica/pautas-origen/", pautas_origen_view, name="digitales-pautas-origen"),
