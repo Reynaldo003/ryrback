@@ -222,10 +222,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
     def _queryset_por_linea(self, numero_asesor):
         queryset = self._base_queryset()
 
-        cfg_linea = WHATSAPP_LINES.get(
-            numero_asesor,
-            {},
-        )
+        cfg_linea = WHATSAPP_LINES.get(numero_asesor, {})
 
         agencia_linea = str(
             cfg_linea.get("agencia") or ""
@@ -235,41 +232,45 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             cfg_linea.get("asesor_digital") or ""
         ).strip()
 
-        filtro_linea = Q(
-            cliente__mensajes_whatsapp__numero_asesor=(
-                numero_asesor
-            )
+        # En lugar de hacer JOIN contra todos los mensajes y luego DISTINCT,
+        # preguntamos únicamente si existe al menos un mensaje.
+        mensajes_linea = MensajeWhatsApp.objects.filter(
+            cliente_id=OuterRef("cliente_id"),
+            numero_asesor=numero_asesor,
         )
 
+        cualquier_mensaje = MensajeWhatsApp.objects.filter(
+            cliente_id=OuterRef("cliente_id"),
+        )
+
+        queryset = queryset.annotate(
+            _tiene_mensaje_linea=Exists(mensajes_linea),
+            _tiene_cualquier_mensaje=Exists(cualquier_mensaje),
+        )
+
+        # Expedientes que ya tienen mensajes en esta línea.
+        filtro_linea = Q(
+            _tiene_mensaje_linea=True
+        )
+
+        # Expedientes creados manualmente que todavía no tienen mensajes.
         if agencia_linea:
             filtro_manual = (
-                Q(
-                    cliente__mensajes_whatsapp__isnull=True
-                )
-                & Q(
-                    agencia__iexact=agencia_linea
-                )
+                Q(_tiene_cualquier_mensaje=False)
+                & Q(agencia__iexact=agencia_linea)
             )
 
             if (
-                not linea_tiene_reparto(
-                    numero_asesor
-                )
+                not linea_tiene_reparto(numero_asesor)
                 and asesor_linea
             ):
                 filtro_manual &= Q(
-                    asesor_digital__iexact=(
-                        asesor_linea
-                    )
+                    asesor_digital__iexact=asesor_linea
                 )
 
             filtro_linea |= filtro_manual
 
-        queryset = (
-            queryset
-            .filter(filtro_linea)
-            .distinct()
-        )
+        queryset = queryset.filter(filtro_linea)
 
         return _filtrar_expedientes_por_asignacion(
             request=self.request,
@@ -439,24 +440,18 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         )
 
         datos = queryset.aggregate(
-            total=Count(
-                "id",
-                distinct=True,
-            ),
+            total=Count("id"),
             pendIA=Count(
                 "id",
                 filter=pendientes_ia,
-                distinct=True,
             ),
             conPerfil=Count(
                 "id",
                 filter=perfil_comercial,
-                distinct=True,
             ),
             financiamiento=Count(
                 "id",
                 filter=financiamiento,
-                distinct=True,
             ),
             avgRespDuracion=Avg(
                 duracion_respuesta,
@@ -472,14 +467,8 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         if promedio is None:
             datos["avgResp"] = None
         else:
-            minutos = (
-                promedio.total_seconds()
-                / 60
-            )
-
-            datos["avgResp"] = int(
-                minutos + 0.5
-            )
+            minutos = promedio.total_seconds() / 60
+            datos["avgResp"] = int(minutos + 0.5)
 
         return datos
 
