@@ -49,10 +49,6 @@ def obtener_paginacion(request):
     offset = (pagina - 1) * tamano_pagina
     return pagina, tamano_pagina, offset
 def _col(alias, nombre):
-    return f'{alias}."{nombre}"' if alias else f'"{nombre}"'
-
-# Los nombres de matriz_presupuestos se crearon sin comillas y PostgreSQL los guarda en minúsculas.
-def _col_presupuesto(alias, nombre):
     columna = nombre.lower()
     return f"{alias}.{columna}" if alias else columna
 def construir_filtros_presupuestos(request, alias=""):
@@ -73,18 +69,18 @@ def construir_filtros_presupuestos(request, alias=""):
     if busqueda:
         termino = f"%{busqueda}%"
         campos = [
-            _col_presupuesto(alias, "Agencia"),
-            f'CAST({_col_presupuesto(alias, "NrOrcamento")} AS TEXT)',
-            _col_presupuesto(alias, "Nome"),
-            _col_presupuesto(alias, "PlacaVeic"),
-            _col_presupuesto(alias, "Chassi"),
-            _col_presupuesto(alias, "CodModelo"),
-            _col_presupuesto(alias, "Sit"),
-            _col_presupuesto(alias, "Comentario"),
-            _col_presupuesto(alias, "NrApolice"),
-            _col_presupuesto(alias, "Sinistro"),
-            _col_presupuesto(alias, "Asegurado"),
-            _col_presupuesto(alias, "Taller"),
+            _col(alias, "Agencia"),
+            f'CAST({_col(alias, "NrOrcamento")} AS TEXT)',
+            _col(alias, "Nome"),
+            _col(alias, "PlacaVeic"),
+            _col(alias, "Chassi"),
+            _col(alias, "CodModelo"),
+            _col(alias, "Sit"),
+            _col(alias, "Comentario"),
+            _col(alias, "NrApolice"),
+            _col(alias, "Sinistro"),
+            _col(alias, "Asegurado"),
+            _col(alias, "Taller"),
         ]
         condiciones.append("(" + " OR ".join(f"{campo} ILIKE %s" for campo in campos) + ")")
         parametros.extend([termino] * len(campos))
@@ -97,19 +93,19 @@ def construir_filtros_presupuestos(request, alias=""):
     )
     for campo, valor in filtros:
         if valor is not None and valor != "":
-            condiciones.append(f"{_col_presupuesto(alias, campo)} = %s")
+            condiciones.append(f"{_col(alias, campo)} = %s")
             parametros.append(valor)
     if placa:
-        condiciones.append(f'{_col_presupuesto(alias, "PlacaVeic")} ILIKE %s')
+        condiciones.append(f'{_col(alias, "PlacaVeic")} ILIKE %s')
         parametros.append(f"%{placa}%")
     if chassi:
-        condiciones.append(f'{_col_presupuesto(alias, "Chassi")} ILIKE %s')
+        condiciones.append(f'{_col(alias, "Chassi")} ILIKE %s')
         parametros.append(f"%{chassi}%")
     if fecha_desde:
-        condiciones.append(f'{_col_presupuesto(alias, "DtEmissao")}::date >= %s')
+        condiciones.append(f'{_col(alias, "DtEmissao")}::date >= %s')
         parametros.append(fecha_desde)
     if fecha_hasta:
-        condiciones.append(f'{_col_presupuesto(alias, "DtEmissao")}::date <= %s')
+        condiciones.append(f'{_col(alias, "DtEmissao")}::date <= %s')
         parametros.append(fecha_hasta)
     return ("WHERE " + " AND ".join(condiciones) if condiciones else ""), parametros
 def construir_filtros_refacciones(request, alias=""):
@@ -236,11 +232,11 @@ class MatrizPresupuestosListView(APIView):
             FROM {TABLA_PRESUPUESTOS} AS mp
             LEFT JOIN (
                 SELECT
-                    "Agencia" AS agencia,
-                    "Cod_Funcionario" AS cod_funcionario,
-                    MAX("Nm_Funcionario") AS nm_funcionario
+                    agencia AS agencia,
+                    cod_funcionario AS cod_funcionario,
+                    MAX(nm_funcionario) AS nm_funcionario
                 FROM {TABLA_FUNCIONARIOS}
-                GROUP BY "Agencia", "Cod_Funcionario"
+                GROUP BY agencia, cod_funcionario
             ) AS mf
                 ON mf.cod_funcionario = mp.codfunc
                 AND mf.agencia = mp.agencia
@@ -282,47 +278,47 @@ class MatrizPresupuestosRefListView(APIView):
         """
         consulta = f"""
             SELECT
-                r."Agencia" AS agencia,
-                r."NrOrcamento" AS nr_orcamento,
-                r."NmProd" AS nm_prod,
-                r."CodProd" AS cod_prod,
-                r."QtProd" AS qt_prod,
-                r."PrecoPc" AS preco_pc,
-                r."DescPc" AS desc_pc,
-                r."VrDescPc" AS vr_desc_pc,
-                r."VrLiqPc" AS vr_liq_pc,
-                r."VrCasco" AS vr_casco,
-                r."HrCreacion" AS hr_creacion,
-                r."DNStock" AS dn_stock,
-                r."DNMediaVta" AS dn_media_vta,
-                r."DNCtSolicitada" AS dn_ct_solicitada,
-                r."Filler05" AS filler05,
-                r."Filler06" AS filler06,
-                r."Filler07" AS filler07,
-                r."Filler08" AS filler08,
-                r."Filler09" AS filler09,
-                r."Filler10" AS filler10,
-                r."Selec" AS selec,
-                r."IdCasco" AS id_casco,
-                r."ImprDesc" AS impr_desc,
-                r."Filler12" AS filler12,
-                r."Filler13" AS filler13,
-                r."Filler14" AS filler14,
-                r."Filler15" AS filler15,
-                r."Filler16" AS filler16,
-                r."CodPacote" AS cod_pacote,
-                r."Filler17" AS filler17,
-                r."ComentRef" AS coment_ref,
-                r."DtCreacion"::date AS dt_creacion,
-                r."Filler20" AS filler20,
+                r.agencia AS agencia,
+                r.nrorcamento AS nr_orcamento,
+                r.nmprod AS nm_prod,
+                r.codprod AS cod_prod,
+                r.qtprod AS qt_prod,
+                r.precopc AS preco_pc,
+                r.descpc AS desc_pc,
+                r.vrdescpc AS vr_desc_pc,
+                r.vrliqpc AS vr_liq_pc,
+                r.vrcasco AS vr_casco,
+                r.hrcreacion AS hr_creacion,
+                r.dnstock AS dn_stock,
+                r.dnmediavta AS dn_media_vta,
+                r.dnctsolicitada AS dn_ct_solicitada,
+                r.filler05 AS filler05,
+                r.filler06 AS filler06,
+                r.filler07 AS filler07,
+                r.filler08 AS filler08,
+                r.filler09 AS filler09,
+                r.filler10 AS filler10,
+                r.selec AS selec,
+                r.idcasco AS id_casco,
+                r.imprdesc AS impr_desc,
+                r.filler12 AS filler12,
+                r.filler13 AS filler13,
+                r.filler14 AS filler14,
+                r.filler15 AS filler15,
+                r.filler16 AS filler16,
+                r.codpacote AS cod_pacote,
+                r.filler17 AS filler17,
+                r.comentref AS coment_ref,
+                r.dtcreacion::date AS dt_creacion,
+                r.filler20 AS filler20,
                 r."rowid__" AS rowid
             FROM {TABLA_REFACCIONES} AS r
             {where_sql}
             ORDER BY
-                CASE WHEN r."NrOrcamento" IS NULL THEN 1 ELSE 0 END,
-                r."NrOrcamento" DESC,
-                r."Agencia",
-                r."CodProd"
+                CASE WHEN r.nrorcamento IS NULL THEN 1 ELSE 0 END,
+                r.nrorcamento DESC,
+                r.agencia,
+                r.codprod
             LIMIT %s OFFSET %s
         """
         with connections[DB_ALIAS].cursor() as cursor:
@@ -403,11 +399,11 @@ class PresupuestosDashboardView(APIView):
         consulta_asesores = base + f"""
             , funcionarios AS (
                 SELECT
-                    "Agencia" AS agencia,
-                    "Cod_Funcionario" AS cod_funcionario,
-                    MAX("Nm_Funcionario") AS nm_funcionario
+                    agencia AS agencia,
+                    cod_funcionario AS cod_funcionario,
+                    MAX(nm_funcionario) AS nm_funcionario
                 FROM {TABLA_FUNCIONARIOS}
-                GROUP BY "Agencia", "Cod_Funcionario"
+                GROUP BY agencia, cod_funcionario
             )
             SELECT
                 bp.codfunc AS cod_func,
@@ -441,33 +437,33 @@ class PresupuestosDashboardView(APIView):
                 SELECT r.*
                 FROM {TABLA_REFACCIONES} AS r
                 INNER JOIN claves_presupuestos AS p
-                    ON p.nrorcamento = r."NrOrcamento"
-                    AND p.agencia IS NOT DISTINCT FROM r."Agencia"
+                    ON p.nrorcamento = r.nrorcamento
+                    AND p.agencia IS NOT DISTINCT FROM r.agencia
             )
         """
         consulta_refacciones = base_refacciones + """
             SELECT
                 COUNT(*) AS lineas_refaccion,
-                COUNT(DISTINCT "NrOrcamento") AS presupuestos_con_refacciones,
-                COALESCE(SUM(COALESCE("QtProd", 0)), 0) AS cantidad_refacciones,
-                COALESCE(SUM(COALESCE("VrLiqPc", 0)), 0) AS suma_vr_liq_pc,
-                COALESCE(SUM(COALESCE("QtProd", 0) * COALESCE("VrLiqPc", 0)), 0)
+                COUNT(DISTINCT nrorcamento) AS presupuestos_con_refacciones,
+                COALESCE(SUM(COALESCE(qtprod, 0)), 0) AS cantidad_refacciones,
+                COALESCE(SUM(COALESCE(vrliqpc, 0)), 0) AS suma_vr_liq_pc,
+                COALESCE(SUM(COALESCE(qtprod, 0) * COALESCE(vrliqpc, 0)), 0)
                     AS valor_refacciones_estimado
             FROM base_refacciones
         """
         consulta_top_refacciones = base_refacciones + """
             SELECT
-                COALESCE(NULLIF(BTRIM("CodProd"), ''), 'Sin código') AS cod_prod,
-                COALESCE(NULLIF(BTRIM("NmProd"), ''), 'Sin descripción') AS nm_prod,
+                COALESCE(NULLIF(BTRIM(codprod), ''), 'Sin código') AS cod_prod,
+                COALESCE(NULLIF(BTRIM(nmprod), ''), 'Sin descripción') AS nm_prod,
                 COUNT(*) AS lineas,
-                COUNT(DISTINCT "NrOrcamento") AS presupuestos,
-                COALESCE(SUM(COALESCE("QtProd", 0)), 0) AS cantidad,
-                COALESCE(SUM(COALESCE("QtProd", 0) * COALESCE("VrLiqPc", 0)), 0)
+                COUNT(DISTINCT nrorcamento) AS presupuestos,
+                COALESCE(SUM(COALESCE(qtprod, 0)), 0) AS cantidad,
+                COALESCE(SUM(COALESCE(qtprod, 0) * COALESCE(vrliqpc, 0)), 0)
                     AS valor_estimado
             FROM base_refacciones
             GROUP BY
-                COALESCE(NULLIF(BTRIM("CodProd"), ''), 'Sin código'),
-                COALESCE(NULLIF(BTRIM("NmProd"), ''), 'Sin descripción')
+                COALESCE(NULLIF(BTRIM(codprod), ''), 'Sin código'),
+                COALESCE(NULLIF(BTRIM(nmprod), ''), 'Sin descripción')
             ORDER BY cantidad DESC
             LIMIT 15
         """
@@ -526,7 +522,7 @@ class PresupuestosOpcionesView(APIView):
             FROM (
                 SELECT BTRIM(agencia) AS valor FROM {TABLA_PRESUPUESTOS}
                 UNION
-                SELECT BTRIM("Agencia") AS valor FROM {TABLA_REFACCIONES}
+                SELECT BTRIM(agencia) AS valor FROM {TABLA_REFACCIONES}
             ) AS datos
             WHERE valor IS NOT NULL AND valor <> ''
             ORDER BY valor
