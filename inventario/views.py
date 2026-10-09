@@ -156,7 +156,7 @@ def _obtener_resumen(request, condicion_forzada=None):
     if resultado is not None:
         return resultado
 
-    hoy = timezone.localdate()
+    hoy = date.today()
     registros = [_normalizar_vehiculo(fila, hoy) for fila in _consultar_base(agencia, estatus, modelos)]
     vehiculos = [fila for fila in registros if fila["CondUso"] == condicion]
     vehiculos.sort(key=lambda v: (v["diasEnStock"] is None, -(v["diasEnStock"] or 0), v["DN_Atual"], v["NrChassi"] or ""))
