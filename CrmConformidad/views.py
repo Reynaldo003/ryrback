@@ -120,13 +120,18 @@ def obtener_foto_url(user, request=None):
     return url
 
 
+
 def serialize_usuario(user, request=None):
-    rol_nombre = (user.rol.nombre if getattr(user, "rol", None) else "")
+    """Datos públicos del usuario para login y /auth/me/."""
+    rol_nombre = user.rol.nombre if user.rol else ""
+    nombre_completo = f"{user.nombre or ''} {user.apellidos or ''}".strip()
 
     return {
         "id_usuario": user.id_usuario,
+        "id_rol": user.rol_id,
         "nombre": user.nombre,
         "apellidos": user.apellidos,
+        "nombre_completo": nombre_completo,
         "usuario": user.usuario,
         "correo": user.correo,
         "rol": rol_nombre,

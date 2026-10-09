@@ -63,6 +63,25 @@ def obtener_id_rol(usuario):
                 pass
     return None
 
+
+def es_financiero_agencia(usuario):
+    """Reconoce el rol financiero real, no los permisos visuales del menu."""
+    if obtener_id_rol(usuario) == 6:
+        return True
+
+    rol = obtener_rol(usuario)
+
+    return rol in {
+        "contador",
+        "financiero",
+        "financieros",
+        "crm financieros",
+        "crm_financieros",
+    } or (
+        "gerente" in rol and "financiero" in rol
+    )
+
+
 def es_admin(usuario):
     if getattr(usuario, "is_superuser", False):
         return True
