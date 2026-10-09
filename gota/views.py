@@ -9,38 +9,78 @@ from rest_framework.views import APIView
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 
-from .serializers import MatrizOSActivasSerializer
+from .models import GotaOrdenComentario, GotaOrdenTallerVW
+from .serializers import (
+    GotaOrdenComentarioSerializer,
+    MatrizOSActivasSerializer,
+)
 
 
-DB_ALIAS = "tdsql"
+# La vista de órdenes de taller activas vive en el almacén analítico
+# de SQL Server (TDSQL_VW), igual que los comentarios editables.
+DB_ALIAS = "sqlserver_inv"
 
-TABLA_OS_ACTIVAS = "public.matriz_osactivas"
+TABLA_OS = "dbo.GotaOrdenTallerVW"
 
-CACHE_OPCIONES = "gota_opciones_v1"
+TABLA_COMENTARIOS_HISTORICOS = "dbo.Matriz_OS_Comentarios"
+
+CACHE_OPCIONES = "gota_opciones_v2"
+
+# La vista no tiene índices (es un HEAP), así que las consultas con
+# parámetros pueden sufrir "parameter sniffing" y tardar decenas de
+# segundos. OPTION (RECOMPILE) obliga a recompilar con los valores
+# reales de cada ejecución y las deja en milisegundos.
+RECOMPILE = "OPTION (RECOMPILE)"
 
 
-# Columnas permitidas para ordenar, mapeadas a su nombre real en SQL.
+# Columnas permitidas para ordenar, mapeadas a su nombre real en la vista.
 # Se usa una lista blanca para que el parámetro `ordering` nunca
 # llegue directo desde el cliente a la cláusula ORDER BY.
 ORDENAMIENTO_PERMITIDO = {
     "agencia": '"Agencia"',
-    "nr_os": '"NrOS"',
-    "nr_atendimento": '"NrAtendimento"',
-    "tp_os": '"TpOS"',
-    "situacao": '"Situacao"',
-    "subtipo_os": '"SubtipoOS"',
-    "dt_abertura": '"DtAbertura"',
-    "hr_abertura": '"HrAbertura"',
-    "dt_fechamento": '"DtFechamento"',
-    "vr_total_pecas": '"VrTotalPecas"',
-    "vr_pecas": '"VrPecas"',
-    "vr_om": '"VrOM"',
-    "vr_adicionais": '"VrAdicionais"',
-    "vr_adiantam": '"VrAdiantam"',
-    "rowid": '"rowid__"',
+    "nr_os": '"OS"',
+    "nr_atendimento": '"Atencion"',
+    "tp_os": '"TipoOS"',
+    "situacao": '"Situacion"',
+    "subtipo_os": '"Subtipo"',
+    "dt_abertura": '"Apertura"',
+    "hr_abertura": '"HoraApertura"',
+    "dias_taller": '"DiasTaller"',
+    "id_job": '"Job"',
+    "vr_pecas": '"Partes"',
+    "vr_om": '"ManoObra"',
+    "vr_lubrif": '"Lubricantes"',
+    "vr_acessor": '"Accesorios"',
+    "vr_cascos": '"Cascos"',
+    "vr_adicionais": '"Adicionales"',
+    "vr_adiantam": '"AdAnticipos"',
+    "vr_desc_peca": '"DescPartes"',
+    "perc_desc_pcs": '"PercDescPiezas"',
+    "vr_total_pecas": '"TotalPartes"',
+    "cod_pagador": '"CodigoPagador"',
+    "pagador": '"Pagador"',
+    "cod_cond_pgto": '"CondPago"',
+    "cod_oper_fiscal": '"OperFiscal"',
+    "forma_pago": '"FormaPago"',
+    "uso_cfdi": '"UsoCFDI"',
+    "sit_garantia": '"Garantia"',
+    "sit_fiss": '"FISS"',
+    "motivo_cancel": '"MotivoCancel"',
+    "dt_debloq": '"Desbloqueo"',
+    "dt_emi_prefact": '"Prefactura"',
+    "hora_llegada": '"HoraLlegada"',
+    "dt_fechamento": '"Cierre"',
+    "hr_fechamento": '"HoraCierre"',
+    "vin": '"Vin"',
+    "asesor": '"Asesor"',
+    "cliente": '"Cliente"',
+    "telefono": '"Telefono"',
+    "ubicacion": '"Ubicacion"',
+    "comentarios_n": '"ComentariosN"',
+    "rowid": '"RowID"',
 }
 
-ORDENAMIENTO_POR_DEFECTO = "rowid"
+ORDENAMIENTO_POR_DEFECTO = "dt_abertura"
 
 ORDENAMIENTO_POR_DEFECTO_SQL = ORDENAMIENTO_PERMITIDO[
     ORDENAMIENTO_POR_DEFECTO
@@ -48,51 +88,49 @@ ORDENAMIENTO_POR_DEFECTO_SQL = ORDENAMIENTO_PERMITIDO[
 
 SELECT_BASE = f"""
     SELECT
-        \"Agencia\" AS agencia,
-        \"NrAtendimento\" AS nr_atendimento,
-        \"NrOS\" AS nr_os,
-        \"TpOS\" AS tp_os,
-        \"DtFechamento\" AS dt_fechamento,
-        \"HrFechamento\" AS hr_fechamento,
-        \"Situacao\" AS situacao,
-        \"CodPagador\" AS cod_pagador,
-        \"VrAdicionais\" AS vr_adicionais,
-        \"VrAdiantam\" AS vr_adiantam,
-        \"VrTotalPecas\" AS vr_total_pecas,
-        \"VrPecas\" AS vr_pecas,
-        \"VrAcessor\" AS vr_acessor,
-        \"VrOM\" AS vr_om,
-        \"VrLubrif\" AS vr_lubrif,
-        \"VrCascos\" AS vr_cascos,
-        \"VrDescPeca\" AS vr_desc_peca,
-        \"MotivoCancel\" AS motivo_cancel,
-        \"PercDescPcs\" AS perc_desc_pcs,
-        \"CodCondPgto\" AS cod_cond_pgto,
-        \"CodOperFiscal\" AS cod_oper_fiscal,
-        \"SitGarantia\" AS sit_garantia,
-        \"SitFISS\" AS sit_fiss,
-        \"SubtipoOS\" AS subtipo_os,
-        \"DtAbertura\" AS dt_abertura,
-        \"HrAbertura\" AS hr_abertura,
-        \"TipoGolpe\" AS tipo_golpe,
-        \"TemFunPin\" AS tem_fun_pin,
-        \"NrGarHda\" AS nr_gar_hda,
-        \"Filler01\" AS filler01,
-        \"Func_Cancel\" AS func_cancel,
-        \"Filler03\" AS filler03,
-        \"TpServMarca\" AS tp_serv_marca,
-        \"CheckGM\" AS check_gm,
-        \"Flag_Pago\" AS flag_pago,
-        \"Uso_CFDI\" AS uso_cfdi,
-        \"AutoriCrhysler\" AS autori_crhysler,
-        \"FormaPago\" AS forma_pago,
-        \"DtDebloq\" AS dt_debloq,
-        \"Dt_Emi_Prefact\" AS dt_emi_prefact,
-        \"Hr_Emi_Prefact\" AS hr_emi_prefact,
-        \"HoraLLegada\" AS hora_llegada,
-        \"Id_Job\" AS id_job,
-        \"rowid__\" AS rowid
-    FROM {TABLA_OS_ACTIVAS}
+        "Agencia" AS agencia,
+        "OS" AS nr_os,
+        "Atencion" AS nr_atendimento,
+        "TipoOS" AS tp_os,
+        "Subtipo" AS subtipo_os,
+        "Situacion" AS situacao,
+        "Apertura" AS dt_abertura,
+        "HoraApertura" AS hr_abertura,
+        "DiasTaller" AS dias_taller,
+        "Job" AS id_job,
+        "Partes" AS vr_pecas,
+        "ManoObra" AS vr_om,
+        "Lubricantes" AS vr_lubrif,
+        "Accesorios" AS vr_acessor,
+        "Cascos" AS vr_cascos,
+        "Adicionales" AS vr_adicionais,
+        "AdAnticipos" AS vr_adiantam,
+        "DescPartes" AS vr_desc_peca,
+        "PercDescPiezas" AS perc_desc_pcs,
+        "TotalPartes" AS vr_total_pecas,
+        "CodigoPagador" AS cod_pagador,
+        "Pagador" AS pagador,
+        "CondPago" AS cod_cond_pgto,
+        "OperFiscal" AS cod_oper_fiscal,
+        "FormaPago" AS forma_pago,
+        "UsoCFDI" AS uso_cfdi,
+        "Garantia" AS sit_garantia,
+        "FISS" AS sit_fiss,
+        "MotivoCancel" AS motivo_cancel,
+        "Desbloqueo" AS dt_debloq,
+        "Prefactura" AS dt_emi_prefact,
+        "HoraLlegada" AS hora_llegada,
+        "Cierre" AS dt_fechamento,
+        "HoraCierre" AS hr_fechamento,
+        "RowID" AS rowid,
+        "Comentarios" AS comentarios,
+        "ComentariosN" AS comentarios_n,
+        "Vin" AS vin,
+        "Asesor" AS asesor,
+        "Cliente" AS cliente,
+        "Telefono" AS telefono,
+        "Ubicacion" AS ubicacion
+    FROM {TABLA_OS}
 """
 
 
@@ -223,8 +261,8 @@ def construir_ordenamiento(request):
     Traduce el parámetro `ordering` (p.ej. `-dt_abertura`)
     a SQL usando la lista blanca ORDENAMIENTO_PERMITIDO.
 
-    Devuelve la cláusula ORDER BY completa. `rowid__` se usa como
-    desempate porque es único, y SQL Server no admite repetir una
+    Devuelve la cláusula ORDER BY completa. La columna RowID se usa como
+    desempate porque es única, y SQL Server no admite repetir una
     columna en la misma lista ORDER BY.
     """
 
@@ -380,16 +418,18 @@ def construir_filtros(request):
         condiciones.append(
             """
             (
-                \"Agencia\" ILIKE %s
-                OR CAST(\"NrOS\" AS VARCHAR(50)) ILIKE %s
-                OR CAST(\"NrAtendimento\" AS VARCHAR(50)) ILIKE %s
-                OR CAST(\"Id_Job\" AS VARCHAR(50)) ILIKE %s
+                LOWER("Agencia") LIKE LOWER(%s)
+                OR CAST("OS" AS VARCHAR(50)) LIKE LOWER(%s)
+                OR CAST("Atencion" AS VARCHAR(50)) LIKE LOWER(%s)
+                OR CAST("Job" AS VARCHAR(50)) LIKE LOWER(%s)
+                OR LOWER("Vin") LIKE LOWER(%s)
+                OR LOWER("Cliente") LIKE LOWER(%s)
             )
             """
         )
 
         parametros.extend(
-            [termino] * 4
+            [termino] * 6
         )
 
     if agencias_in:
@@ -411,7 +451,7 @@ def construir_filtros(request):
 
     if nr_os is not None:
         condiciones.append(
-            '"NrOS" = %s'
+            '"OS" = %s'
         )
         parametros.append(
             nr_os
@@ -419,7 +459,7 @@ def construir_filtros(request):
 
     if nr_atendimento is not None:
         condiciones.append(
-            '"NrAtendimento" = %s'
+            '"Atencion" = %s'
         )
         parametros.append(
             nr_atendimento
@@ -431,12 +471,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f'"TpOS" IN ({marcadores})'
+            f'"TipoOS" IN ({marcadores})'
         )
         parametros.extend(tipos_os_in)
     elif tp_os:
         condiciones.append(
-            '"TpOS" = %s'
+            '"TipoOS" = %s'
         )
         parametros.append(
             tp_os
@@ -448,12 +488,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f'"Situacao" IN ({marcadores})'
+            f'"Situacion" IN ({marcadores})'
         )
         parametros.extend(situaciones_in)
     elif situacao:
         condiciones.append(
-            '"Situacao" = %s'
+            '"Situacion" = %s'
         )
         parametros.append(
             situacao
@@ -465,12 +505,12 @@ def construir_filtros(request):
         )
 
         condiciones.append(
-            f'"SubtipoOS" IN ({marcadores})'
+            f'"Subtipo" IN ({marcadores})'
         )
         parametros.extend(subtipos_os_in)
     elif subtipo_os:
         condiciones.append(
-            '"SubtipoOS" = %s'
+            '"Subtipo" = %s'
         )
         parametros.append(
             subtipo_os
@@ -478,7 +518,7 @@ def construir_filtros(request):
 
     if uso_cfdi:
         condiciones.append(
-            '"Uso_CFDI" = %s'
+            '"UsoCFDI" = %s'
         )
         parametros.append(
             uso_cfdi
@@ -494,7 +534,7 @@ def construir_filtros(request):
 
     if sit_garantia:
         condiciones.append(
-            '"SitGarantia" = %s'
+            '"Garantia" = %s'
         )
         parametros.append(
             sit_garantia
@@ -502,19 +542,19 @@ def construir_filtros(request):
 
     if cod_oper_fiscal is not None:
         condiciones.append(
-            '"CodOperFiscal" = %s'
+            '"OperFiscal" = %s'
         )
         parametros.append(
             cod_oper_fiscal
         )
 
-    # DtAbertura es DATETIME: comparar contra 'YYYY-MM-DD' la interpretaría
+    # Apertura es DATETIME: comparar contra 'YYYY-MM-DD' la interpretaría
     # como medianoche y descartaría todo lo abierto después de las 00:00 del
     # último día (p. ej. el filtro por mes perdería su último día). Se
     # compara por la parte de fecha para que el rango sea inclusivo completo.
     if fecha_desde:
         condiciones.append(
-            "CAST(\"DtAbertura\" AS DATE) >= %s"
+            "CAST(\"Apertura\" AS DATE) >= %s"
         )
         parametros.append(
             fecha_desde
@@ -522,7 +562,7 @@ def construir_filtros(request):
 
     if fecha_hasta:
         condiciones.append(
-            "CAST(\"DtAbertura\" AS DATE) <= %s"
+            "CAST(\"Apertura\" AS DATE) <= %s"
         )
         parametros.append(
             fecha_hasta
@@ -580,8 +620,9 @@ class GotaOrdenesListView(APIView):
 
         consulta_total = f"""
             SELECT COUNT(*)
-            FROM {TABLA_OS_ACTIVAS}
+            FROM {TABLA_OS}
             {where_sql}
+            {RECOMPILE}
         """
 
         consulta = f"""
@@ -589,7 +630,9 @@ class GotaOrdenesListView(APIView):
             {where_sql}
             ORDER BY
                 {ordenamiento}
-            LIMIT %s OFFSET %s
+            OFFSET %s ROWS
+            FETCH NEXT %s ROWS ONLY
+            {RECOMPILE}
         """
 
         with connections[
@@ -607,8 +650,8 @@ class GotaOrdenesListView(APIView):
                 consulta,
                 [
                     *parametros,
-                    tamano_pagina,
                     offset,
+                    tamano_pagina,
                 ],
             )
 
@@ -658,14 +701,17 @@ class GotaDashboardView(APIView):
             )
 
         base = f"""
-            WITH base_os AS (
+            ;WITH base_os AS (
                 SELECT *
-                FROM {TABLA_OS_ACTIVAS}
+                FROM {TABLA_OS}
                 {where_sql}
             )
         """
 
-        dias = '(CURRENT_DATE - "DtAbertura"::date)'
+        dias = (
+            'DATEDIFF(DAY, CAST("Apertura" AS DATE), '
+            "CAST(GETDATE() AS DATE))"
+        )
 
         rango = f"""
             CASE
@@ -677,70 +723,90 @@ class GotaDashboardView(APIView):
             END
         """
 
+        agencia_limpia = (
+            "COALESCE(NULLIF(LTRIM(RTRIM(\"Agencia\")), ''), 'Sin agencia')"
+        )
+
+        tipo_limpio = (
+            "COALESCE(NULLIF(LTRIM(RTRIM(\"TipoOS\")), ''), 'Sin tipo')"
+        )
+
+        subtipo_limpio = (
+            "COALESCE(NULLIF(LTRIM(RTRIM(\"Subtipo\")), ''), 'Sin subtipo')"
+        )
+
         consultas = {
             "totales": base + f"""
                 SELECT
                     COUNT(*) AS ordenes,
                     COUNT(DISTINCT "Agencia") AS agencias,
-                    COUNT(DISTINCT "NrOS") AS ordenes_unicas,
-                    COALESCE(SUM(COALESCE("VrPecas", 0)), 0) AS monto_pecas,
-                    COALESCE(SUM(COALESCE("VrOM", 0)), 0) AS monto_mano_obra,
-                    COALESCE(SUM(COALESCE("VrLubrif", 0)), 0) AS monto_lubricantes,
-                    COALESCE(SUM(COALESCE("VrAcessor", 0)), 0) AS monto_accesorios,
-                    COALESCE(SUM(COALESCE("VrCascos", 0)), 0) AS monto_cascos,
-                    COALESCE(SUM(COALESCE("VrAdicionais", 0)), 0) AS monto_adicionales,
-                    COALESCE(SUM(COALESCE("VrAdiantam", 0)), 0) AS monto_adiantamientos,
-                    COALESCE(SUM(COALESCE("VrDescPeca", 0)), 0) AS descuento_pecas,
-                    COALESCE(
-                        SUM(
-                            COALESCE("VrPecas", 0)
-                            + COALESCE("VrOM", 0)
-                            + COALESCE("VrLubrif", 0)
-                            + COALESCE("VrAcessor", 0)
-                            + COALESCE("VrCascos", 0)
-                            + COALESCE("VrAdicionais", 0)
-                        ),
-                        0
-                    ) AS monto_total,
+                    COUNT(
+                        DISTINCT CONCAT(
+                            "Agencia",
+                            '|',
+                            CAST("OS" AS VARCHAR(50))
+                        )
+                    ) AS ordenes_unicas,
+                    COALESCE(SUM(COALESCE("Partes", 0)), 0) AS monto_pecas,
+                    COALESCE(SUM(COALESCE("ManoObra", 0)), 0) AS monto_mano_obra,
+                    COALESCE(SUM(COALESCE("Lubricantes", 0)), 0) AS monto_lubricantes,
+                    COALESCE(SUM(COALESCE("Accesorios", 0)), 0) AS monto_accesorios,
+                    COALESCE(SUM(COALESCE("Cascos", 0)), 0) AS monto_cascos,
+                    COALESCE(SUM(COALESCE("Adicionales", 0)), 0) AS monto_adicionales,
+                    COALESCE(SUM(COALESCE("AdAnticipos", 0)), 0) AS monto_adiantamientos,
+                    COALESCE(SUM(COALESCE("DescPartes", 0)), 0) AS descuento_pecas,
+                    COALESCE(SUM(
+                        COALESCE("Partes", 0)
+                        + COALESCE("ManoObra", 0)
+                        + COALESCE("Lubricantes", 0)
+                        + COALESCE("Accesorios", 0)
+                        + COALESCE("Cascos", 0)
+                        + COALESCE("Adicionales", 0)
+                        + COALESCE("AdAnticipos", 0)
+                    ), 0) AS monto_total,
                     CAST(
-                        AVG(CAST({dias} AS DOUBLE PRECISION))
+                        AVG(CAST({dias} AS FLOAT))
                         AS NUMERIC(18, 2)
                     ) AS dias_promedio,
                     MAX({dias}) AS dias_maximo
                 FROM base_os
+                {RECOMPILE}
             """,
-            "agencia": base + """
+            "agencia": base + f"""
                 SELECT
-                    COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia') AS agencia,
+                    {agencia_limpia} AS agencia,
                     COUNT(*) AS ordenes,
-                    COALESCE(
-                        SUM(
-                            COALESCE("VrPecas", 0)
-                            + COALESCE("VrOM", 0)
-                            + COALESCE("VrAdicionais", 0)
-                        ),
-                        0
-                    ) AS monto_total
+                    COALESCE(SUM(
+                        COALESCE("Partes", 0)
+                        + COALESCE("ManoObra", 0)
+                        + COALESCE("Lubricantes", 0)
+                        + COALESCE("Accesorios", 0)
+                        + COALESCE("Cascos", 0)
+                        + COALESCE("Adicionales", 0)
+                        + COALESCE("AdAnticipos", 0)
+                    ), 0) AS monto_total
                 FROM base_os
-                GROUP BY COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia')
+                GROUP BY {agencia_limpia}
                 ORDER BY ordenes DESC
+                {RECOMPILE}
             """,
-            "tipo": base + """
+            "tipo": base + f"""
                 SELECT
-                    COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo') AS tp_os,
+                    {tipo_limpio} AS tp_os,
                     COUNT(*) AS ordenes
                 FROM base_os
-                GROUP BY COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo')
+                GROUP BY {tipo_limpio}
                 ORDER BY ordenes DESC
+                {RECOMPILE}
             """,
-            "subtipo": base + """
-                SELECT
-                    COALESCE(NULLIF(BTRIM("SubtipoOS"), ''), 'Sin subtipo') AS subtipo_os,
+            "subtipo": base + f"""
+                SELECT TOP 15
+                    {subtipo_limpio} AS subtipo_os,
                     COUNT(*) AS ordenes
                 FROM base_os
-                GROUP BY COALESCE(NULLIF(BTRIM("SubtipoOS"), ''), 'Sin subtipo')
+                GROUP BY {subtipo_limpio}
                 ORDER BY ordenes DESC
-                LIMIT 15
+                {RECOMPILE}
             """,
             "antiguedad": base + f"""
                 SELECT
@@ -748,34 +814,35 @@ class GotaDashboardView(APIView):
                     {dias} AS orden_dias,
                     COUNT(*) AS ordenes
                 FROM base_os
-                WHERE "DtAbertura" IS NOT NULL
+                WHERE "Apertura" IS NOT NULL
                 GROUP BY {rango}, {dias}
                 ORDER BY orden_dias
+                {RECOMPILE}
             """,
-            "dia": base + """
-                SELECT
-                    "DtAbertura" AS dia,
+            "dia": base + f"""
+                SELECT TOP 30
+                    "Apertura" AS dia,
                     COUNT(*) AS ordenes
                 FROM base_os
-                WHERE "DtAbertura" IS NOT NULL
-                GROUP BY "DtAbertura"
-                ORDER BY "DtAbertura" DESC
-                LIMIT 30
+                WHERE "Apertura" IS NOT NULL
+                GROUP BY "Apertura"
+                ORDER BY "Apertura" DESC
+                {RECOMPILE}
             """,
             "permanencia": base + f"""
-                SELECT
-                    COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia') AS agencia,
+                SELECT TOP 3000
+                    {agencia_limpia} AS agencia,
                     {rango} AS rango,
-                    COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo') AS tp_os,
+                    {tipo_limpio} AS tp_os,
                     COUNT(*) AS ordenes
                 FROM base_os
-                WHERE "DtAbertura" IS NOT NULL
+                WHERE "Apertura" IS NOT NULL
                 GROUP BY
-                    COALESCE(NULLIF(BTRIM("Agencia"), ''), 'Sin agencia'),
+                    {agencia_limpia},
                     {rango},
-                    COALESCE(NULLIF(BTRIM("TpOS"), ''), 'Sin tipo')
+                    {tipo_limpio}
                 ORDER BY ordenes DESC
-                LIMIT 3000
+                {RECOMPILE}
             """,
         }
 
@@ -867,9 +934,14 @@ class GotaOpcionesView(APIView):
     ]
 
     def get(self, request):
-        opciones_cache = cache.get(
-            CACHE_OPCIONES
-        )
+        # Si Redis está caído, seguir con consulta directa a BD en lugar
+        # de devolver 500 (el frontend se quedaría sin agencias ni tipos).
+        try:
+            opciones_cache = cache.get(
+                CACHE_OPCIONES
+            )
+        except Exception:  # noqa: BLE001
+            opciones_cache = None
 
         if opciones_cache:
             return Response(
@@ -877,11 +949,11 @@ class GotaOpcionesView(APIView):
             )
 
         columnas_distintas = [
-            "Agencia",
-            "TpOS",
-            "SubtipoOS",
-            "Uso_CFDI",
-            "FormaPago",
+            ("Agencia", "agencia"),
+            ("TipoOS", "tpos"),
+            ("Subtipo", "subtipoos"),
+            ("UsoCFDI", "uso_cfdi"),
+            ("FormaPago", "formapago"),
         ]
 
         with connections[
@@ -890,19 +962,19 @@ class GotaOpcionesView(APIView):
 
             opciones = {}
 
-            for columna in columnas_distintas:
+            for columna, clave in columnas_distintas:
                 cursor.execute(
                     f"""
                     SELECT DISTINCT
                         LTRIM(
-                            RTRIM(\"{columna}\")
+                            RTRIM("{columna}")
                         ) AS valor
-                    FROM {TABLA_OS_ACTIVAS}
+                    FROM {TABLA_OS}
 
                     WHERE
-                        \"{columna}\" IS NOT NULL
+                        "{columna}" IS NOT NULL
                         AND LTRIM(
-                                RTRIM(\"{columna}\")
+                                RTRIM("{columna}")
                             ) <> ''
 
                     ORDER BY
@@ -910,7 +982,7 @@ class GotaOpcionesView(APIView):
                     """
                 )
 
-                opciones[columna.lower()] = [
+                opciones[clave] = [
                     fila[0]
                     for fila in cursor.fetchall()
                     if fila[0]
@@ -919,9 +991,9 @@ class GotaOpcionesView(APIView):
             cursor.execute(
                 f"""
                 SELECT DISTINCT
-                    \"Situacao\",
-                    \"SitGarantia\"
-                FROM {TABLA_OS_ACTIVAS}
+                    "Situacion",
+                    "Garantia"
+                FROM {TABLA_OS}
                 """
             )
 
@@ -937,11 +1009,11 @@ class GotaOpcionesView(APIView):
             cursor.execute(
                 f"""
                 SELECT
-                    MIN(\"DtAbertura\") AS fecha_minima,
-                    MAX(\"DtAbertura\") AS fecha_maxima
-                FROM {TABLA_OS_ACTIVAS}
+                    MIN("Apertura") AS fecha_minima,
+                    MAX("Apertura") AS fecha_maxima
+                FROM {TABLA_OS}
                 WHERE
-                    \"DtAbertura\" IS NOT NULL
+                    "Apertura" IS NOT NULL
                 """
             )
 
@@ -966,12 +1038,333 @@ class GotaOpcionesView(APIView):
             ),
         }
 
-        cache.set(
-            CACHE_OPCIONES,
-            opciones,
-            300,
-        )
+        try:
+            cache.set(
+                CACHE_OPCIONES,
+                opciones,
+                300,
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
         return Response(
             opciones
+        )
+
+
+# ============================================================
+# COMENTARIOS EDITABLES DE LA ORDEN
+# ============================================================
+
+def datos_usuario(request):
+    usuario = getattr(
+        request,
+        "user",
+        None,
+    )
+
+    id_usuario = getattr(
+        usuario,
+        "id_usuario",
+        None,
+    )
+
+    return (
+        str(id_usuario) if id_usuario is not None else None,
+        str(usuario) if usuario is not None else "",
+    )
+
+
+def orden_activa(agencia, nr_os):
+    """
+    Devuelve la fila {agencia, nr_atendimento} de la vista para la orden
+    indicada, comparando la agencia sin espacios ni mayúsculas para no
+    depender del padding del origen. Devuelve None si la orden no está.
+    """
+
+    filas = (
+        GotaOrdenTallerVW.objects
+        .using(DB_ALIAS)
+        .filter(nr_os=nr_os)
+        .values("agencia", "nr_atendimento")
+    )
+
+    objetivo = agencia.strip().lower()
+
+    for fila in filas:
+        if (fila["agencia"] or "").strip().lower() == objetivo:
+            return fila
+
+    return None
+
+
+class GotaComentarioListCreateView(APIView):
+    authentication_classes = [
+        CRMJWTAuthentication
+    ]
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def get(self, request):
+        agencia = texto_parametro(
+            request,
+            "agencia",
+        )
+
+        try:
+            nr_os = entero_parametro(
+                request,
+                "nr_os",
+            )
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not agencia or nr_os is None:
+            return Response(
+                {
+                    "detail": (
+                        "Los parámetros 'agencia' y 'nr_os' son obligatorios."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        objetivo = agencia.strip().lower()
+
+        comentarios = [
+            comentario
+            for comentario in (
+                GotaOrdenComentario.objects
+                .using(DB_ALIAS)
+                .filter(nr_os=nr_os, activo=True)
+            )
+            if (comentario.agencia or "").strip().lower() == objetivo
+        ]
+
+        serializer = GotaOrdenComentarioSerializer(
+            comentarios,
+            many=True,
+        )
+
+        return Response(serializer.data)
+
+    def post(self, request):
+        agencia = str(
+            request.data.get("agencia")
+            or ""
+        ).strip()
+
+        texto = str(
+            request.data.get("texto")
+            or ""
+        ).strip()
+
+        try:
+            nr_os = int(
+                request.data.get("nr_os")
+            )
+        except (TypeError, ValueError):
+            nr_os = None
+
+        if not agencia or nr_os is None or not texto:
+            return Response(
+                {
+                    "detail": (
+                        "Agencia, NrOS y texto son obligatorios."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        fila = orden_activa(
+            agencia,
+            nr_os,
+        )
+
+        if fila is None:
+            return Response(
+                {
+                    "detail": (
+                        "La orden no existe o ya no está activa."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        id_usuario, nombre_usuario = datos_usuario(
+            request
+        )
+
+        comentario = GotaOrdenComentario(
+            agencia=(fila["agencia"] or agencia).strip(),
+            nr_os=nr_os,
+            nr_atendimento=fila["nr_atendimento"],
+            texto=texto,
+            usuario=id_usuario,
+            usuario_nombre=nombre_usuario,
+            activo=True,
+        )
+
+        comentario.save(
+            using=DB_ALIAS
+        )
+
+        return Response(
+            GotaOrdenComentarioSerializer(comentario).data,
+            status=status.HTTP_201_CREATED,
+        )
+
+
+class GotaComentarioDetalleView(APIView):
+    authentication_classes = [
+        CRMJWTAuthentication
+    ]
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def patch(self, request, pk):
+        comentario = (
+            GotaOrdenComentario.objects
+            .using(DB_ALIAS)
+            .filter(pk=pk, activo=True)
+            .first()
+        )
+
+        if comentario is None:
+            return Response(
+                {"detail": "El comentario no existe."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        texto = str(
+            request.data.get("texto")
+            or ""
+        ).strip()
+
+        if not texto:
+            return Response(
+                {"detail": "El texto es obligatorio."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        comentario.texto = texto
+
+        comentario.save(
+            using=DB_ALIAS
+        )
+
+        return Response(
+            GotaOrdenComentarioSerializer(comentario).data
+        )
+
+    def delete(self, request, pk):
+        comentario = (
+            GotaOrdenComentario.objects
+            .using(DB_ALIAS)
+            .filter(pk=pk, activo=True)
+            .first()
+        )
+
+        if comentario is None:
+            return Response(
+                {"detail": "El comentario no existe."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        comentario.activo = False
+
+        comentario.save(
+            using=DB_ALIAS
+        )
+
+        return Response(
+            status=status.HTTP_204_NO_CONTENT
+        )
+
+
+# ============================================================
+# OBSERVACIONES HISTÓRICAS DE SERVICIO (solo lectura)
+# ============================================================
+
+class GotaObservacionesView(APIView):
+    authentication_classes = [
+        CRMJWTAuthentication
+    ]
+    permission_classes = [
+        IsAuthenticated
+    ]
+
+    def get(self, request):
+        agencia = texto_parametro(
+            request,
+            "agencia",
+        )
+
+        try:
+            nr_os = entero_parametro(
+                request,
+                "nr_os",
+            )
+        except ValueError as exc:
+            return Response(
+                {"detail": str(exc)},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not agencia or nr_os is None:
+            return Response(
+                {
+                    "detail": (
+                        "Los parámetros 'agencia' y 'nr_os' son obligatorios."
+                    )
+                },
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        consulta = f"""
+            SELECT
+                c."Seq" AS seq,
+                c."DtIncl" AS dt_incl,
+                c."HrIncl" AS hr_incl,
+                c."TpComentario" AS tp_comentario,
+                c."RespIncl" AS resp_incl,
+                f."Nm_Funcionario" AS autor,
+                c."Texto" AS texto
+            FROM {TABLA_COMENTARIOS_HISTORICOS} c
+            LEFT JOIN dbo.Matriz_Funcionarios f
+                ON f."Agencia" = c."Agencia"
+                AND f."Cod_Funcionario" = c."RespIncl"
+            WHERE
+                LTRIM(RTRIM(c."Agencia")) = %s
+                AND c."NrOS" = %s
+                AND LTRIM(RTRIM(ISNULL(c."Texto", ''))) <> ''
+                AND LTRIM(RTRIM(c."Texto")) <> 'Cierre de la Orden'
+            ORDER BY
+                c."DtIncl" DESC,
+                c."Seq" DESC
+            {RECOMPILE}
+        """
+
+        with connections[
+            DB_ALIAS
+        ].cursor() as cursor:
+            cursor.execute(
+                consulta,
+                [
+                    agencia.strip(),
+                    nr_os,
+                ],
+            )
+
+            observaciones = cursor_a_dicts(
+                cursor
+            )
+
+        return Response(
+            observaciones
         )

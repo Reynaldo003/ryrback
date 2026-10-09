@@ -63,3 +63,62 @@ class MatrizOSActivas(models.Model):
 
     def __str__(self):
         return f"{self.agencia} · OS {self.nr_os}"
+
+
+class GotaOrdenTallerVW(models.Model):
+    """
+    Vista de órdenes de taller activas (GOTA) del almacén analítico
+    (SQL Server, base TDSQL_VW). Sólo se consulta desde Django.
+    """
+
+    agencia = models.CharField(max_length=255, db_column="Agencia", null=True)
+    nr_os = models.BigIntegerField(db_column="OS", null=True)
+    nr_atendimento = models.BigIntegerField(db_column="Atencion", null=True)
+    tp_os = models.CharField(max_length=255, db_column="TipoOS", null=True)
+    subtipo_os = models.CharField(max_length=255, db_column="Subtipo", null=True)
+    situacao = models.CharField(max_length=255, db_column="Situacion", null=True)
+    dt_abertura = models.DateField(db_column="Apertura", null=True)
+    dias_taller = models.IntegerField(db_column="DiasTaller", null=True)
+    vin = models.CharField(max_length=255, db_column="Vin", null=True)
+    asesor = models.CharField(max_length=255, db_column="Asesor", null=True)
+    cliente = models.CharField(max_length=255, db_column="Cliente", null=True)
+    telefono = models.CharField(max_length=255, db_column="Telefono", null=True)
+    ubicacion = models.CharField(max_length=255, db_column="Ubicacion", null=True)
+
+    class Meta:
+        managed = False
+        db_table = "GotaOrdenTallerVW"
+        verbose_name = "Orden de taller activa (GOTA)"
+        verbose_name_plural = "Órdenes de taller activas (GOTA)"
+
+    def __str__(self):
+        return f"{self.agencia} · OS {self.nr_os}"
+
+
+class GotaOrdenComentario(models.Model):
+    """
+    Comentarios editables que los técnicos capturan sobre una orden de
+    taller. Vive en la misma base analítica (SQL Server) y se administra
+    por Django a través del alias 'sqlserver_inv'.
+    """
+
+    id = models.AutoField(primary_key=True, db_column="IdComentario")
+    agencia = models.CharField(max_length=255, db_column="Agencia")
+    nr_os = models.BigIntegerField(db_column="NrOS")
+    nr_atendimento = models.BigIntegerField(db_column="NrAtendimento", null=True, blank=True)
+    texto = models.TextField(db_column="Texto")
+    usuario = models.CharField(max_length=50, db_column="Usuario", null=True, blank=True)
+    usuario_nombre = models.CharField(max_length=200, db_column="UsuarioNombre", null=True, blank=True)
+    creado_en = models.DateTimeField(db_column="CreadoEn", auto_now_add=True)
+    actualizado_en = models.DateTimeField(db_column="ActualizadoEn", auto_now=True)
+    activo = models.BooleanField(db_column="Activo", default=True)
+
+    class Meta:
+        managed = False
+        db_table = "GotaOrdenComentario"
+        ordering = ["-creado_en", "-id"]
+        verbose_name = "Comentario de orden de taller"
+        verbose_name_plural = "Comentarios de órdenes de taller"
+
+    def __str__(self):
+        return f"OS {self.nr_os} · {self.texto[:40]}"
