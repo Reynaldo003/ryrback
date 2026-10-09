@@ -12,7 +12,7 @@ from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from django.db.models import Q
-
+from django.db.models.functions import Lower, Trim
 from rest_framework import mixins, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
@@ -31,8 +31,10 @@ def normalizar(valor):
     valor = unicodedata.normalize("NFD", str(valor or "").strip().lower())
     return "".join(caracter for caracter in valor if unicodedata.category(caracter) != "Mn")
 
-def obtener_rol(usuario): 
-    return normalizar(getattr(usuario, "rol", ""))
+def obtener_rol(usuario):
+    """Obtiene el nombre del rol relacionado."""
+    rol = getattr(usuario, "rol", None)
+    return normalizar(getattr(rol, "nombre", rol))
 
 def obtener_agencias_usuario(usuario):
     return [agencia.strip() for agencia in str(getattr(usuario, "agencia", "") or "").split("|") if agencia.strip()]
@@ -49,38 +51,38 @@ def nombre_usuario_crm(usuario):
     ).strip()
 
 def obtener_id_rol(usuario):
-    """Extrae el número de rol del usuario (id_rol en la tabla usuarios)."""
-    for campo in ["id_rol", "rol_id", "rol"]:
-        val = getattr(usuario, campo, None)
-        if val is not None:
-            if hasattr(val, "id_rol"):
-                return val.id_rol
-            if hasattr(val, "pk"):
-                return val.pk
-            try:
-                return int(val)
-            except (ValueError, TypeError):
-                pass
-    return None
+    """Obtiene el ID real desde el modelo Usuario."""
+    valor = getattr(usuario, "rol_id", None)
 
+    if valor is None:
+        valor = getattr(usuario, "id_rol", None)
+
+    if valor is None:
+        rol = getattr(usuario, "rol", None)
+        valor = getattr(rol, "id_rol", None)
+
+    try:
+        return int(valor)
+    except (TypeError, ValueError):
+        return None
 
 def es_financiero_agencia(usuario):
-    """Reconoce el rol financiero real, no los permisos visuales del menu."""
+    """Identifica roles con acceso a todos los expedientes de su agencia."""
     if obtener_id_rol(usuario) == 6:
         return True
 
     rol = obtener_rol(usuario)
 
-    return rol in {
+    if rol in {
         "contador",
         "financiero",
         "financieros",
-        "crm financieros",
         "crm_financieros",
-    } or (
-        "gerente" in rol and "financiero" in rol
-    )
+        "crm financieros",
+    }:
+        return True
 
+    return "gerente" in rol and "financiero" in rol
 
 def es_admin(usuario):
     if getattr(usuario, "is_superuser", False):
@@ -112,38 +114,66 @@ def obtener_identificadores_usuario(usuario):
     return [ident for ident in identificadores if ident]
 
 def queryset_expedientes_usuario(usuario):
-    """
-    - Administrador (id_rol = 1): ve todos los expedientes de todos los asesores.
-    - Asesor Piso (id_rol = 12) y demás: solo ve los expedientes creados por él o asignados a él (coincidencia exacta).
-    """
+    """Devuelve únicamente los expedientes autorizados."""
     queryset = Expediente.objects.prefetch_related("documentos").all()
 
     if es_admin(usuario):
         return queryset
 
+    if es_financiero_agencia(usuario):
+        agencias = [
+            agencia.strip().lower()
+            for agencia in obtener_agencias_usuario(usuario)
+            if agencia.strip()
+        ]
+
+        if not agencias:
+            return queryset.none()
+
+        return queryset.alias(
+            agencia_comparable=Lower(Trim("agencia"))
+        ).filter(
+            agencia_comparable__in=agencias
+        )
+
     identificadores = obtener_identificadores_usuario(usuario)
+
     if not identificadores:
         return queryset.none()
 
-    filtro_propios = Q()
-    for ident in identificadores:
-        # Coincidencia exacta sin importar mayúsculas/minúsculas (evita colisiones con nombres parecidos)
-        filtro_propios |= Q(creado_por__iexact=ident)
-        filtro_propios |= Q(asesor_nombre__iexact=ident)
+    filtro = Q()
 
-    return queryset.filter(filtro_propios)
+    for identificador in identificadores:
+        filtro |= Q(creado_por__iexact=identificador)
+        filtro |= Q(asesor_nombre__iexact=identificador)
+
+    return queryset.filter(filtro)
 
 def puede_editar_expediente(usuario, expediente):
-    """Valida si el usuario en sesión tiene permisos para editar un expediente específico."""
+    """Comprueba permisos de edición del expediente."""
     if es_admin(usuario):
         return True
 
-    identificadores = [i.lower() for i in obtener_identificadores_usuario(usuario)]
-    creado = str(expediente.creado_por or "").strip().lower()
-    asesor = str(expediente.asesor_nombre or "").strip().lower()
+    if es_financiero_agencia(usuario):
+        agencia = normalizar(expediente.agencia)
 
-    # Coincidencia exacta entre identificadores del usuario y creado_por / asesor_nombre
-    return creado in identificadores or asesor in identificadores
+        return bool(agencia) and any(
+            normalizar(asignada) == agencia
+            for asignada in obtener_agencias_usuario(usuario)
+        )
+
+    identificadores = {
+        normalizar(valor)
+        for valor in obtener_identificadores_usuario(usuario)
+    }
+
+    return any(
+        valor and valor in identificadores
+        for valor in [
+            normalizar(expediente.creado_por),
+            normalizar(expediente.asesor_nombre),
+        ]
+    )
 
 def limpiar_nombre_archivo(nombre, nombre_default="archivo.pdf"):
     """
