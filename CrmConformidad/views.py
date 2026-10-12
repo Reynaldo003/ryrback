@@ -14,6 +14,7 @@ from .models import ExpedienteConformidad, ExpedienteDocumento, Usuario, Rol
 from .permissions import IsAdminRole
 from .serializers import CasoSerializer, ExpedienteDocumentoSerializer, UsuarioRegisterSerializer, UsuarioLoginSerializer, AdminUsuarioCreateSerializer, AdminUsuarioUpdateSerializer, PerfilUsuarioUpdateSerializer
 from .catalogo_interfaces import permisos_por_interfaces
+from logs.helpers import registrar_log
 
 
 # ============================================================
@@ -286,6 +287,14 @@ class AuthLoginView(APIView):
         ser = UsuarioLoginSerializer(data=request.data)
 
         if not ser.is_valid():
+            registrar_log(
+                usuario=None,
+                tipo="LOGIN_FALLIDO",
+                modulo="auth",
+                entidad=f"Usuario {str(request.data.get('usuario', '')).strip()[:100]}",
+                cambio="Intento de inicio de sesión fallido",
+                ip=request.META.get("REMOTE_ADDR"),
+            )
             return Response(
                 {"detail": "Credenciales inválidas."},
                 status=status.HTTP_401_UNAUTHORIZED,
@@ -294,6 +303,15 @@ class AuthLoginView(APIView):
         user = ser.validated_data["user"]
         jwt = generar_jwt_usuario(user)
         user_data = serialize_usuario(user, request)
+
+        registrar_log(
+            usuario=user,
+            tipo="LOGIN",
+            modulo="auth",
+            entidad=f"Usuario {user.usuario}",
+            cambio="Inicio de sesión correcto",
+            ip=request.META.get("REMOTE_ADDR"),
+        )
 
         return Response(
             {

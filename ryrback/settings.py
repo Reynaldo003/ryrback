@@ -140,6 +140,7 @@ INSTALLED_APPS = [
     "gota",
     "ordenes_facturadas",
     "VentaRefacciones",
+    "logs",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -154,6 +155,7 @@ MIDDLEWARE = [
     'django.contrib.auth.middleware.AuthenticationMiddleware',
     'django.contrib.messages.middleware.MessageMiddleware',
     'django.middleware.clickjacking.XFrameOptionsMiddleware',
+    'logs.middleware.LogActividadMiddleware',
 ]
 #REST_FRAMEWORK = {
 #    "DEFAULT_AUTHENTICATION_CLASSES": [
@@ -279,7 +281,7 @@ DATABASES = {
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
         "HOST": "127.0.0.1",
-#       "HOST": "45.82.73.31",
+#         "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     "tdsql": {
@@ -287,8 +289,8 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-       "HOST": "127.0.0.1",
-#        "HOST": "45.82.73.31",
+      "HOST": "127.0.0.1",
+ #       "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     'sqlserver': {
