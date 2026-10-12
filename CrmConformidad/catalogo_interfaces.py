@@ -35,6 +35,7 @@ PERMISOS_POR_INTERFAZ = {
     "administrativos": ["CRM_RRHH"],
     "qr": ["USUARIOS_ADMIN"],
     "configuracion": ["USUARIOS_ADMIN"],
+    "logs": ["USUARIOS_ADMIN"],
 }
 
 
