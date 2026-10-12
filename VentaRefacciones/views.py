@@ -132,6 +132,8 @@ def venta_refacciones_lista(request):
                COALESCE(SUM(vr."VrCustoEstoque"), 0) AS costo_registrado
         FROM public.matriz_ventasref vr
         WHERE {where}
+        AND vr."TpProduto" = 'P'
+        AND (vr."CodArea" = 'AT' OR (vr."CodArea" = 'PA' AND vr."Serie" <> 'IN'))
     """
     metricas = _consultar(sql_metricas, parametros, unico=True)
 
@@ -297,13 +299,13 @@ def venta_refacciones_piezas(request):
             LIMIT 1
         ) pa ON TRUE
 
-        WHERE vr."TpProduto" = %s
-          AND vr."Agencia" = %s
+        WHERE vr."Agencia" = %s
           AND vr."Serie" IS NOT DISTINCT FROM %s
           AND vr."NrNota" = %s
           AND vr."DtEmissao" >= %s
           AND vr."DtEmissao" < %s
-
+          AND vr."TpProduto" = 'P'
+          AND (vr."CodArea" = 'AT' OR (vr."CodArea" = 'PA' AND vr."Serie" <> 'IN'))
         ORDER BY
             vr."SeqItensNota" NULLS LAST,
             vr.rowid__ NULLS LAST
