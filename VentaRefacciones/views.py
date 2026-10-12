@@ -174,7 +174,6 @@ def venta_refacciones_opciones(request):
         SELECT DISTINCT "Agencia" AS agencia
         FROM public.matriz_ventasref
         WHERE "TpProduto" = %s
-          AND (vr."CodArea" = 'AT' OR (vr."CodArea" = 'PA' AND vr."Serie" <> 'IN'))
           AND NULLIF(BTRIM("Agencia"), '') IS NOT NULL
         ORDER BY agencia
     """, ["P"])
