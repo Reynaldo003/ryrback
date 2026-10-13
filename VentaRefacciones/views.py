@@ -192,69 +192,137 @@ def venta_refacciones_lista(request):
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
 def venta_refacciones_analisis(request):
-    """Top 8 de líneas y clientes; endpoint independiente de la tabla de facturas."""
+    """Ventas por línea y cliente, con agencia opcional y sin IVA."""
+
     try:
         filtros = _obtener_filtros(request)
     except ValueError as error:
         return JsonResponse({"detail": str(error)}, status=400)
 
-    # En un servidor con ETL, no ejecutar agrupaciones de clientes sobre todos los años.
-    desde, hasta = filtros["fecha_desde"], filtros["fecha_hasta"]
-    if not filtros["agencia"] or not desde or not hasta or (hasta - desde).days > 31:
-        return JsonResponse({"detail": "Selecciona una agencia y un periodo máximo de 32 días."}, status=400)
+    desde = filtros["fecha_desde"]
+    hasta = filtros["fecha_hasta"]
+    agencia = filtros["agencia"]
 
-    huella = repr((filtros["agencia"], desde, hasta, filtros["q"]))
-    clave = "venta_ref_analisis:" + hashlib.sha256(huella.encode()).hexdigest()
-    almacenado = cache.get(clave)
-    if almacenado is not None:
-        return JsonResponse(almacenado)
+    if not desde or not hasta:
+        return JsonResponse({
+            "detail": "Selecciona un periodo válido."
+        }, status=400)
 
+    if (hasta - desde).days > 31:
+        return JsonResponse({
+            "detail": "Las gráficas permiten periodos de hasta 32 días."
+        }, status=400)
+
+    # Si agencia está vacía, no se aplica filtro de agencia.
     where, parametros = _construir_where(filtros)
-    # GROUPING SETS hace las dos agregaciones en una lectura. Las tablas auxiliares
-    # se buscan solo para los 8 grupos ganadores de cada tipo, NUNCA por cada venta.
+
     sql = f"""
         WITH grupos AS (
             SELECT
                 GROUPING(vr."CodLinhaProd") AS tipo,
-                vr."CodLinhaProd"::text AS codigo_linea,
+                vr."CodLinhaProd" AS codigo_linea,
                 vr."Agencia" AS agencia,
                 vr."CodEntidade" AS codigo_cliente,
+
                 COUNT(*) AS items,
-                COALESCE(SUM(vr."QtProdutos"), 0) AS piezas,
-                ROUND(COALESCE(SUM(vr."VrLiqItem"::numeric), 0), 2) AS ventas,
-                SUM(ROUND(COALESCE(vr."VrCustoEstoque", 0)::numeric, 2)) AS costo
+
+                COALESCE(
+                    SUM(vr."QtProdutos"), 0
+                ) AS piezas,
+
+                ROUND(
+                    COALESCE(
+                        SUM(vr."VrLiqItem"::numeric), 0
+                    ), 2
+                ) AS ventas,
+
+                COALESCE(
+                    SUM(
+                        ROUND(
+                            COALESCE(vr."VrCustoEstoque", 0)::numeric,
+                            2
+                        )
+                    ), 0
+                ) AS costo
+
             FROM public.matriz_ventasref vr
             WHERE {where}
-            GROUP BY GROUPING SETS ((vr."CodLinhaProd"), (vr."Agencia", vr."CodEntidade"))
+
+            GROUP BY GROUPING SETS (
+                (vr."CodLinhaProd"),
+                (vr."Agencia", vr."CodEntidade")
+            )
         ),
+
         ordenados AS (
-            SELECT g.*,
-                ROW_NUMBER() OVER (PARTITION BY tipo ORDER BY ventas DESC) AS posicion,
-                SUM(ventas) OVER (PARTITION BY tipo) AS total_grupo
+            SELECT
+                g.*,
+
+                ROW_NUMBER() OVER (
+                    PARTITION BY g.tipo
+                    ORDER BY g.ventas DESC
+                ) AS posicion,
+
+                SUM(g.ventas) OVER (
+                    PARTITION BY g.tipo
+                ) AS total_grupo
+
             FROM grupos g
         ),
+
         top_grupos AS MATERIALIZED (
-            SELECT * FROM ordenados WHERE posicion <= 8
+            SELECT *
+            FROM ordenados
+            WHERE posicion <= 8
         )
-        SELECT t.*,
-            COALESCE(NULLIF(BTRIM(lin.nmlinhaprod), ''),
-                     NULLIF(BTRIM(t.codigo_linea), ''), 'Sin línea') AS linea,
+
+        SELECT
+            t.*,
+
+            COALESCE(
+                NULLIF(BTRIM(lin.nmlinhaprod), ''),
+                NULLIF(BTRIM(t.codigo_linea), ''),
+                'Sin línea'
+            ) AS linea,
+
             COALESCE(
                 NULLIF(BTRIM(ent.razao_social), ''),
-                NULLIF(BTRIM(CONCAT_WS(' ', ent.nomes, ent.sobrenm_pat, ent.sobrenm_mat)), ''),
-                CASE WHEN t.codigo_cliente IS NULL THEN 'Sin cliente'
-                     ELSE 'Cliente ' || t.codigo_cliente::text END
+                NULLIF(
+                    BTRIM(
+                        CONCAT_WS(
+                            ' ',
+                            ent.nomes,
+                            ent.sobrenm_pat,
+                            ent.sobrenm_mat
+                        )
+                    ), ''
+                ),
+                CASE
+                    WHEN t.codigo_cliente IS NULL
+                    THEN 'Sin cliente'
+                    ELSE 'Cliente ' || t.codigo_cliente::text
+                END
             ) AS cliente
+
         FROM top_grupos t
+
         LEFT JOIN LATERAL (
             SELECT l.nmlinhaprod
             FROM public.matriz_linea l
             WHERE l.codlinhaprod::text = t.codigo_linea
-            ORDER BY l.nmlinhaprod NULLS LAST LIMIT 1
+            ORDER BY l.nmlinhaprod NULLS LAST
+            LIMIT 1
         ) lin ON t.tipo = 0
+
         LEFT JOIN LATERAL (
-            SELECT e.razao_social, e.nomes, e.sobrenm_pat, e.sobrenm_mat
+            SELECT
+                e.razao_social,
+                e.nomes,
+                e.sobrenm_pat,
+                e.sobrenm_mat
+
             FROM public.matriz_entidades e
+
             WHERE e.cod_entidade = t.codigo_cliente
               AND e.dn_modifico = CASE t.agencia
                   WHEN 'Vw Tuxtepec' THEN 1905
@@ -262,35 +330,75 @@ def venta_refacciones_analisis(request):
                   WHEN 'Vw Orizaba' THEN 2924
                   WHEN 'Vw Poza Rica' THEN 2927
                   WHEN 'Vw Tuxpan' THEN 2929
-                  ELSE NULL END
-            ORDER BY e.razao_social NULLS LAST LIMIT 1
+                  ELSE NULL
+              END
+
+            ORDER BY e.razao_social NULLS LAST
+            LIMIT 1
         ) ent ON t.tipo = 1
+
         ORDER BY t.tipo, t.posicion
     """
+
     try:
-        registros = _consultar(sql, parametros, limite_ms=12000)
+        registros = _consultar(
+            sql,
+            parametros,
+            limite_ms=12000
+        )
     except DatabaseError as error:
         return _error_base_datos(error)
 
-    lineas, clientes = [], []
+    lineas = []
+    clientes = []
+
     for fila in registros:
         ventas = fila["ventas"] or 0
         costo = fila["costo"] or 0
-        detalle = {
-            "nombre": fila["linea"] if fila["tipo"] == 0 else fila["cliente"],
-            "codigo": fila["codigo_linea"] if fila["tipo"] == 0 else fila["codigo_cliente"],
-            "items": fila["items"], "piezas": fila["piezas"],
-            "ventas": ventas, "costo": costo,
-            "utilidad_bruta": ventas - costo,
-            "margen_bruto": round((ventas - costo) * 100 / ventas, 2) if ventas else 0,
-            "porcentaje_total": round(ventas * 100 / fila["total_grupo"], 2) if fila["total_grupo"] else 0,
-            "total_grupo": fila["total_grupo"],
-        }
-        (lineas if fila["tipo"] == 0 else clientes).append(detalle)
+        utilidad = ventas - costo
+        total = fila["total_grupo"] or 0
 
-    respuesta = {"lineas": lineas, "clientes": clientes}
-    cache.set(clave, respuesta, 600)
-    return JsonResponse(respuesta)
+        es_linea = fila["tipo"] == 0
+
+        if es_linea:
+            nombre = fila["linea"]
+            codigo = fila["codigo_linea"]
+        else:
+            nombre = fila["cliente"]
+            codigo = fila["codigo_cliente"]
+
+            # Identificar la agencia al consultar todas.
+            if not agencia:
+                nombre = f'{fila["agencia"]} - {nombre}'
+
+        detalle = {
+            "nombre": nombre,
+            "codigo": codigo,
+            "items": fila["items"],
+            "piezas": fila["piezas"],
+            "ventas": ventas,
+            "costo": costo,
+            "utilidad_bruta": utilidad,
+            "margen_bruto": (
+                round(utilidad * 100 / ventas, 2)
+                if ventas else 0
+            ),
+            "porcentaje_total": (
+                round(ventas * 100 / total, 2)
+                if total else 0
+            ),
+            "total_grupo": total
+        }
+
+        if es_linea:
+            lineas.append(detalle)
+        else:
+            clientes.append(detalle)
+
+    return JsonResponse({
+        "lineas": lineas,
+        "clientes": clientes
+    })
 
 @api_view(["GET"])
 @permission_classes([IsAuthenticated])
