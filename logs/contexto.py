@@ -43,7 +43,11 @@ def _digitos_10(valor):
 
 
 def _cliente_por_telefono(valor):
-    """(nombre, telefono) del ClienteComercial según el `to` del request."""
+    """(nombre, telefono) del ClienteComercial según el `to` del request.
+
+    Devuelve nombre=None si no hay cliente o no tiene nombre (para que el
+    destino caiga a mostrar el teléfono en vez de "sin nombre").
+    """
     dig10 = _digitos_10(valor)
     if not dig10:
         return None, ""
@@ -58,7 +62,7 @@ def _cliente_por_telefono(valor):
         cli = None
     if cli is None:
         return None, ""
-    nombre = (getattr(cli, "nombre", "") or "").strip() or "sin nombre"
+    nombre = (getattr(cli, "nombre", "") or "").strip() or None
     return nombre, (getattr(cli, "telefono", "") or "")
 
 
