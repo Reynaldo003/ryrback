@@ -280,8 +280,8 @@ DATABASES = {
         "NAME": "crm_ryr",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-        "HOST": "127.0.0.1",
-#         "HOST": "45.82.73.31",
+         #"HOST": "127.0.0.1",
+         "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     "tdsql": {
@@ -289,8 +289,8 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-      "HOST": "127.0.0.1",
- #       "HOST": "45.82.73.31",
+      # "HOST": "127.0.0.1",
+       "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     'sqlserver': {
