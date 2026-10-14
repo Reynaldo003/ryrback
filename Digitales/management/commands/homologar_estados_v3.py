@@ -18,21 +18,73 @@ from Digitales.models import ActividadComercialDigital, ExpedienteDigital
 
 # Equivalencias sujetas a aprobación del negocio. Sólo texto exacto normalizado.
 # Ningún estado histórico crea evidencia técnica de eventos anteriores.
+import re
+from datetime import date
+
 EQUIVALENCIAS = {
     'sin contactar': 'nuevo_prospecto',
     'contactado': 'en_seguimiento',
     'calificado': 'en_seguimiento',
+    'en perfilamiento': 'en_seguimiento',
+    'potencialmente viable': 'en_seguimiento',
     'cotizacion realizada': 'cotizacion_enviada',
     'cita programada': 'cita_agendada',
     'asistencia a la cita': 'cita_asistida',
+    'documentos enviados': 'documentos_enviados',
+    'solicitud de credito': 'documentos_enviados',
     'seguimiento': 'en_seguimiento',
     'autorizado no formalizado': 'autorizado_no_formalizado',
     'facturado': 'facturado',
-    # 'Entregado' no demuestra facturación por sí solo: revisión manual.
-    # 'entregado': 'facturado',
-    # Sin motivo homologado no creamos un lead perdido validado.
-    # 'descalificado': 'lead_perdido',
+    'descalificado': 'lead_perdido',
 }
+
+_PATRON_VIN = re.compile(r'^[A-HJ-NPR-Z0-9]{17}$')
+
+
+def clasificar_expediente_historico(
+    item,
+    *,
+    tiene_cita_agencia=False,
+    tiene_cita_asistida_agencia=False,
+    tiene_msg_humano_out=False,
+):
+    """Clasificación estrictamente conservadora:
+    Si el estado antiguo no cuenta con evidencia verificable en BD, devuelve None
+    (permanece en Pendiente de clasificación para revisión manual).
+    """
+    estado_norm = normalizar(item.get('estado'))
+    vin = str(item.get('vin_facturado') or '').strip().upper()
+    motivo_desc = str(item.get('motivo_descalificacion') or '').strip()
+    folio_cred = str(item.get('folio_solicitud_credito') or '').strip()
+    estatus_cred = normalizar(item.get('solicitud_credito_estado'))
+    id_cot = str(item.get('id_cotizacion') or '').strip()
+    asistio_exp = bool(item.get('asistencia'))
+    tiene_cita_exp = bool(item.get('ultima_cita_agendada') or item.get('ultima_cita_id') or tiene_cita_agencia)
+    tiene_contacto_humano = bool(
+        item.get('primer_contacto_asesor')
+        or item.get('ultimo_contacto_asesor')
+        or tiene_msg_humano_out
+    )
+
+    if estado_norm == 'facturado':
+        return 'facturado' if _PATRON_VIN.fullmatch(vin) else None
+    if estado_norm == 'descalificado':
+        return 'lead_perdido' if len(motivo_desc) >= 3 else None
+    if estado_norm == 'autorizado no formalizado':
+        return 'autorizado_no_formalizado' if (folio_cred or estatus_cred == 'autorizado') and not vin else None
+    if estado_norm in {'documentos enviados', 'solicitud de credito'}:
+        return 'documentos_enviados' if folio_cred else None
+    if estado_norm == 'asistencia a la cita':
+        return 'cita_asistida' if (asistio_exp or tiene_cita_asistida_agencia) else None
+    if estado_norm == 'cita programada':
+        return 'cita_agendada' if tiene_cita_exp else None
+    if estado_norm == 'cotizacion realizada':
+        return 'cotizacion_enviada' if id_cot else None
+    if estado_norm in {'contactado', 'calificado', 'en perfilamiento', 'potencialmente viable', 'seguimiento'}:
+        return 'en_seguimiento' if tiene_contacto_humano else None
+    if estado_norm == 'sin contactar':
+        return 'nuevo_prospecto' if (not tiene_contacto_humano and not tiene_cita_exp and not vin) else None
+    return None
 
 
 def normalizar(valor):
@@ -95,7 +147,8 @@ class Command(BaseCommand):
             corte_fecha = datetime.strptime(opts['antes_de'], '%Y-%m-%d').date()
         except ValueError as ex:
             raise CommandError('Usa --antes-de YYYY-MM-DD.') from ex
-        corte = timezone.make_aware(datetime.combine(corte_fecha, time.min), timezone.get_current_timezone())
+        corte_dt = datetime.combine(corte_fecha, time.min)
+        corte = timezone.make_aware(corte_dt, timezone.get_current_timezone()) if getattr(settings, 'USE_TZ', False) else corte_dt
         aplicar = opts['aplicar']
         if aplicar and (opts['confirmar_local'] != 'HOMOLOGAR_SOLO_PRUEBAS' or not opts['huella']):
             raise CommandError('Para aplicar indica --confirmar-local HOMOLOGAR_SOLO_PRUEBAS y --huella SHA256.')
@@ -107,8 +160,44 @@ class Command(BaseCommand):
             ).order_by('pk')
             if aplicar:
                 qs = qs.select_for_update()
-            items = list(qs.values('pk', 'estado', 'agencia', 'asesor_digital', 'creado'))
-            filas = [(p['pk'], str(p['estado'] or ''), EQUIVALENCIAS.get(normalizar(p['estado']))) for p in items]
+            from citas.models import Cita
+            from Digitales.models import MensajeWhatsApp
+
+            items = list(qs.values(
+                'pk', 'cliente_id', 'estado', 'agencia', 'asesor_digital', 'creado',
+                'vin_facturado', 'motivo_descalificacion', 'folio_solicitud_credito',
+                'solicitud_credito_estado', 'id_cotizacion', 'asistencia',
+                'ultima_cita_agendada', 'ultima_cita_id',
+                'primer_contacto_asesor', 'ultimo_contacto_asesor',
+            ))
+            cliente_ids = [p['cliente_id'] for p in items if p.get('cliente_id')]
+            pares_cita = {
+                (cid, normalizar(ag))
+                for cid, ag in Cita.objects.using('default')
+                .filter(cliente_id__in=cliente_ids)
+                .values_list('cliente_id', 'agencia')
+            } if cliente_ids else set()
+            pares_asistencia = {
+                (cid, normalizar(ag))
+                for cid, ag in Cita.objects.using('default')
+                .filter(cliente_id__in=cliente_ids, asistencia=True)
+                .values_list('cliente_id', 'agencia')
+            } if cliente_ids else set()
+            clientes_con_humano = set(
+                MensajeWhatsApp.objects.using('default')
+                .filter(cliente_id__in=cliente_ids, direction='out', from_ia=False)
+                .values_list('cliente_id', flat=True)
+            ) if cliente_ids else set()
+
+            for p in items:
+                par = (p.get('cliente_id'), normalizar(p.get('agencia')))
+                p['_etapa_resuelta'] = clasificar_expediente_historico(
+                    p,
+                    tiene_cita_agencia=par in pares_cita,
+                    tiene_cita_asistida_agencia=par in pares_asistencia,
+                    tiene_msg_humano_out=p.get('cliente_id') in clientes_con_humano,
+                )
+            filas = [(p['pk'], str(p['estado'] or ''), p['_etapa_resuelta']) for p in items]
             firma_data = {'corte': opts['antes_de'], 'filas': filas, 'version': 2}
             firma = hashlib.sha256(json.dumps(firma_data, ensure_ascii=False, separators=(',', ':')).encode('utf-8')).hexdigest()
             destinos = Counter(etapa or 'PENDIENTE_DE_CLASIFICACION' for _, _, etapa in filas)
@@ -129,7 +218,7 @@ class Command(BaseCommand):
                 raise CommandError('La huella cambió: vuelve a simular antes de aplicar.')
             total = 0
             for item in items:
-                etapa = EQUIVALENCIAS.get(normalizar(item['estado']))
+                etapa = item.get('_etapa_resuelta')
                 if not etapa:
                     continue
                 if ExpedienteDigital.objects.using('default').filter(pk=item['pk'], etapa_comercial_v3__isnull=True).update(etapa_comercial_v3=etapa) != 1:
@@ -139,7 +228,7 @@ class Command(BaseCommand):
                     tipo='correccion', origen='correccion',
                     agencia=item['agencia'] or '', usuario_crm='migracion_historica_v3',
                     asesor_digital=item['asesor_digital'] or '',
-                    fecha_actividad=timezone.localdate(),
+                    fecha_actividad=timezone.localdate() if getattr(settings, 'USE_TZ', False) else date.today(),
                     detalle={
                         'evento': 'homologacion_historica_v3',
                         'tipo_registro': 'clasificacion_heredada_no_validada',

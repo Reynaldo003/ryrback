@@ -1146,7 +1146,8 @@ class ProspectoSerializer(serializers.ModelSerializer):
             )
 
         return exp
-    
+
+    @transaction.atomic(using="default")
     def update(self, instance, validated_data):
         evidencias_nuevas = validated_data.pop("evidencias_nuevas", [])
         delete_evidencia_ids = validated_data.pop("delete_evidencia_ids", [])

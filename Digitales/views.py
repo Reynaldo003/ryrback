@@ -542,6 +542,38 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             queryset = self._queryset_coordinador_todas_las_lineas(user)
             return self._aplicar_filtros_listado(queryset)
 
+        param_linea = str(self.request.query_params.get("numero_asesor", "") or "").strip()
+        if not param_linea:
+            try:
+                param_linea = str(self.request.data.get("numero_asesor", "") or "").strip()
+            except Exception:
+                param_linea = ""
+        numeros_usr = _numeros_whatsapp_usuario(user) if user else []
+
+        # Solo si el usuario autenticado NO tiene línea asignada y NO solicitó un
+        # numero_asesor específico, aplicamos aislamiento por su agencia y asignación.
+        # Si solicitó una línea ajena o inválida, _get_numero_asesor_request rechaza con 403.
+        if user and not es_admin and not param_linea and not numeros_usr:
+            from .actividades_views import _ROLES_EXCLUIDOS_DIGITALES, _rol_clave_usuario
+            if _rol_clave_usuario(user) in _ROLES_EXCLUIDOS_DIGITALES:
+                return self._base_queryset().none()
+            agencias_usr = [
+                parte.strip() for parte in str(getattr(user, "agencia", "") or "").split("|")
+                if parte.strip()
+            ]
+            if not agencias_usr:
+                return self._base_queryset().none()
+            filtro_ag = Q()
+            for ag in agencias_usr:
+                filtro_ag |= Q(agencia__iexact=ag)
+            queryset = self._base_queryset().filter(filtro_ag)
+            if not _usuario_puede_ver_toda_linea(user):
+                login_usr = _usuario_login(user)
+                if not login_usr:
+                    return queryset.none()
+                queryset = queryset.filter(usuario_crm_asignado__iexact=login_usr)
+            return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
+
         numero_asesor = _get_numero_asesor_request(self.request)
         queryset = self._queryset_por_linea(numero_asesor)
         return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
@@ -632,18 +664,15 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         from django.db import transaction
         from rest_framework.exceptions import ValidationError
 
+        from .actividades_views import _autorizado, _usuario_en_piloto_o_general
+
         habilitado = (
             getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
             and getattr(settings, "CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO", False)
-            and str(self.request.user.pk) in {
-                str(pk) for pk in (
-                    getattr(settings, "CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS", ()) or ()
-                )
-            }
+            and _usuario_en_piloto_o_general(self.request.user)
         )
         with transaction.atomic(using="default"):
             if habilitado:
-                # Solo en piloto: evita comparar contra una instantánea obsoleta.
                 serializer.instance = ExpedienteDigital.objects.select_for_update().get(
                     pk=serializer.instance.pk
                 )
@@ -656,18 +685,20 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             vin_enviado = "vin_facturado" in serializer.validated_data
             vin_nuevo = str(serializer.validated_data.get("vin_facturado") or "").strip().upper() if vin_enviado else vin_anterior
 
-            if habilitado and expediente.etapa_comercial_v3 is not None:
-                # Las 17 posiciones permitidas son la misma regla del sync legacy.
-                if vin_enviado and vin_nuevo and vin_nuevo != vin_anterior and not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo):
+            if habilitado and expediente.etapa_comercial_v3 is not None and vin_enviado and vin_nuevo != vin_anterior:
+                if not _autorizado(self.request.user, expediente):
+                    raise PermissionDenied(
+                        "No tienes permiso comercial sobre este expediente para registrar o modificar su VIN facturado."
+                    )
+                if vin_nuevo and not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo):
                     raise ValidationError({
                         "vin_facturado": "Para V3 se requiere un VIN válido de 17 caracteres."
                     })
-                if vin_enviado and vin_nuevo != vin_anterior and expediente.etapa_comercial_v3 == "facturado":
+                if expediente.etapa_comercial_v3 == "facturado":
                     raise ValidationError({
                         "vin_facturado": "La etapa Facturado V3 es terminal. Una rectificación del VIN requiere un proceso autorizado."
                     })
-                if (vin_enviado and vin_nuevo != vin_anterior and vin_nuevo
-                        and expediente.etapa_comercial_v3 in {"compra_futura", "lead_perdido"}):
+                if vin_nuevo and expediente.etapa_comercial_v3 in {"compra_futura", "lead_perdido"}:
                     raise ValidationError({
                         "vin_facturado": "Reactiva el seguimiento V3 antes de registrar un VIN facturado."
                     })
@@ -3066,6 +3097,7 @@ def chats_list(request):
             "agencia": exp.agencia or "",
             "linea": exp.business or "",
             "estado": exp.estado or "",
+            "etapa_comercial_v3": exp.etapa_comercial_v3,
             "unread": int(
                 no_leidos.get(
                     telefono,

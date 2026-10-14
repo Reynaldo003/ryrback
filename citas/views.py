@@ -707,11 +707,30 @@ class CitasViewSet(ModelViewSet):
                 raise PermissionDenied("No puedes trasladar la cita a una agencia no autorizada.")
         serializer.save()
 
-    def get_authenticators(self):
-        return [] if getattr(self, "action", None) in self.acciones_publicas else [CRMJWTAuthentication()]
-
     def get_permissions(self):
         return [AllowAny()] if getattr(self, "action", None) in self.acciones_publicas else [IsAuthenticated()]
+
+    def perform_create(self, serializer):
+        usuario = getattr(self.request, "user", None)
+        if getattr(usuario, "is_authenticated", False):
+            permitidas = {
+                parte.strip().casefold()
+                for parte in str(getattr(usuario, "agencia", "") or "").split("|")
+                if parte.strip()
+            }
+            nueva_agencia = str(serializer.validated_data.get("agencia") or "").strip().casefold()
+            if not permitidas or (nueva_agencia and nueva_agencia not in permitidas):
+                raise PermissionDenied("No puedes registrar citas en una agencia no autorizada.")
+            campo_reg = Cita._meta.get_field("registrada_por_crm")
+            es_bool = campo_reg.get_internal_type() == "BooleanField"
+            valor_crm = True if es_bool else str(
+                getattr(usuario, "usuario", "") or getattr(usuario, "username", "") or "crm"
+            ).strip()[:120]
+            serializer.save(registrada_por_crm=valor_crm)
+        else:
+            campo_reg = Cita._meta.get_field("registrada_por_crm")
+            es_bool = campo_reg.get_internal_type() == "BooleanField"
+            serializer.save(registrada_por_crm=False if es_bool else "")
 
 class RegistroPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]

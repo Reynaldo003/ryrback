@@ -16,7 +16,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-from .actividades_views import _autorizado
+from .actividades_views import _autorizado, _usuario_en_piloto_o_general
 from .models import ActividadComercialDigital, ExpedienteDigital
 
 
@@ -31,11 +31,7 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
             status=status.HTTP_404_NOT_FOUND,
         )
 
-    ids_piloto = {
-        str(valor) for valor in
-        (getattr(settings, "CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS", ()) or ())
-    }
-    if str(request.user.pk) not in ids_piloto:
+    if not _usuario_en_piloto_o_general(request.user):
         return Response(
             {"codigo": "usuario_no_autorizado", "detalle": "Usuario fuera del piloto."},
             status=status.HTTP_403_FORBIDDEN,
@@ -57,7 +53,7 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
         ActividadComercialDigital.objects
         .filter(expediente_id=expediente.pk)
         .order_by("-registrado_at", "-id")
-        .values("id", "tipo", "origen", "fecha_actividad", "registrado_at",
+        .values("id", "tipo", "origen", "cita_id", "fecha_actividad", "registrado_at",
                 "usuario_crm", "etapa_anterior", "etapa_resultante")[:30]
     )
     historial = [
@@ -65,6 +61,7 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
             "id": item["id"],
             "tipo": item["tipo"],
             "origen": item["origen"],
+            "cita_id": item["cita_id"],
             "fecha_actividad": item["fecha_actividad"].isoformat() if item["fecha_actividad"] else None,
             "registrado_at": item["registrado_at"].isoformat() if item["registrado_at"] else None,
             "usuario_crm": item["usuario_crm"],
@@ -73,6 +70,10 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
         }
         for item in actividades
     ]
+    cita_vinculada_id = next(
+        (item["cita_id"] for item in historial if item["tipo"] == "cita_agendada" and item["cita_id"]),
+        None,
+    )
 
     recordatorio = None
     if expediente.etapa_comercial_v3 == "compra_futura":
@@ -106,6 +107,7 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
     return Response({
         "motivo_lead_perdido": perdida,
         "recordatorio_compra_futura": recordatorio,
+        "cita_vinculada_id": cita_vinculada_id,
         "expediente_id": expediente.pk,
         "iniciado": expediente.etapa_comercial_v3 is not None,
         "etapa_comercial_v3": expediente.etapa_comercial_v3,

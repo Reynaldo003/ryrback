@@ -135,24 +135,67 @@ def _agencias_usuario(usuario):
     return {_agencia_clave(a) for a in str(usuario.agencia or "").split("|") if a.strip()}
 
 
+_ROLES_EXCLUIDOS_DIGITALES = frozenset({
+    "hostess", "servicio", "asesor de servicio", "taller", "refacciones",
+    "garantias", "valuador", "caja", "contabilidad",
+})
+
+
+def _rol_clave_usuario(usuario):
+    rol_obj = getattr(usuario, "rol", None)
+    texto = (
+        getattr(rol_obj, "nombre", "")
+        or getattr(rol_obj, "name", "")
+        or (rol_obj if isinstance(rol_obj, str) else "")
+        or ""
+    )
+    return _agencia_clave(texto)
+
+
+def _es_admin_o_coordinador_digital(usuario):
+    if bool(getattr(usuario, "is_superuser", False)):
+        return True
+    rol = _rol_clave_usuario(usuario)
+    if rol in {"admin", "administrador"}:
+        return True
+    if "coordinador" in rol and "digital" in rol:
+        return True
+    return False
+
+
+def _usuario_en_piloto_o_general(usuario):
+    if not usuario or not getattr(usuario, "is_authenticated", False):
+        return False
+    ids_piloto = {
+        str(valor).strip() for valor in (
+            getattr(settings, "CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS", ()) or ()
+        ) if str(valor).strip()
+    }
+    if not ids_piloto or "*" in ids_piloto:
+        return True
+    return str(usuario.pk) in ids_piloto
+
+
 def _autorizado(usuario, expediente):
+    if not usuario or not getattr(usuario, "is_authenticated", False):
+        return False
+    rol = _rol_clave_usuario(usuario)
+    if rol in _ROLES_EXCLUIDOS_DIGITALES:
+        return False
+
     habilitadas = {
         _agencia_clave(a) for a in (
             getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ()
         ) if str(a).strip()
     }
     agencia = _agencia_clave(expediente.agencia)
-    if not agencia or agencia not in habilitadas or agencia not in _agencias_usuario(usuario):
+    if not agencia or (habilitadas and agencia not in habilitadas) or agencia not in _agencias_usuario(usuario):
         return False
 
-    # Un asesor solo accede a expedientes explícitamente asignados a su usuario.
-    # Con este esquema la cuenta sin asignación exige administrador del CRM;
-    # administrador NO elude whitelist de piloto ni la verificación de agencia.
-    rol = _agencia_clave(getattr(getattr(usuario, "rol", None), "nombre", ""))
-    es_admin = rol in {"admin", "administrador"}
+    es_supervisor = _es_admin_o_coordinador_digital(usuario)
     asignado = str(expediente.usuario_crm_asignado or "").strip().casefold()
-    identificador = str(usuario.usuario or "").strip().casefold()
-    return bool(es_admin or (asignado and asignado == identificador))
+    identificador = str(getattr(usuario, "usuario", "") or getattr(usuario, "username", "") or "").strip().casefold()
+    return bool(es_supervisor or (asignado and asignado == identificador))
 
 
 def _error(codigo, mensaje, http_status):
@@ -167,13 +210,8 @@ def registrar_actividad_comercial_v3_view(request):
     if not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
         return _error("v3_desactivado", "Función no habilitada.", status.HTTP_404_NOT_FOUND)
 
-    ids_piloto = {
-        str(valor) for valor in (
-            getattr(settings, "CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS", ()) or ()
-        )
-    }
     usuario = request.user
-    if str(usuario.pk) not in ids_piloto:
+    if not _usuario_en_piloto_o_general(usuario):
         return _error("usuario_no_autorizado", "Usuario fuera del piloto.", status.HTTP_403_FORBIDDEN)
 
     if not isinstance(request.data, Mapping):
