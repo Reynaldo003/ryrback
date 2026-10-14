@@ -264,18 +264,145 @@ def _entidad_cita(pk):
     return " · ".join(partes)
 
 
+def _entidad_entrega(pk):
+    """Descripción completa de una entrega (sirve pre y post modificación)."""
+    try:
+        from citas.models import Entregas
+
+        ent = (Entregas.objects
+               .select_related("cliente")
+               .filter(id=pk)
+               .first())
+    except Exception:
+        return ""
+
+    if ent is None:
+        return ""
+
+    cliente = ent.cliente
+    nombre = ((getattr(cliente, "nombre", "") or "").strip()) or "sin nombre"
+    telefono = (getattr(cliente, "telefono", "") or "")
+
+    partes = [f"Entrega #{pk}", nombre]
+    if telefono:
+        partes.append(f"tel. {telefono}")
+    fecha = _fecha_corta(getattr(ent, "fecha_hora_entrega", None))
+    if fecha:
+        partes.append(fecha)
+    modelo = " ".join(p for p in [
+        (getattr(ent, "modelo_version", "") or "").strip(),
+        (getattr(ent, "version", "") or "").strip(),
+        (getattr(ent, "color", "") or "").strip(),
+    ] if p)
+    if modelo:
+        partes.append(modelo)
+    asesor = (getattr(ent, "asesor_ventas", "") or "").strip()
+    if asesor:
+        partes.append(asesor)
+
+    return " · ".join(partes)
+
+
+def _entidad_registro_piso(pk):
+    """Descripción completa de un registro de piso."""
+    try:
+        from citas.models import RegistroPiso
+
+        reg = (RegistroPiso.objects
+               .select_related("cliente")
+               .filter(id=pk)
+               .first())
+    except Exception:
+        return ""
+
+    if reg is None:
+        return ""
+
+    cliente = reg.cliente
+    nombre = ((getattr(cliente, "nombre", "") or "").strip()) or "sin nombre"
+    telefono = (getattr(cliente, "telefono", "") or "")
+
+    partes = [f"Registro piso #{pk}", nombre]
+    if telefono:
+        partes.append(f"tel. {telefono}")
+    fecha = _fecha_corta(getattr(reg, "fecha_hora_cita", None))
+    if fecha:
+        partes.append(fecha)
+    auto = (getattr(reg, "auto_interes", "") or "").strip()
+    if auto:
+        partes.append(auto)
+    asesor = (getattr(reg, "asesor_piso", "") or "").strip()
+    if asesor:
+        partes.append(asesor)
+
+    return " · ".join(partes)
+
+
+def _entidad_prueba_manejo(pk):
+    """Descripción completa de una prueba de manejo."""
+    try:
+        from citas.models import PruebaManejo
+
+        pm = (PruebaManejo.objects
+              .select_related("cliente")
+              .filter(id=pk)
+              .first())
+    except Exception:
+        return ""
+
+    if pm is None:
+        return ""
+
+    cliente = pm.cliente
+    nombre = ((getattr(cliente, "nombre", "") or "").strip()) or "sin nombre"
+    telefono = (getattr(cliente, "telefono", "") or "")
+
+    partes = [f"Prueba de manejo #{pk}", nombre]
+    if telefono:
+        partes.append(f"tel. {telefono}")
+    fecha = _fecha_corta(getattr(pm, "fecha_hora_cita", None))
+    if fecha:
+        partes.append(fecha)
+    auto = (getattr(pm, "auto_interes", "") or "").strip()
+    if auto:
+        partes.append(auto)
+    folio = (getattr(pm, "folio_salida", "") or "").strip()
+    if folio:
+        partes.append(f"folio {folio}")
+
+    return " · ".join(partes)
+
+
+_RE_CITA_DETALLE = re.compile(
+    r"^/citas/api/(citas|entregas|registro-piso|pruebas-manejo)/(\d+)/?"
+)
+
+
+def _entidad_recurso_citas(recurso, pk):
+    """Despacha al builder según el recurso de citas/ (citas y hermanos)."""
+    if recurso == "citas":
+        return _entidad_cita(pk)
+    if recurso == "entregas":
+        return _entidad_entrega(pk)
+    if recurso == "registro-piso":
+        return _entidad_registro_piso(pk)
+    if recurso == "pruebas-manejo":
+        return _entidad_prueba_manejo(pk)
+    return ""
+
+
 def _contexto_citas(path, metodo, body):
-    m = re.match(r"^/citas/api/citas/(\d+)/?", path or "")
+    m = _RE_CITA_DETALLE.match(path or "")
     if not m:
         return None
 
-    entidad = _entidad_cita(int(m.group(1)))
+    entidad = _entidad_recurso_citas(m.group(1), int(m.group(2)))
     return {"entidad": entidad} if entidad else None
 
 
-_RE_MENSAJE_PLANTILLA = re.compile(r"^/digitales/api/mensajes/enviar-plantilla/?")
-_RE_MENSAJE_MEDIA = re.compile(r"^/digitales/api/mensajes/enviar-media/?")
-_RE_MENSAJE_TEXTO = re.compile(r"^/digitales/api/mensajes/enviar/?$")
+_RE_MENSAJE_PLANTILLA = re.compile(r"^/digitales/(api/)?mensajes/enviar-plantilla/?")
+_RE_MENSAJE_MEDIA = re.compile(r"^/digitales/(api/)?mensajes/enviar-media/?")
+_RE_MENSAJE_TEXTO = re.compile(r"^/digitales/(api/)?mensajes/enviar/?$")
 
 
 def _contexto_mensajes_digitales(path, metodo, body):
@@ -406,9 +533,9 @@ def snapshot_entidad(path):
     """
     path = path or ""
 
-    m = re.match(r"^/citas/api/citas/(\d+)/?", path)
+    m = _RE_CITA_DETALLE.match(path)
     if m:
-        return _entidad_cita(int(m.group(1)))
+        return _entidad_recurso_citas(m.group(1), int(m.group(2)))
 
     m = re.match(r"^/documentacion/api/documentos/(\d+)/", path)
     if m:
