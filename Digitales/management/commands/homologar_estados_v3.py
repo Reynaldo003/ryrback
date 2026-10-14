@@ -27,12 +27,11 @@ EQUIVALENCIAS = {
     'calificado': 'en_seguimiento',
     'en perfilamiento': 'en_seguimiento',
     'potencialmente viable': 'en_seguimiento',
+    'seguimiento': 'en_seguimiento',
     'cotizacion realizada': 'cotizacion_enviada',
     'cita programada': 'cita_agendada',
     'asistencia a la cita': 'cita_asistida',
     'documentos enviados': 'documentos_enviados',
-    'solicitud de credito': 'documentos_enviados',
-    'seguimiento': 'en_seguimiento',
     'autorizado no formalizado': 'autorizado_no_formalizado',
     'facturado': 'facturado',
     'descalificado': 'lead_perdido',
@@ -48,44 +47,14 @@ def clasificar_expediente_historico(
     tiene_cita_asistida_agencia=False,
     tiene_msg_humano_out=False,
 ):
-    """Clasificación estrictamente conservadora:
-    Si el estado antiguo no cuenta con evidencia verificable en BD, devuelve None
-    (permanece en Pendiente de clasificación para revisión manual).
     """
-    estado_norm = normalizar(item.get('estado'))
-    vin = str(item.get('vin_facturado') or '').strip().upper()
-    motivo_desc = str(item.get('motivo_descalificacion') or '').strip()
-    folio_cred = str(item.get('folio_solicitud_credito') or '').strip()
-    estatus_cred = normalizar(item.get('solicitud_credito_estado'))
-    id_cot = str(item.get('id_cotizacion') or '').strip()
-    asistio_exp = bool(item.get('asistencia'))
-    tiene_cita_exp = bool(item.get('ultima_cita_agendada') or item.get('ultima_cita_id') or tiene_cita_agencia)
-    tiene_contacto_humano = bool(
-        item.get('primer_contacto_asesor')
-        or item.get('ultimo_contacto_asesor')
-        or tiene_msg_humano_out
-    )
+    Homologa el estado comercial histórico registrado por el asesor.
 
-    if estado_norm == 'facturado':
-        return 'facturado' if _PATRON_VIN.fullmatch(vin) else None
-    if estado_norm == 'descalificado':
-        return 'lead_perdido' if len(motivo_desc) >= 3 else None
-    if estado_norm == 'autorizado no formalizado':
-        return 'autorizado_no_formalizado' if (folio_cred or estatus_cred == 'autorizado') and not vin else None
-    if estado_norm in {'documentos enviados', 'solicitud de credito'}:
-        return 'documentos_enviados' if folio_cred else None
-    if estado_norm == 'asistencia a la cita':
-        return 'cita_asistida' if (asistio_exp or tiene_cita_asistida_agencia) else None
-    if estado_norm == 'cita programada':
-        return 'cita_agendada' if tiene_cita_exp else None
-    if estado_norm == 'cotizacion realizada':
-        return 'cotizacion_enviada' if id_cot else None
-    if estado_norm in {'contactado', 'calificado', 'en perfilamiento', 'potencialmente viable', 'seguimiento'}:
-        return 'en_seguimiento' if tiene_contacto_humano else None
-    if estado_norm == 'sin contactar':
-        return 'nuevo_prospecto' if (not tiene_contacto_humano and not tiene_cita_exp and not vin) else None
-    return None
-
+    No exige retroactivamente evidencias técnicas del CRM V3.
+    No certifica eventos que no fueron registrados en V3.
+    Los estados ambiguos permanecen pendientes de clasificación.
+    """
+    return EQUIVALENCIAS.get(normalizar(item.get("estado")))
 
 def normalizar(valor):
     texto = unicodedata.normalize('NFKD', str(valor or ''))
@@ -98,9 +67,14 @@ def comprobar_entorno():
 
     db = settings.DATABASES['default']
 
+    bases_locales_permitidas = {
+        'crm_etapas_pruebas',
+        'crm_v3_homologacion_local',
+    }
+
     # 1. Validar la configuración de Django
     if (
-        str(db.get('NAME', '')) != 'crm_etapas_pruebas'
+        str(db.get('NAME', '')) not in bases_locales_permitidas
         or str(db.get('HOST', '')) not in {'127.0.0.1', 'localhost'}
     ):
         raise CommandError(
@@ -126,7 +100,7 @@ def comprobar_entorno():
     except ValueError:
         ip_local = False
 
-    if nombre_real != 'crm_etapas_pruebas' or not ip_local:
+    if nombre_real not in bases_locales_permitidas or not ip_local:
         raise CommandError(
             'BLOQUEADO: la conexión efectiva no corresponde a la BD local autorizada.'
         )
@@ -208,7 +182,7 @@ class Command(BaseCommand):
             for etapa, cuenta in sorted(destinos.items()):
                 self.stdout.write(f'  {etapa}: {cuenta}')
             if origenes_pendientes:
-                self.stdout.write('Estados sin equivalencia (sin cambios):')
+                self.stdout.write('Estados históricos pendientes de equivalencia (sin cambios):')
                 for estado, cuenta in sorted(origenes_pendientes.items()):
                     self.stdout.write(f'  {estado!r}: {cuenta}')
             if not aplicar:

@@ -18,6 +18,7 @@ from rest_framework.response import Response
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from .actividades_views import _autorizado, _usuario_en_piloto_o_general
 from .models import ActividadComercialDigital, ExpedienteDigital
+from citas.models import Cita
 
 
 @api_view(["GET"])
@@ -39,7 +40,10 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
 
     expediente = (
         ExpedienteDigital.objects
-        .only("id", "agencia", "usuario_crm_asignado", "etapa_comercial_v3")
+        .only(
+            "id", "cliente_id", "agencia", "usuario_crm_asignado",
+            "etapa_comercial_v3", "ultima_cita_id",
+        )
         .filter(pk=expediente_id).first()
     )
     # No revelar a usuarios no autorizados si existe o no un expediente ajeno.
@@ -70,10 +74,47 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
         }
         for item in actividades
     ]
+    homologacion_cita_historica = (
+        expediente.etapa_comercial_v3 == "cita_agendada"
+        and ActividadComercialDigital.objects.filter(
+            expediente_id=expediente.pk,
+            tipo="correccion",
+            usuario_crm="migracion_historica_v3",
+            etapa_resultante="cita_agendada",
+            detalle__evento="homologacion_historica_v3",
+        ).exists()
+    )
+
     cita_vinculada_id = next(
-        (item["cita_id"] for item in historial if item["tipo"] == "cita_agendada" and item["cita_id"]),
+        (
+            item["cita_id"]
+            for item in historial
+            if item["tipo"] == "cita_agendada" and item["cita_id"]
+        ),
         None,
     )
+
+    # Recuperar una cita histórica únicamente si su identidad es válida.
+    if (
+        not cita_vinculada_id
+        and homologacion_cita_historica
+        and expediente.ultima_cita_id
+    ):
+        cita_historica = (
+            Cita.objects
+            .only("id", "cliente_id", "agencia")
+            .filter(pk=expediente.ultima_cita_id)
+            .first()
+        )
+
+        if (
+            cita_historica is not None
+            and cita_historica.cliente_id == expediente.cliente_id
+            and (cita_historica.agencia or "").strip().casefold()
+                == (expediente.agencia or "").strip().casefold()
+            and bool((expediente.agencia or "").strip())
+        ):
+            cita_vinculada_id = cita_historica.pk
 
     recordatorio = None
     if expediente.etapa_comercial_v3 == "compra_futura":
@@ -112,4 +153,5 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
         "iniciado": expediente.etapa_comercial_v3 is not None,
         "etapa_comercial_v3": expediente.etapa_comercial_v3,
         "actividades": historial,
+        "homologacion_cita_historica": homologacion_cita_historica,
     })

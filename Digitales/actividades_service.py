@@ -258,13 +258,31 @@ def _preparar(
                                             "La asistencia ya fue clasificada; corregir exige un procedimiento específico.")
             # No aceptar una visita de otra cita del mismo cliente: debe estar
             # vinculada expresamente al expediente mediante la actividad V3.
-            vinculada = ActividadComercialDigital.objects.filter(
-                expediente_id=expediente.pk, cita_id=cita.pk,
+            # Cita vinculada mediante el flujo nuevo V3.
+            vinculada_v3 = ActividadComercialDigital.objects.filter(
+                expediente_id=expediente.pk,
+                cita_id=cita.pk,
                 detalle__evento="cita_registrada",
             ).exists()
-            if not vinculada:
+
+            # Excepción controlada para citas heredadas del CRM anterior.
+            # La homologación no crea una vinculación ficticia:
+            # se exige que el expediente identifique esta cita exacta.
+            vinculada_historica = (
+                expediente.etapa_comercial_v3 == "cita_agendada"
+                and expediente.ultima_cita_id == cita.pk
+                and ActividadComercialDigital.objects.filter(
+                    expediente_id=expediente.pk,
+                    etapa_resultante="cita_agendada",
+                    detalle__evento="homologacion_historica_v3",
+                ).exists()
+            )
+
+            if not (vinculada_v3 or vinculada_historica):
                 raise ErrorActividadComercial(
-                    "cita_no_vinculada_v3", "Primero vincula esta cita al expediente mediante el flujo V3."
+                    "cita_no_vinculada_v3",
+                    "La cita debe estar vinculada al expediente mediante "
+                    "el flujo V3 o mediante su referencia histórica."
                 )
             # Las citas futuras siguen pendientes: la sola programación nunca
             # constituye prueba de asistencia. Normalizar fecha-hora legacy naive.
