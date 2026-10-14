@@ -1,6 +1,7 @@
 #volkswagen
 # Digitales/serializers.py
 from datetime import timedelta
+from django.db import transaction
 import re
 from django.conf import settings
 from django.urls import reverse
@@ -758,6 +759,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             "canal_contacto",
             "pauta",
             "estado",
+            "etapa_comercial_v3",
             "motivo_descalificacion",
             "asesor_digital",
 
@@ -842,6 +844,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
             
             "usuario_crm_asignado",
             "asignado_automaticamente_at",
+            "etapa_comercial_v3",
 
             "facturado_at",
 
@@ -1055,7 +1058,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
                 }
             )
 
-        cli, _ = ClienteComercial.objects.get_or_create(
+        cli, cliente_creado = ClienteComercial.objects.get_or_create(
             telefono=tel,
             defaults={
                 "nombre": (nombre or "").strip(),
@@ -1080,15 +1083,17 @@ class ProspectoSerializer(serializers.ModelSerializer):
             update_fields.append("actualizado_en")
             cli.save(update_fields=list(dict.fromkeys(update_fields)))
 
-        return cli
+        return cli, cliente_creado
 
+    @transaction.atomic(using="default")
     def create(self, validated_data):
         evidencias_nuevas = validated_data.pop("evidencias_nuevas", [])
         validated_data.pop("delete_evidencia_ids", [])
 
         nombre = validated_data.pop("nombre", "")
         telefono = validated_data.pop("telefono", "")
-        correo = validated_data.pop("correo", "")
+        # Omitir correo no debe borrar el que ya tiene un cliente existente.
+        correo = validated_data.pop("correo", None)
         vin_facturado = str(validated_data.get("vin_facturado") or "").strip().upper()
                 
         validated_data["vin_facturado"] = vin_facturado
@@ -1096,7 +1101,7 @@ class ProspectoSerializer(serializers.ModelSerializer):
         if vin_facturado and not validated_data.get("facturado_at"):
             validated_data["facturado_at"] = timezone.now()
 
-        cli = self._get_or_create_cliente(telefono, nombre, correo)
+        cli, cliente_creado = self._get_or_create_cliente(telefono, nombre, correo)
 
         exp, created = ExpedienteDigital.objects.get_or_create(
             cliente=cli,
@@ -1128,6 +1133,17 @@ class ProspectoSerializer(serializers.ModelSerializer):
             exp.save(update_fields=["estado", "actualizado"])
 
         self._guardar_evidencias(exp, evidencias_nuevas)
+
+        # La senal post_save(ClienteComercial) puede haber creado el expediente
+        # antes de este get_or_create. Solo es alta si el cliente o el
+        # expediente nacieron durante esta misma operacion.
+        if created or cliente_creado:
+            from .etapas_alta_v3 import iniciar_alta_v3_si_nuevo
+            iniciar_alta_v3_si_nuevo(
+                expediente=exp,
+                creado=bool(created or cliente_creado),
+                usuario_crm=self._get_username_request() or "sistema_crm",
+            )
 
         return exp
     

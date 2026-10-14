@@ -21,6 +21,15 @@ class ExpedienteDigital(models.Model):
     canal_contacto = models.CharField(max_length=120, blank=True, default="")
     pauta = models.TextField(blank=True, default="")
     estado = models.CharField(max_length=120, blank=True, default="")
+    # Nueva etapa comercial, independiente del estado histórico.
+    # NULL indica que el expediente aún no utiliza el flujo V3.
+    etapa_comercial_v3 = models.CharField(
+        max_length=40,
+        null=True,
+        blank=True,
+        default=None,
+        db_index=True,
+    )
     motivo_descalificacion = models.CharField(max_length=255,blank=True,default="",)
     auto_interes = models.CharField(max_length=255, blank=True, default="")
     anio_auto = models.PositiveSmallIntegerField(null=True, blank=True)
@@ -152,6 +161,88 @@ class ExpedienteDigital(models.Model):
 
     def __str__(self):
         return f"ExpedienteDigital #{self.cliente_id} - {self.cliente.telefono}"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# PROPUESTA CRM V3 - NO ACTIVAR SIN MIGRACIÓN Y ENDPOINTS SEGUROS.
+# Evento comercial independiente de la etapa actual y de la bitácora de mensajes.
+# Las actividades se crearán EXCLUSIVAMENTE desde servicios autenticados del
+# backend y dentro de transaction.atomic; nunca desde un serializer abierto.
+# ─────────────────────────────────────────────────────────────────────────────
+class ActividadComercialDigital(models.Model):
+    class Tipo(models.TextChoices):
+        SEGUIMIENTO = "seguimiento", "Seguimiento humano"
+        COTIZACION_ENVIADA = "cotizacion_enviada", "Cotización enviada"
+        CITA_AGENDADA = "cita_agendada", "Cita agendada"
+        CITA_ASISTIDA = "cita_asistida", "Cita asistida"
+        CITA_NO_ASISTIDA = "cita_no_asistida", "Inasistencia"
+        DOCUMENTOS_RECIBIDOS = "documentos_recibidos", "Documentos recibidos"
+        CREDITO_AUTORIZADO = "credito_autorizado", "Crédito autorizado"
+        COMPRA_FUTURA = "compra_futura", "Compra futura"
+        FACTURA_REGISTRADA = "factura_registrada", "Factura registrada"
+        LEAD_PERDIDO = "lead_perdido", "Lead perdido"
+        REACTIVACION = "reactivacion", "Reactivación"
+        CORRECCION = "correccion", "Corrección de actividad"
+
+    class Origen(models.TextChoices):
+        AUTOMATICO = "automatico", "Automático"
+        REGISTRO_MANUAL = "registro_manual", "Botón de registro manual"
+        SELECCION_MANUAL = "seleccion_manual", "Selección manual"
+        CORRECCION = "correccion", "Corrección autorizada"
+
+    expediente = models.ForeignKey(
+        ExpedienteDigital,
+        on_delete=models.PROTECT,
+        related_name="actividades_comerciales",
+    )
+    cita = models.ForeignKey(
+        "citas.Cita",
+        on_delete=models.PROTECT,
+        null=True,
+        blank=True,
+        related_name="actividades_comerciales",
+    )
+    tipo = models.CharField(max_length=40, choices=Tipo.choices)
+    origen = models.CharField(max_length=30, choices=Origen.choices)
+
+    # Instantánea del responsable y la sucursal al momento de la actividad.
+    agencia = models.CharField(max_length=120)
+    usuario_crm = models.CharField(max_length=120)
+    asesor_digital = models.CharField(max_length=200, blank=True, default="")
+
+    # Fecha efectiva de negocio: por ejemplo, fecha REAL de visita o factura.
+    # Es distinta de la fecha de captura (registrado_at).
+    fecha_actividad = models.DateField(null=True, blank=True, db_index=True)
+    fecha_hora_actividad = models.DateTimeField(null=True, blank=True)
+    registrado_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    vehiculo = models.CharField(max_length=255, blank=True, default="")
+    folio = models.CharField(max_length=120, blank=True, default="")
+    detalle = models.JSONField(default=dict, blank=True)
+    etapa_anterior = models.CharField(max_length=40, blank=True, default="")
+    etapa_resultante = models.CharField(max_length=40, blank=True, default="")
+
+    # Generado por servidor. NULL para eventos históricos sin token de origen.
+    # Un UNIQUE sobre nullable evita duplicados de reintentos y permite NULLs.
+    clave_idempotencia = models.CharField(
+        max_length=120, unique=True, null=True, blank=True
+    )
+    # Correcciones NO destruyen el evento original: se relacionan con él.
+    corrige_a = models.ForeignKey(
+        "self", null=True, blank=True,
+        on_delete=models.PROTECT, related_name="correcciones"
+    )
+
+    class Meta:
+        db_table = "digitales_actividad_comercial"
+        ordering = ["-registrado_at", "-id"]
+        indexes = [
+            models.Index(fields=["expediente", "-registrado_at"], name="dig_ac_exp_reg_idx"),
+            models.Index(fields=["tipo", "fecha_actividad", "agencia"], name="dig_ac_tipo_fecha_ag_idx"),
+        ]
+
+    def __str__(self):
+        return f"Actividad #{self.pk} - {self.tipo} - expediente {self.expediente_id}"
+
 
 def evidencia_prospecto_upload_path(instance, filename):
     _, ext = os.path.splitext(filename or "")

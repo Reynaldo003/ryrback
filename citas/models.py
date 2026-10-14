@@ -46,7 +46,27 @@ class Cita(models.Model):
     agencia = models.CharField(max_length=120, blank=True, default="")
     auto_interes = models.CharField(max_length=255, blank=True, default="")
     fecha_hora_cita = models.DateTimeField(null=True, blank=True)
-    asistencia = models.BooleanField(default=False)
+    asistencia = models.BooleanField(default=False)  # LEGADO: no define inasistencia.
+
+    class EstadoAsistencia(models.TextChoices):
+        PENDIENTE = "pendiente", "Pendiente"
+        ASISTIO = "asistio", "Asistió"
+        NO_ASISTIO = "no_asistio", "No asistió"
+
+    # NULL conserva la ambigüedad histórica: NO rellenar masivamente en migración.
+    # Las citas NUEVAS recibirán "pendiente" desde un servicio autenticado.
+    estado_asistencia = models.CharField(
+        max_length=20,
+        choices=EstadoAsistencia.choices,
+        null=True,
+        blank=True,
+        default=None,
+        db_index=True,
+    )
+    fecha_asistencia_real = models.DateField(null=True, blank=True)
+    asistencia_confirmada_at = models.DateTimeField(null=True, blank=True)
+    asistencia_confirmada_por = models.CharField(max_length=120, blank=True, default="")
+    registrada_por_crm = models.CharField(max_length=120, blank=True, default="")
 
     tipo_cita = models.CharField(max_length=120, blank=True, default="")
     motivo_cita = models.CharField(max_length=120,blank=True,default="",)

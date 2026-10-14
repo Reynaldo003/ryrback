@@ -5,7 +5,7 @@ from datetime import datetime
 from html import escape
 
 from django.conf import settings
-from django.db.models import Count, Exists, OuterRef
+from django.db.models import Count, Exists, OuterRef, Q
 from django.http import FileResponse
 from django.utils import timezone
 from django.utils.text import slugify
@@ -15,6 +15,7 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
+from rest_framework.exceptions import PermissionDenied
 
 from .pagination import CitasPagination
 
@@ -592,7 +593,9 @@ class CitasViewSet(ModelViewSet):
     queryset = Cita.objects.select_related("cliente").all().order_by("-id")
     serializer_class = CitaSerializer
     pagination_class = CitasPagination
-    acciones_publicas = {"list", "retrieve", "create"}
+    # La creación sigue siendo pública por compatibilidad con formularios existentes.
+    # Las consultas y modificaciones requieren JWT.
+    acciones_publicas = {"create"}
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -601,6 +604,24 @@ class CitasViewSet(ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
+
+        # Permisos siempre desde el usuario autenticado, nunca desde ?agencia=.
+        # Sin sucursal asignada se deniega el acceso (fail closed).
+        if getattr(self, "action", None) != "create":
+            usuario = self.request.user
+            if not getattr(usuario, "is_authenticated", False):
+                return queryset.none()
+            agencias = [
+                parte.strip() for parte in str(getattr(usuario, "agencia", "") or "").split("|")
+                if parte.strip()
+            ]
+            if not agencias:
+                return queryset.none()
+            filtro_agencias = Q()
+            for nombre_agencia in agencias:
+                filtro_agencias |= Q(agencia__iexact=nombre_agencia)
+            queryset = queryset.filter(filtro_agencias)
+
         params = self.request.query_params
 
         fecha_inicio = str(params.get("fecha_inicio") or "").strip()
@@ -653,7 +674,6 @@ class CitasViewSet(ModelViewSet):
 
         search = str(params.get("search") or "").strip()
         if search:
-            from django.db.models import Q
             queryset = queryset.filter(
                 Q(cliente__nombre__icontains=search)
                 | Q(cliente__telefono__icontains=search)
@@ -673,6 +693,19 @@ class CitasViewSet(ModelViewSet):
             queryset = queryset.filter(fecha_hora_cita__date__lte=fecha_hasta)
 
         return queryset
+
+    def perform_update(self, serializer):
+        # Una cita visible tampoco puede trasladarse a otra agencia por PATCH/PUT.
+        if "agencia" in serializer.validated_data:
+            nueva_agencia = str(serializer.validated_data["agencia"] or "").strip().casefold()
+            permitidas = {
+                parte.strip().casefold()
+                for parte in str(getattr(self.request.user, "agencia", "") or "").split("|")
+                if parte.strip()
+            }
+            if nueva_agencia not in permitidas:
+                raise PermissionDenied("No puedes trasladar la cita a una agencia no autorizada.")
+        serializer.save()
 
     def get_authenticators(self):
         return [] if getattr(self, "action", None) in self.acciones_publicas else [CRMJWTAuthentication()]

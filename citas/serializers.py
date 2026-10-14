@@ -139,6 +139,55 @@ class CitaSerializer(BaseConClienteInputMixin):
     class Meta:
         model = Cita
         fields = "__all__"
+        # CRÍTICO: create de citas es público en citas/views.py.
+        # Ningún cliente puede autoconfirmar asistencia ni suplantar usuario.
+        # Los campos se escribirán SOLO desde endpoint protegido del backend.
+        read_only_fields = (
+            "estado_asistencia", "fecha_asistencia_real",
+            "asistencia_confirmada_at", "asistencia_confirmada_por",
+            "registrada_por_crm",
+        )
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        # La ruta de alta de citas admite usuarios anonimos: no pueden
+        # declarar asistencia al crear. Se tolera False por compatibilidad
+        # con los formularios actuales; la confirmacion real es otro flujo.
+        if self.instance is None and attrs.get("asistencia") is True:
+            raise serializers.ValidationError({
+                "asistencia": (
+                    "Una cita nueva no puede marcarse asistida desde este formulario. "
+                    "Utiliza el flujo autenticado de confirmacion de asistencia."
+                )
+            })
+
+        # Proteger la identidad de la cita: el cliente asociado no es un campo
+        # editable desde PATCH/PUT. Un cliente_id identico se acepta para
+        # conservar compatibilidad con formularios existentes.
+        if self.instance is not None and "cliente" in attrs:
+            cliente_nuevo = attrs["cliente"]
+            if cliente_nuevo is None or cliente_nuevo.pk != self.instance.cliente_id:
+                raise serializers.ValidationError({
+                    "cliente_id": (
+                        "No se permite reasignar el cliente de una cita desde este formulario. "
+                        "Requiere un procedimiento autorizado independiente."
+                    )
+                })
+
+        if (
+            self.instance is not None
+            and "asistencia" in attrs
+            and attrs["asistencia"] != self.instance.asistencia
+        ):
+            raise serializers.ValidationError({
+                "asistencia": (
+                    "La asistencia solo se modifica mediante "
+                    "el flujo autorizado de confirmación."
+                )
+            })
+
+        return attrs
 
     def get_tiene_prueba_asistida(self, obj):
         return bool(getattr(obj, "tiene_prueba_asistida", False))

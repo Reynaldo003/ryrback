@@ -13,7 +13,7 @@ import re
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import close_old_connections
+from django.db import close_old_connections, transaction
 from django.core.files.storage import default_storage
 from django.db.models import (
     Avg,
@@ -583,44 +583,123 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer):
-        expediente = serializer.save()
+        # El POST puede reutilizar un expediente por telefono. Autorizar el
+        # acceso ANTES de tocar nombre, correo o datos comerciales existentes.
+        with transaction.atomic(using="default"):
+            numero_asesor = _get_numero_asesor_request(self.request)
+            telefono = normaliza_tel_mx(serializer.validated_data.get("telefono", ""))
+            cliente = (ClienteComercial.objects.select_for_update()
+                       .filter(telefono=telefono).first())
+            expediente_previo = (ExpedienteDigital.objects.filter(cliente=cliente).first()
+                                 if cliente else None)
+            if (expediente_previo is not None
+                    and not self.get_queryset().filter(pk=expediente_previo.pk).exists()):
+                raise PermissionDenied(
+                    "Este prospecto ya existe en una linea o asignacion diferente."
+                )
 
-        numero_asesor = (
-            _get_numero_asesor_request(
-                self.request
-            )
-        )
+            # Para V3 no confiar en una agencia arbitraria enviada por React:
+            # debe coincidir con la sucursal configurada para la linea.
+            from .etapas_alta_v3 import _clave_agencia
+            agencia_solicitada = str(serializer.validated_data.get("agencia") or "").strip()
+            if (expediente_previo is not None and agencia_solicitada
+                    and str(expediente_previo.agencia or "").strip()
+                    and _clave_agencia(expediente_previo.agencia) != _clave_agencia(agencia_solicitada)):
+                raise PermissionDenied("No se permite trasladar un expediente existente a otra agencia desde el alta.")
+            habilitadas = {
+                _clave_agencia(agencia)
+                for agencia in (getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ())
+                if str(agencia).strip()
+            }
+            if (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
+                    and _clave_agencia(agencia_solicitada) in habilitadas):
+                agencia_linea = str((WHATSAPP_LINES.get(numero_asesor) or {}).get("agencia") or "").strip()
+                if not agencia_linea or _clave_agencia(agencia_linea) != _clave_agencia(agencia_solicitada):
+                    raise PermissionDenied("La agencia del prospecto no corresponde a la linea autorizada.")
 
-        expediente = (
-            _asegurar_asignacion_salida_manual(
+            expediente = serializer.save()
+            expediente = _asegurar_asignacion_salida_manual(
                 request=self.request,
                 expediente=expediente,
                 numero_asesor=numero_asesor,
             )
-        )
-
-        serializer.instance = expediente
+            serializer.instance = expediente
 
     def perform_update(self, serializer):
-        expediente = serializer.instance
+        # Pilotaje V3 independiente de la lógica histórica del serializador.
+        # El PATCH tradicional sigue calculando estado/facturado_at como antes;
+        # V3 solo añade una actividad y modifica etapa_comercial_v3.
+        from django.db import transaction
+        from rest_framework.exceptions import ValidationError
 
-        antes = {
-            campo: getattr(
-                expediente,
-                campo,
-                None,
-            )
-            for campo
-            in self.CAMPOS_AUDITABLES
-        }
-
-        expediente = serializer.save()
-
-        registrar_cambios_expediente(
-            expediente=expediente,
-            antes=antes,
-            request=self.request,
+        habilitado = (
+            getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
+            and getattr(settings, "CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO", False)
+            and str(self.request.user.pk) in {
+                str(pk) for pk in (
+                    getattr(settings, "CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS", ()) or ()
+                )
+            }
         )
+        with transaction.atomic(using="default"):
+            if habilitado:
+                # Solo en piloto: evita comparar contra una instantánea obsoleta.
+                serializer.instance = ExpedienteDigital.objects.select_for_update().get(
+                    pk=serializer.instance.pk
+                )
+            expediente = serializer.instance
+            antes = {
+                campo: getattr(expediente, campo, None)
+                for campo in self.CAMPOS_AUDITABLES
+            }
+            vin_anterior = str(expediente.vin_facturado or "").strip().upper()
+            vin_enviado = "vin_facturado" in serializer.validated_data
+            vin_nuevo = str(serializer.validated_data.get("vin_facturado") or "").strip().upper() if vin_enviado else vin_anterior
+
+            if habilitado and expediente.etapa_comercial_v3 is not None:
+                # Las 17 posiciones permitidas son la misma regla del sync legacy.
+                if vin_enviado and vin_nuevo and vin_nuevo != vin_anterior and not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo):
+                    raise ValidationError({
+                        "vin_facturado": "Para V3 se requiere un VIN válido de 17 caracteres."
+                    })
+                if vin_enviado and vin_nuevo != vin_anterior and expediente.etapa_comercial_v3 == "facturado":
+                    raise ValidationError({
+                        "vin_facturado": "La etapa Facturado V3 es terminal. Una rectificación del VIN requiere un proceso autorizado."
+                    })
+                if (vin_enviado and vin_nuevo != vin_anterior and vin_nuevo
+                        and expediente.etapa_comercial_v3 in {"compra_futura", "lead_perdido"}):
+                    raise ValidationError({
+                        "vin_facturado": "Reactiva el seguimiento V3 antes de registrar un VIN facturado."
+                    })
+
+            expediente = serializer.save()
+
+            if habilitado and expediente.etapa_comercial_v3 is not None and vin_enviado and vin_nuevo != vin_anterior:
+                import hashlib
+                from .actividades_views import _autorizado
+                from .actividades_service import registrar_actividad_v3
+
+                if (re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo)
+                        and expediente.facturado_at
+                        and str(expediente.estado or "").strip().casefold() != "descalificado"
+                        and expediente.etapa_comercial_v3 not in {"facturado", "compra_futura", "lead_perdido"}
+                        and _autorizado(self.request.user, expediente)):
+                    # La clave depende de expediente y VIN: un reintento del mismo VIN
+                    # no genera otra venta. Nunca enviar esta acción desde React.
+                    firma = hashlib.sha256(vin_nuevo.encode("ascii")).hexdigest()[:32]
+                    registrar_actividad_v3(
+                        expediente_id=expediente.pk,
+                        evento="vin_facturado_registrado",
+                        datos={},
+                        actor=self.request.user,
+                        clave_idempotencia=f"v3.vin.{expediente.pk}.{firma}",
+                    )
+
+            registrar_cambios_expediente(
+                expediente=expediente,
+                antes=antes,
+                request=self.request,
+            )
 
     def _auto_estado_por_evidencia(self, expediente):
         """Recalcula el estado automático después de cambiar evidencias.
@@ -815,6 +894,7 @@ def _agregar_diagnostico_linea_vs_meta(resultado: dict, numero_asesor: str) -> d
 
     return resultado
 
+@transaction.atomic(using="default")
 def _get_or_create_cliente_y_expediente(
     *,
     tel: str,
@@ -828,7 +908,7 @@ def _get_or_create_cliente_y_expediente(
     if not tel:
         return None, None
 
-    cliente, _ = (
+    cliente, cliente_creado = (
         ClienteComercial.objects
         .get_or_create(
             telefono=tel,
@@ -903,6 +983,16 @@ def _get_or_create_cliente_y_expediente(
         expediente = asegurar_asignacion_expediente(
             expediente,
             numero_asesor,
+        )
+
+    # La senal del cliente puede haber creado antes un expediente vacio.
+    # Evitar inicializar expedientes historicos en llamadas repetidas.
+    if expediente_creado or cliente_creado:
+        from .etapas_alta_v3 import iniciar_alta_v3_si_nuevo
+        iniciar_alta_v3_si_nuevo(
+            expediente=expediente,
+            creado=bool(expediente_creado or cliente_creado),
+            usuario_crm="sistema_webhook_whatsapp" if aplicar_reparto else "sistema_whatsapp",
         )
 
     return cliente, expediente

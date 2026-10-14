@@ -15,6 +15,8 @@ from .solicitudes_stats import solicitudes_financiamiento_view
 from .facturados_stats import facturados_stats_view
 from .canal_diario import canal_diario_view
 from .negocio_stats import negocio_stats_view
+from .actividades_views import registrar_actividad_comercial_v3_view
+from .actividades_consulta_views import consultar_etapas_comerciales_v3_view
 from .views import (
     bienvenido,
     webhook,
@@ -142,6 +144,16 @@ urlpatterns = [
     path("analitica/negocio-stats/", negocio_stats_view, name="digitales-negocio-stats"),
 
     path("api/", include(router.urls)),
+    path("api/etapas-v3/expedientes/<int:expediente_id>/",
+         consultar_etapas_comerciales_v3_view, name="digitales-consulta-etapas-v3"),
+
+    # API comercial V3
+    path(
+        "api/etapas-v3/actividades/",
+        registrar_actividad_comercial_v3_view,
+        name="digitales-actividades-v3",
+    ),
+
     path("api/campanas-meta/", campanas_meta_recientes),
     path("api/prospectos/<int:prospecto_id>/generar-resumen/",generar_resumen_prospecto_view,),
 
