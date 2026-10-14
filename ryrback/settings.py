@@ -236,6 +236,13 @@ if _channel_layer_backend == "memory" or (
         }
     }
 
+# ==========================================
+# LOGS DE ACTIVIDAD
+# ==========================================
+# "cola" (default): encola en Redis; requiere el worker `manage.py drainlogs --watch`.
+# "directo": escribe directo a la BD (síncrono), sin Redis ni worker.
+LOGS_MODO = os.environ.get("LOGS_MODO", "cola")
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:8000",
