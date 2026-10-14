@@ -1,5 +1,6 @@
 # trafico_piso/views.py
-from django.db.models import Avg, Count, Q
+from django.db.models import Avg, Count, Q, Sum
+from django.db.models.functions import ExtractIsoWeekDay
 
 from rest_framework.decorators import action
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -104,24 +105,76 @@ class TraficoPisoViewSet(ModelViewSet):
     def resumen(self, request):
         qs = self.get_queryset()
 
-        data = qs.aggregate(
+        # Aplicar filtros adicionales utilizados en el frontend
+        tipo_persona = (request.query_params.get("tipo_persona") or "").strip()
+        tiempo_compra = (request.query_params.get("tiempo_compra") or "").strip()
+
+        if tipo_persona and tipo_persona != "Todos":
+            qs = qs.filter(tipo_persona=tipo_persona)
+
+        if tiempo_compra and tiempo_compra != "Todos":
+            qs = qs.filter(tiempo_compra=tiempo_compra)
+
+        # Métricas generales sobre todos los registros filtrados
+        generales = qs.aggregate(
             total=Count("id_trafico"),
+            con_auto_cuenta=Count(
+                "id_trafico", filter=Q(deja_auto_cuenta=True)
+            ),
+            comprueban_ingresos=Count(
+                "id_trafico", filter=Q(comprueba_ingresos=True)
+            ),
             promedio_presupuesto=Avg("presupuesto_estimado"),
             promedio_enganche=Avg("enganche_presupuestado"),
+            total_presupuesto=Sum("presupuesto_estimado"),
         )
-
-        interesados_auto_cuenta = qs.filter(deja_auto_cuenta=True).count()
-        comprueban_ingresos = qs.filter(comprueba_ingresos=True).count()
-
-        return Response(
-            {
-                "total": data["total"] or 0,
-                "interesados_auto_cuenta": interesados_auto_cuenta,
-                "comprueban_ingresos": comprueban_ingresos,
-                "promedio_presupuesto": data["promedio_presupuesto"] or 0,
-                "promedio_enganche": data["promedio_enganche"] or 0,
+        def agrupar(campo):
+            return {
+                str(item[campo] or "Sin especificar"): item["total"]
+                for item in qs.order_by().values(campo).annotate(
+                    total=Count("id_trafico")
+                )
             }
-        )
+        # Día de semana: 1 = lunes, 7 = domingo
+        dias = {
+            "Lun": 0, "Mar": 0, "Mié": 0, "Jue": 0,
+            "Vie": 0, "Sáb": 0, "Dom": 0,
+        }
+
+        nombres_dias = [
+            "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb", "Dom"
+        ]
+        for item in qs.order_by().annotate(
+            dia_semana=ExtractIsoWeekDay("creado_en")
+        ).values("dia_semana").annotate(
+            total=Count("id_trafico")
+        ):
+            indice = item["dia_semana"]
+            if indice is not None:
+                dias[nombres_dias[indice - 1]] = item["total"]
+
+        total = generales["total"] or 0
+        con_auto = generales["con_auto_cuenta"] or 0
+
+        return Response({
+            "total": total,
+            "interesados_auto_cuenta": con_auto,
+            "con_auto_cuenta": con_auto,
+            "sin_auto_cuenta": total - con_auto,
+            "comprueban_ingresos": generales["comprueban_ingresos"] or 0,
+            "promedio_presupuesto": generales["promedio_presupuesto"] or 0,
+            "promedio_enganche": generales["promedio_enganche"] or 0,
+            "total_presupuesto": generales["total_presupuesto"] or 0,
+
+            # Datos completos para gráficos
+            "por_agencia": agrupar("agencia"),
+            "por_asesor": agrupar("asesor_ventas"),
+            "por_motivo_ingreso": agrupar("motivo_ingreso"),
+            "por_tipo_persona": agrupar("tipo_persona"),
+            "por_tiempo_compra": agrupar("tiempo_compra"),
+            "por_forma_capitalizacion": agrupar("forma_capitalizacion"),
+            "por_dia": dias,
+        })
 
     @action(detail=False, methods=["get"], url_path="asesores-ventas")
     def asesores_ventas(self, request):

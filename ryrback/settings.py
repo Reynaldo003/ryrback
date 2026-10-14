@@ -25,7 +25,7 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 SECRET_KEY = 'django-insecure-2478i0#18$^(_3_2kqzix8a5zeazw%rbxa)b85%sor1b(&jul+'
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = False
+DEBUG = True
 
 ALLOWED_HOSTS = [
     'localhost',
@@ -236,6 +236,13 @@ if _channel_layer_backend == "memory" or (
         }
     }
 
+# ==========================================
+# LOGS DE ACTIVIDAD
+# ==========================================
+# "cola" (default): encola en Redis; requiere el worker `manage.py drainlogs --watch`.
+# "directo": escribe directo a la BD (síncrono), sin Redis ni worker.
+LOGS_MODO = os.environ.get("LOGS_MODO", "cola")
+
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
     "http://127.0.0.1:8000",
@@ -280,8 +287,8 @@ DATABASES = {
         "NAME": "crm_ryr",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-        "HOST": "127.0.0.1",
-#         "HOST": "45.82.73.31",
+         #"HOST": "127.0.0.1",
+         "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     "tdsql": {
@@ -289,8 +296,8 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-      "HOST": "127.0.0.1",
- #       "HOST": "45.82.73.31",
+      # "HOST": "127.0.0.1",
+       "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     'sqlserver': {

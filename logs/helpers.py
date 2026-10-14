@@ -8,6 +8,7 @@ vuelca en lotes contra la base de datos. Si Redis no responde se escribe
 directo (fallback) para no perder eventos ni bloquear la petición.
 """
 import json
+import os
 import time
 
 from .models import LogActividad
@@ -153,12 +154,52 @@ def _redis_cliente():
     )
 
 
+def _escribir_directo(payload, usuario_id, ip):
+    """Inserta el log directo en la base de datos (síncrono)."""
+    try:
+        LogActividad.objects.create(
+            usuario_id=usuario_id,
+            tipo=payload["tipo"],
+            modulo=payload["modulo"],
+            entidad=payload["entidad"],
+            cambio=payload["cambio"],
+            ip=ip,
+        )
+    except Exception:
+        return False
+    return True
+
+
+def modo_entrega():
+    """Modo de entrega de logs, configurable sin tocar código.
+
+    Variable de entorno `LOGS_MODO` (o `settings.LOGS_MODO`):
+      - "cola" (default): encola en Redis; el worker `drainlogs` vuelca a la BD.
+        Si Redis no responde, escribe directo para no perder el evento.
+      - "directo": escribe siempre directo a la BD (síncrono). No requiere
+        Redis ni el worker; los logs aparecen al instante.
+    """
+    valor = os.environ.get("LOGS_MODO")
+    if valor is None:
+        try:
+            from django.conf import settings
+
+            valor = getattr(settings, "LOGS_MODO", None)
+        except Exception:
+            valor = None
+
+    valor = (valor or "").strip().lower()
+    if valor in ("directo", "db", "sincrono", "síncrono"):
+        return "directo"
+    return "cola"
+
+
 def registrar_log(*, usuario, tipo, modulo="otros", entidad="", cambio="", ip=None):
-    """Encola un evento de log por usuario.
+    """Registra un evento de log por usuario.
 
     `usuario` puede ser una instancia, un id (int) o None.
-    El encolado a Redis falla silenciosamente a escritura directa para no
-    romper la petición ni perder el evento.
+    Según `LOGS_MODO` encola en Redis (con fallback directo) o escribe directo
+    a la BD. Nunca rompe la petición ni pierde el evento.
     """
     usuario_id = getattr(usuario, "id_usuario", usuario) if usuario is not None else None
 
@@ -175,27 +216,16 @@ def registrar_log(*, usuario, tipo, modulo="otros", entidad="", cambio="", ip=No
         "fecha": int(time.time()),
     }
 
-    try:
-        cliente = _redis_cliente()
-        if cliente is not None:
-            cliente.rpush(QUEUE_KEY, json.dumps(payload, ensure_ascii=False))
-            return True
-    except Exception:
-        pass
+    if modo_entrega() == "cola":
+        try:
+            cliente = _redis_cliente()
+            if cliente is not None:
+                cliente.rpush(QUEUE_KEY, json.dumps(payload, ensure_ascii=False))
+                return True
+        except Exception:
+            pass
 
-    try:
-        LogActividad.objects.create(
-            usuario_id=usuario_id,
-            tipo=tipo,
-            modulo=modulo,
-            entidad=payload["entidad"],
-            cambio=payload["cambio"],
-            ip=ip,
-        )
-    except Exception:
-        return False
-
-    return True
+    return _escribir_directo(payload, usuario_id, ip)
 
 
 def esperar_cola():

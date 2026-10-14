@@ -662,6 +662,7 @@ class CitasViewSet(ModelViewSet):
         agencia = str(params.get("agencia") or "").strip()
         asesor_piso = str(params.get("asesor_piso") or "").strip()
         asistencia = params.get("asistencia")
+        tipo_cita = str(params.get("tipo_cita") or "").strip()
 
         if asesor_digital:
             queryset = queryset.filter(asesor_digital__iexact=asesor_digital)
@@ -669,6 +670,8 @@ class CitasViewSet(ModelViewSet):
             queryset = queryset.filter(agencia__iexact=agencia)
         if asesor_piso:
             queryset = queryset.filter(asesor_piso__iexact=asesor_piso)
+        if tipo_cita and tipo_cita != "Todas":
+            queryset = queryset.filter(tipo_cita__iexact=tipo_cita)
         if asistencia not in (None, ""):
             queryset = queryset.filter(asistencia=_param_bool(asistencia))
 
