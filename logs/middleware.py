@@ -10,7 +10,7 @@ ni la propia API de logs.
 import json
 import re
 
-from .contexto import contexto as enriquecer_contexto
+from .contexto import contexto as enriquecer_contexto, snapshot_entidad
 from .helpers import (
     TIPOS,
     inferir_modulo,
@@ -42,6 +42,50 @@ _EXCLUIR_PREFIJOS = (
 _PATRON_ENTIDAD = re.compile(r"/(\d+)/?$")
 
 _BODY_MAX_BYTES = 64 * 1024
+
+_FORM_MAX_CLAVES = 12
+_FORM_MAX_VALOR = 120
+_FORM_RUIDO = {"csrfmiddlewaretoken"}
+
+
+def _campos_form(request):
+    """Campos escalares de formularios (multipart/urlencoded), sin archivos.
+
+    Los endpoints que reciben archivos (p.ej. enviar-media) mandan el resto
+    de campos (`to`, `text`) como formulario, no como JSON. Django cachea el
+    parseo, así que la vista lo reutiliza sin problema. Valores recortados:
+    solo se usan para describir la acción, nunca se guarda el payload.
+    """
+    content_type = (request.META.get("CONTENT_TYPE") or "").lower()
+    if not (content_type.startswith("multipart/")
+            or content_type.startswith("application/x-www-form-urlencoded")):
+        return {}
+
+    try:
+        post = request.POST
+    except Exception:
+        return {}
+    if not post:
+        return {}
+
+    try:
+        claves = list(post.keys())[:_FORM_MAX_CLAVES]
+    except Exception:
+        return {}
+
+    campos = {}
+    for clave in claves:
+        if clave in _FORM_RUIDO:
+            continue
+        try:
+            valores = post.getlist(clave)
+        except Exception:
+            continue
+        texto = str(valores[0] if valores else "")
+        if len(texto) > _FORM_MAX_VALOR:
+            texto = texto[:_FORM_MAX_VALOR] + "…"
+        campos[str(clave)] = texto
+    return campos
 
 
 def _names_archivos(request):
@@ -150,13 +194,13 @@ def _extraer_entidad(path, response):
     return ""
 
 
-def _construir_cambio(tipo, modulo, entidad, resumen="", entidad_enrich="", modulo_enrich=""):
+def _construir_cambio(tipo, modulo, entidad, resumen="", entidad_enrich="", accion=""):
     verbo = _VERBO.get(tipo, "Modificó")
     target = entidad_enrich or entidad or "registro"
-    base = f"{verbo} {target}"
+    base = accion or f"{verbo} {target}"
     if resumen:
         base += f" — {resumen}"
-    elif not entidad_enrich and not entidad:
+    elif not accion and not entidad_enrich and not entidad:
         base += f" en {etiqueta_modulo(modulo)}"
     return base
 
@@ -168,9 +212,23 @@ class LogActividadMiddleware:
     def __call__(self, request):
         # Guardar el body y los archivos subidos antes de que la vista los consuma.
         request._logs_body_json = _body_json(request)
+        request._logs_form = _campos_form(request)
         request._logs_archivos = _names_archivos(request)
         response = self.get_response(request)
         return self._procesar(request, response)
+
+    def process_view(self, request, view_func, view_args, view_kwargs):
+        # Foto pre-borrado: en un DELETE el objeto ya no existe cuando se
+        # procesa la respuesta, así que se captura la descripción antes de
+        # que la vista lo elimine. Barato: solo DELETE con patrón conocido.
+        try:
+            if getattr(request, "method", "") == "DELETE":
+                request._logs_snapshot_entidad = snapshot_entidad(
+                    getattr(request, "path", "") or ""
+                )
+        except Exception:
+            pass
+        return None
 
     def _procesar(self, request, response):
         try:
@@ -200,14 +258,20 @@ class LogActividadMiddleware:
             modulo = inferir_modulo(path)
             entidad = _extraer_entidad(path, response)
 
-            body = getattr(request, "_logs_body_json", None)
+            body_json = getattr(request, "_logs_body_json", None) or {}
+            body_form = getattr(request, "_logs_form", None) or {}
+            body = {**body_form, **body_json}
             detalle = enriquecer_contexto(
                 path=path,
                 metodo=metodo,
-                body=body or {},
+                body=body,
+                snapshot_entidad=(
+                    getattr(request, "_logs_snapshot_entidad", "") or ""
+                ),
             )
             entidad_enrich = detalle.get("entidad") or ""
             resumen = detalle.get("resumen") or ""
+            accion = detalle.get("accion") or ""
 
             archivos = getattr(request, "_logs_archivos", None) or []
             if archivos:
@@ -220,6 +284,7 @@ class LogActividadMiddleware:
                 entidad,
                 resumen=resumen,
                 entidad_enrich=entidad_enrich,
+                accion=accion,
             )
             if entidad_enrich:
                 entidad = entidad_enrich
