@@ -4,13 +4,13 @@ Ruta prevista: POST /digitales/api/etapas-v3/actividades/
 
 Seguridad:
 - Autenticación JWT real del CRM; nunca AllowAny.
-- Feature flag y lista explícita de IDs de usuarios piloto (fail closed).
+- Feature flag, permisos efectivos y lista de IDs opcional para piloto.
 - Control exacto de agencia asignada, agencia habilitada y responsable del expediente.
 - No permite iniciar V3, facturar, corregir etapas ni simular mensajes humanos.
 - Bloqueo de expediente durante autorización y registro (misma transacción).
 - Rechaza datos desconocidos y no acepta usuario/agencia desde el navegador.
 
-No montar el endpoint en producción sin comprobar la política con los roles reales.
+Despliegue general sujeto a pruebas con roles reales y agencias existentes.
 """
 
 from __future__ import annotations
@@ -27,12 +27,19 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
+from CrmConformidad.views import permisos_por_usuario
+from CrmConformidad.models import Usuario
 from .actividades_service import ErrorActividadComercial, registrar_actividad_v3
-from .models import ActividadComercialDigital, ExpedienteDigital
+from .models import ActividadComercialDigital, ExpedienteDigital, MensajeWhatsApp
+from .sett import WHATSAPP_LINES
+from .asignacion_asesores import obtener_asesores_activos, resolver_usuario_crm_por_linea
+from .permisos_comerciales_v3 import puede_supervisar_comercial
+from citas.models import normaliza_tel_mx
 
 
 # Únicamente confirmaciones explícitas, sin eventos generados por el backend.
 _EVENTOS_HTTP = frozenset({
+    "contacto_externo_confirmado",  # Llamada, Facebook, presencial u otro medio declarado.
     "cotizacion_confirmada",
     "cita_registrada",
     "asistencia_confirmada",
@@ -42,11 +49,14 @@ _EVENTOS_HTTP = frozenset({
 })
 
 _CAMPOS_DATOS = {
+    "contacto_externo_confirmado": frozenset({
+        "confirmado", "medio", "fecha_contacto", "observacion",
+    }),
     "cotizacion_confirmada": frozenset({
         "confirmado", "fecha_envio", "vehiculo", "referencia", "archivo_id",
     }),
     "cita_registrada": frozenset({"confirmado"}),
-    "asistencia_confirmada": frozenset({"confirmado", "fecha_asistencia_real"}),
+    "asistencia_confirmada": frozenset({"confirmado", "fecha_asistencia_real", "fecha_hora_cita", "sucursal"}),
     "documentos_recibidos_confirmados": frozenset({
         "confirmado", "fecha_recepcion", "documentos",
     }),
@@ -86,6 +96,9 @@ class RegistroActividadV3Serializer(serializers.Serializer):
         extras = sorted(set(datos) - _CAMPOS_DATOS[evento])
         if extras:
             raise serializers.ValidationError({"datos": f"Campos no permitidos: {', '.join(extras)}"})
+        if evento == "contacto_externo_confirmado":
+            if datos.get("confirmado") is not True:
+                raise serializers.ValidationError({"datos": "Confirma el contacto real antes de avanzar."})
         if evento == "seleccion_manual":
             destino = datos.get("etapa_destino")
             permitidos = {
@@ -103,7 +116,7 @@ class RegistroActividadV3Serializer(serializers.Serializer):
             }
             if destino not in permitidos:
                 raise serializers.ValidationError({
-                    "datos": "El piloto permite autorización, compra futura y lead perdido."
+                    "datos": "La acción permite autorización, compra futura y lead perdido."
                 })
             indebidos = sorted(set(datos) - permitidos[destino])
             if indebidos:
@@ -115,24 +128,46 @@ class RegistroActividadV3Serializer(serializers.Serializer):
                 raise serializers.ValidationError({
                     "datos": "Solo se permite reactivación confirmada a En seguimiento."
                 })
-        es_cita = evento in {"cita_registrada", "asistencia_confirmada"}
-        if es_cita != (attrs.get("cita_id") is not None):
-            raise serializers.ValidationError({"cita_id": "Solo los eventos de cita requieren cita_id."})
+        hay_cita = attrs.get("cita_id") is not None
+        if evento == "cita_registrada" and not hay_cita:
+            raise serializers.ValidationError({"cita_id": "Primero debe seleccionarse o guardarse la cita del prospecto."})
+        if evento == "asistencia_confirmada":
+            captura_historica = "fecha_hora_cita" in datos or "sucursal" in datos
+            if hay_cita and captura_historica:
+                raise serializers.ValidationError({"datos": "La fecha histórica solo se captura si no existe una cita vinculada."})
+            if not hay_cita and not (datos.get("fecha_hora_cita") and datos.get("sucursal")):
+                raise serializers.ValidationError({"datos": "Para una asistencia histórica sin cita, registra fecha, hora y sucursal programadas."})
+        if evento not in {"cita_registrada", "asistencia_confirmada"} and hay_cita:
+            raise serializers.ValidationError({"cita_id": "Este evento no admite referencias a citas."})
         return attrs
 
 
 def _agencia_clave(valor):
-    """Compara agencia EXACTA tras quitar acentos, dobles espacios y mayúsculas.
-
-    Evita que 'VW Cordoba' permita actuar en 'VW Cordoba Usados'.
-    """
+    """Normaliza el nombre de la agencia sin inferir divisiones."""
     texto = unicodedata.normalize("NFKD", str(valor or ""))
     texto = "".join(c for c in texto if not unicodedata.combining(c))
     return " ".join(texto.casefold().split())
 
 
 def _agencias_usuario(usuario):
-    return {_agencia_clave(a) for a in str(usuario.agencia or "").split("|") if a.strip()}
+    agencias = {
+        _agencia_clave(a)
+        for a in str(usuario.agencia or "").split("|")
+        if a.strip()
+    }
+
+    # Acceso explícito a la división de seminuevos/usados.
+    equivalencias = {
+        "vw cordoba": {"vw cordoba usados"},
+        "vw orizaba": {"vw orizaba usados"},
+    }
+
+    autorizadas = set(agencias)
+
+    for agencia in agencias:
+        autorizadas.update(equivalencias.get(agencia, set()))
+
+    return autorizadas
 
 
 _ROLES_EXCLUIDOS_DIGITALES = frozenset({
@@ -152,19 +187,46 @@ def _rol_clave_usuario(usuario):
     return _agencia_clave(texto)
 
 
-def _es_admin_o_coordinador_digital(usuario):
-    if bool(getattr(usuario, "is_superuser", False)):
-        return True
+def _permisos_efectivos_v3(usuario):
+    # Los permisos salen de la BD usando la política existente del CRM;
+    # jamás de claims JWT enviados por el navegador.
+    return set(permisos_por_usuario(usuario))
+
+
+def _usuario_con_permiso_comercial_v3(usuario):
+    """Autoriza por ROL + permisos reales, no solo por una interfaz visible.
+
+    Algunos asesores tienen `interfaces` configuradas manualmente. La interfaz
+    `comercial` o el submódulo `comercial:bandeja` dan acceso explícito a la
+    bandeja, pero el catálogo legacy puede emitir CRM_COORDINADOR_DIGITAL.
+    NUNCA se interpreta ese permiso como rol supervisor para un asesor.
+    """
+    if not usuario or not getattr(usuario, "is_authenticated", False):
+        return False
     rol = _rol_clave_usuario(usuario)
+    permisos = _permisos_efectivos_v3(usuario)
     if rol in {"admin", "administrador"}:
-        return True
-    if "coordinador" in rol and "digital" in rol:
-        return True
+        return "ALL" in permisos
+    if rol == "coordinador digital":
+        return "CRM_COORDINADOR_DIGITAL" in permisos
+    if rol in {"asesor digital", "asesor general"}:
+        if "CRM_DIGITALES" in permisos:
+            return True
+        interfaces = getattr(usuario, "interfaces", None)
+        return isinstance(interfaces, list) and any(
+            clave in interfaces for clave in ("comercial", "comercial:bandeja")
+        )
     return False
 
 
+def _es_admin_o_coordinador_digital(usuario):
+    # Misma política que utilizan los listados/chats de Digitales/views.py.
+    return puede_supervisar_comercial(usuario)
+
+
 def _usuario_en_piloto_o_general(usuario):
-    if not usuario or not getattr(usuario, "is_authenticated", False):
+    # La lista de pilotos solo restringe más; nunca concede permisos.
+    if not _usuario_con_permiso_comercial_v3(usuario):
         return False
     ids_piloto = {
         str(valor).strip() for valor in (
@@ -176,8 +238,129 @@ def _usuario_en_piloto_o_general(usuario):
     return str(usuario.pk) in ids_piloto
 
 
+def _resolver_propietario_historico_v3(expediente, agencia):
+    """Devuelve el usuario CRM único de un expediente histórico, o "".
+
+    Los mensajes identifican líneas del CLIENTE, no necesariamente la línea
+    responsable de cada EXPEDIENTE. Una línea ajena no invalida la evidencia
+    positiva de una línea individual propia. Una línea compartida, por sí
+    sola, nunca prueba que un expediente sin asignación tenga propietario.
+    La función no modifica ningún registro.
+    """
+    if not expediente.cliente_id or not _agencia_clave(expediente.asesor_digital):
+        return ""
+
+    responsable = _agencia_clave(expediente.asesor_digital)
+    candidatos = []
+    for cuenta in Usuario.objects.select_related("rol").all():
+        if _rol_clave_usuario(cuenta) not in {"asesor general", "asesor digital"}:
+            continue
+        if agencia not in _agencias_usuario(cuenta):
+            continue
+        if _agencia_clave(f"{cuenta.nombre or ''} {cuenta.apellidos or ''}") != responsable:
+            continue
+        if not _usuario_con_permiso_comercial_v3(cuenta):
+            continue
+        candidatos.append(str(cuenta.usuario or "").strip())
+        if len(candidatos) > 1:
+            return ""
+    if len(candidatos) != 1 or not candidatos[0]:
+        return ""
+    candidato = candidatos[0]
+
+    numeros = (MensajeWhatsApp.objects.filter(cliente_id=expediente.cliente_id)
+               .exclude(numero_asesor__isnull=True)
+               .exclude(numero_asesor="")
+               .values_list("numero_asesor", flat=True).distinct())
+    lineas = {normaliza_tel_mx(numero) for numero in numeros if numero}
+    lineas.discard("")
+    if not lineas:
+        # Un histórico sin líneas asociadas mantiene la compatibilidad
+        # anterior: identidad inequívoca por nombre completo + agencia.
+        return candidato
+
+    # No introducir accesos nuevos a expedientes ya clasificados con líneas
+    # mixtas: esta vía excepcional es para regularización, una sola vez.
+    if (expediente.etapa_comercial_v3 or "").strip():
+        return ""
+
+    for numero in lineas:
+        # Una línea con reparto entre varios asesores carece de evidencia
+        # de titularidad individual sin usuario_crm_asignado explícito.
+        if len(obtener_asesores_activos(numero)) > 1:
+            continue
+        login_linea = resolver_usuario_crm_por_linea(
+            numero, expediente.asesor_digital, expediente.agencia
+        )
+        if login_linea and login_linea.strip().casefold() == candidato.casefold():
+            return candidato
+    return ""
+
+
+def _autorizado_historico_sin_whatsapp(usuario, expediente, agencia):
+    """Compatibilidad para históricos no asignados, sin dar acceso por nombre libre."""
+    propietario = _resolver_propietario_historico_v3(expediente, agencia)
+    login = str(getattr(usuario, "usuario", "") or "").strip()
+    return bool(propietario and login and propietario.casefold() == login.casefold())
+
+def _autorizado_legacy_por_linea(usuario, expediente, agencia):
+    """Identifica al dueño histórico usando una sola línea WhatsApp verificable.
+
+    Prioridad: configuración actual inequívoca + cuenta CRM real. Conserva la
+    equivalencia administrativa antigua únicamente como fallback explícito en
+    líneas individuales. Nunca escribe el expediente ni permite línea ambigua.
+    """
+    if not expediente.cliente_id:
+        return False
+    numeros = MensajeWhatsApp.objects.filter(cliente_id=expediente.cliente_id).exclude(
+        numero_asesor__isnull=True
+    ).exclude(numero_asesor="").values_list("numero_asesor", flat=True).distinct()
+    lineas = {normaliza_tel_mx(numero) for numero in numeros if numero}
+    lineas.discard("")
+    if len(lineas) != 1:
+        return False
+    numero = next(iter(lineas))
+    configuracion = WHATSAPP_LINES.get(numero)
+    if not isinstance(configuracion, dict):
+        return False
+    agencia_linea = _agencia_clave(configuracion.get("agencia"))
+    equivalencias = {
+        "vw cordoba": {"vw cordoba", "vw cordoba usados"},
+        "vw orizaba": {"vw orizaba", "vw orizaba usados"},
+    }
+    if agencia not in equivalencias.get(agencia_linea, {agencia_linea}):
+        return False
+
+    identificador = str(getattr(usuario, "usuario", "") or "").strip().casefold()
+    if not identificador:
+        return False
+
+    # Funciona para líneas individuales y compartidas únicamente cuando el
+    # nombre y la cuenta están vinculados de forma inequívoca en su configuración.
+    login_resuelto = resolver_usuario_crm_por_linea(
+        numero, expediente.asesor_digital, agencia
+    )
+    if login_resuelto:
+        return login_resuelto.casefold() == identificador
+
+    # Compatibilidad explícita con excepciones históricas preexistentes.
+    # Solo en líneas INDIVIDUALES; nunca amplía el acceso de reparto compartido.
+    if obtener_asesores_activos(numero):
+        return False
+    mapa = getattr(settings, "CRM_ETAPAS_V3_ASESORES_LEGACY", {}) or {}
+    if not isinstance(mapa, dict):
+        return False
+    nombre_esperado = str(mapa.get(usuario.pk, mapa.get(str(usuario.pk), "")) or "").strip()
+    if not nombre_esperado:
+        return False
+    return (
+        _agencia_clave(expediente.asesor_digital) == _agencia_clave(nombre_esperado)
+        and _agencia_clave(configuracion.get("asesor_digital")) == _agencia_clave(nombre_esperado)
+    )
+
+
 def _autorizado(usuario, expediente):
-    if not usuario or not getattr(usuario, "is_authenticated", False):
+    if not _usuario_en_piloto_o_general(usuario):
         return False
     rol = _rol_clave_usuario(usuario)
     if rol in _ROLES_EXCLUIDOS_DIGITALES:
@@ -189,13 +372,19 @@ def _autorizado(usuario, expediente):
         ) if str(a).strip()
     }
     agencia = _agencia_clave(expediente.agencia)
-    if not agencia or (habilitadas and agencia not in habilitadas) or agencia not in _agencias_usuario(usuario):
+    # Sin agencias habilitadas: denegar todo (fail closed).
+    if not habilitadas or not agencia or agencia not in habilitadas or agencia not in _agencias_usuario(usuario):
         return False
 
     es_supervisor = _es_admin_o_coordinador_digital(usuario)
     asignado = str(expediente.usuario_crm_asignado or "").strip().casefold()
     identificador = str(getattr(usuario, "usuario", "") or getattr(usuario, "username", "") or "").strip().casefold()
-    return bool(es_supervisor or (asignado and asignado == identificador))
+    if es_supervisor:
+        return True
+    if asignado:
+        return asignado == identificador
+    return (_autorizado_historico_sin_whatsapp(usuario, expediente, agencia)
+            or _autorizado_legacy_por_linea(usuario, expediente, agencia))
 
 
 def _error(codigo, mensaje, http_status):
@@ -212,7 +401,7 @@ def registrar_actividad_comercial_v3_view(request):
 
     usuario = request.user
     if not _usuario_en_piloto_o_general(usuario):
-        return _error("usuario_no_autorizado", "Usuario fuera del piloto.", status.HTTP_403_FORBIDDEN)
+        return _error("usuario_no_autorizado", "El usuario no tiene autorización para gestionar etapas comerciales.", status.HTTP_403_FORBIDDEN)
 
     if not isinstance(request.data, Mapping):
         return _error("datos_invalidos", "Envía un objeto JSON.", status.HTTP_400_BAD_REQUEST)
@@ -231,7 +420,7 @@ def registrar_actividad_comercial_v3_view(request):
             # El bloqueo protege la autorización de cambios concurrentes de agencia
             # o asignación, y se conserva mientras opera el servicio interno.
             expediente = (ExpedienteDigital.objects.select_for_update()
-                          .only("id", "agencia", "usuario_crm_asignado", "etapa_comercial_v3")
+                          .only("id", "cliente_id", "agencia", "asesor_digital", "usuario_crm_asignado", "etapa_comercial_v3")
                           .filter(pk=valores["expediente_id"]).first())
             if expediente is None:
                 return _error("expediente_inexistente", "Expediente no encontrado.", status.HTTP_404_NOT_FOUND)

@@ -193,9 +193,8 @@ def _validar_datos(evento: str, datos: Mapping[str, Any]) -> str | None:
             datos.get("credito_autorizado") is True
             and datos.get("confirmado") is True
             and _fecha_valida(datos.get("fecha_autorizacion"))
-            and _existe(datos.get("referencia_autorizacion"))
         ):
-            return "Indica autorización confirmada, fecha y referencia verificable."
+            return "Confirma la autorización de crédito e indica su fecha efectiva."
         if destino == "compra_futura" and not (
             datos.get("confirmado") is True
             and _fecha_valida(datos.get("fecha_prevista_compra"))
@@ -255,7 +254,7 @@ def evaluar_transicion(
     if evento == "correccion":
         destino_obj = obtener_etapa(datos.get("etapa_destino"))
         if not destino_obj:
-            return _denegar(actual, "destino_invalido", "La etapa de corrección no existe en el catálogo V3.")
+            return _denegar(actual, "destino_invalido", "La etapa de corrección no existe en el catálogo comercial.")
         if datos.get("autorizada") is not True or not _existe(datos.get("motivo")):
             return _denegar(actual, "correccion_no_autorizada",
                            "La corrección exige autorización del servidor y justificación auditable.")
@@ -323,7 +322,7 @@ def evaluar_transicion(
     catalogo = obtener_etapa(destino)
     if not catalogo or catalogo.tipo_movimiento != tipo_esperado:
         return _denegar(actual, "configuracion_inconsistente",
-                       "La regla no coincide con la clasificación del catálogo V3.")
+                       "La regla no coincide con el catálogo de etapas comerciales.")
     error = _validar_datos(evento, datos)
     if error:
         return _denegar(actual, "datos_incompletos", error)

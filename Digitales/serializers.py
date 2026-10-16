@@ -869,6 +869,17 @@ class ProspectoSerializer(serializers.ModelSerializer):
         self.fields.pop("delete_evidencia_ids", None)
 
     def validate(self, attrs):
+        # La etapa V3 se mueve exclusivamente desde sus actividades autorizadas.
+        # Evitar también cambios libres al campo histórico por PATCH externo.
+        # Las reglas automáticas del método update() siguen operando al guardar.
+        if (self.instance is not None
+                and getattr(self.instance, "etapa_comercial_v3", None) is not None):
+            if "estado" in attrs and str(attrs["estado"] or "").strip() != str(self.instance.estado or "").strip():
+                raise serializers.ValidationError({"estado": "El estado no puede seleccionarse manualmente. Utiliza las actividades comerciales V3."})
+            if ("motivo_descalificacion" in attrs
+                    and str(attrs["motivo_descalificacion"] or "").strip()
+                    != str(self.instance.motivo_descalificacion or "").strip()):
+                raise serializers.ValidationError({"motivo_descalificacion": "La corrección del motivo requiere el proceso comercial autorizado."})
         estado_actual = (
             getattr(self.instance, "estado", "")
             if self.instance

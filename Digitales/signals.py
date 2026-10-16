@@ -7,13 +7,37 @@ from django.db import transaction
 from django.db.models.signals import post_save
 from django.dispatch import receiver
 
-from citas.models import ClienteComercial
+from citas.models import ClienteComercial, normaliza_tel_mx
 from .models import ExpedienteDigital, MensajeWhatsApp
+from .sett import WHATSAPP_LINES
+from .asignacion_asesores import obtener_asesores_activos, resolver_usuario_crm_por_linea
 
 logger = logging.getLogger(__name__)
 
 ESTADO_SIN_CONTACTAR = "Sin Contactar"
 ESTADO_CONTACTADO = "Contactado"
+
+
+def _linea_verificada_para_seguimiento_v3(mensaje, expediente):
+    """Solo atribuir un mensaje humano al asesor y agencia realmente configurados.
+
+    En líneas compartidas el mensaje no registra al usuario emisor: no es
+    posible saber cuál asesor contestó. No avanzar automáticamente; queda
+    disponible el registro manual de contacto real con auditoría.
+    """
+    numero = normaliza_tel_mx(getattr(mensaje, "numero_asesor", "") or "")
+    if not numero or not isinstance(WHATSAPP_LINES.get(numero), dict):
+        return False
+    if obtener_asesores_activos(numero):
+        # Incluso con un único asesor activo puede haber repartos históricos.
+        return False
+    login = resolver_usuario_crm_por_linea(
+        numero, expediente.asesor_digital, expediente.agencia
+    )
+    if not login:
+        return False
+    asignado = str(expediente.usuario_crm_asignado or "").strip().casefold()
+    return not asignado or asignado == login.strip().casefold()
 
 
 @receiver(post_save, sender=MensajeWhatsApp)
@@ -72,12 +96,21 @@ def marcar_primer_contacto_humano(sender, instance, created, **kwargs):
     if expediente.etapa_comercial_v3 != "nuevo_prospecto":
         # Un evento tardío no puede hacer retroceder o reactivar otra etapa.
         return
+    if not _linea_verificada_para_seguimiento_v3(instance, expediente):
+        # Un mensaje de otra línea/asesor NO prueba que el titular contactó.
+        return
 
     # El guardado del mensaje es un evento interno del servidor, no un POST
     # enviado por el navegador. El servicio vuelve a verificar mensaje y cliente.
     actor_sistema = SimpleNamespace(usuario="sistema_wa", is_authenticated=True)
     try:
         with transaction.atomic(using="default"):
+            # La agencia y el propietario pueden cambiar entre la lectura y
+            # el registro. Revalidar con la fila bloqueada en la transacción.
+            vigente = ExpedienteDigital.objects.select_for_update().get(pk=expediente.pk)
+            if (vigente.etapa_comercial_v3 != "nuevo_prospecto"
+                    or not _linea_verificada_para_seguimiento_v3(instance, vigente)):
+                return
             registrar_actividad_v3(
                 expediente_id=expediente.pk,
                 evento="respuesta_humana_registrada",

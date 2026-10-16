@@ -1,6 +1,10 @@
 from __future__ import annotations
 
 from django.db import transaction
+from django.db.models import Q
+import unicodedata
+
+from CrmConformidad.models import Usuario
 from django.utils import timezone
 
 from citas.models import normaliza_tel_mx
@@ -17,6 +21,66 @@ def _texto(valor) -> str:
 
 def _normalizar_usuario(valor) -> str:
     return _texto(valor).casefold()
+
+def _clave(texto) -> str:
+    """Compara nombres y agencias sin diferencias de acentos y mayúsculas."""
+    valor = unicodedata.normalize("NFKD", _texto(texto))
+    return " ".join("".join(c for c in valor if not unicodedata.combining(c)).casefold().split())
+
+
+def _agencias_admitidas(agencias) -> set[str]:
+    declaradas = {_clave(x) for x in _texto(agencias).split("|") if x.strip()}
+    permisos = set(declaradas)
+    if "vw cordoba" in declaradas:
+        permisos.add("vw cordoba usados")
+    if "vw orizaba" in declaradas:
+        permisos.add("vw orizaba usados")
+    return permisos
+
+
+def resolver_usuario_crm_por_linea(numero_asesor: str, nombre_asesor: str, agencia: str) -> str:
+    """Cuenta CRM inequívoca para un asesor nombrado en una línea configurada.
+
+    Ningún nombre libre da acceso por sí solo: se verifica la línea conocida,
+    la agencia, su responsable configurado, un rol de asesor y UNA sola cuenta
+    CRM cuyo nombre completo coincide. No escribe datos ni reasigna registros.
+    """
+    numero = normaliza_tel_mx(numero_asesor or "")
+    configuracion = WHATSAPP_LINES.get(numero)
+    nombre = _clave(nombre_asesor)
+    agencia_clave = _clave(agencia)
+    if not isinstance(configuracion, dict) or not nombre or not agencia_clave:
+        return ""
+    if agencia_clave not in _agencias_admitidas(configuracion.get("agencia")):
+        return ""
+
+    asesores = obtener_asesores_activos(numero)
+    login_configurado = ""
+    if asesores:
+        coincidencias = [a for a in asesores if _clave(a["nombre"]) == nombre]
+        if len(coincidencias) != 1:
+            return ""
+        login_configurado = _normalizar_usuario(coincidencias[0]["usuario"])
+    elif _clave(configuracion.get("asesor_digital")) != nombre:
+        return ""
+
+    candidatos = []
+    cuentas = Usuario.objects.select_related("rol").filter(
+        Q(rol__nombre__iexact="Asesor Digital") |
+        Q(rol__nombre__iexact="Asesor General")
+    )
+    for cuenta in cuentas:
+        if _clave(f"{cuenta.nombre or ''} {cuenta.apellidos or ''}") != nombre:
+            continue
+        if agencia_clave not in _agencias_admitidas(cuenta.agencia):
+            continue
+        if login_configurado and _normalizar_usuario(cuenta.usuario) != login_configurado:
+            continue
+        candidatos.append(_texto(cuenta.usuario))
+        if len(candidatos) > 1:
+            return ""
+    return candidatos[0] if len(candidatos) == 1 else ""
+
 
 def obtener_asesores_activos(
     numero_asesor: str,
@@ -137,25 +201,29 @@ def asegurar_asignacion_expediente(
         numero_asesor
     )
 
-    # Línea normal: conserva el funcionamiento anterior.
+    # Línea individual: resolver y GUARDAR el usuario CRM de forma automática.
+    # Si hay dueño explícito o un nombre histórico diferente, no sobreescribir.
     if not asesores:
-        asesor_linea = _texto(
-            configuracion.get("asesor_digital")
-        )
+        asesor_linea = _texto(configuracion.get("asesor_digital"))
+        nombre_actual = _texto(expediente.asesor_digital)
+        if not asesor_linea or (nombre_actual and _clave(nombre_actual) != _clave(asesor_linea)):
+            return expediente
+        if _texto(expediente.usuario_crm_asignado):
+            return expediente
 
-        if (
-            asesor_linea
-            and expediente.asesor_digital
-            != asesor_linea
-        ):
+        login = resolver_usuario_crm_por_linea(numero_asesor, asesor_linea, expediente.agencia)
+        cambios = []
+        if not nombre_actual:
             expediente.asesor_digital = asesor_linea
-            expediente.save(
-                update_fields=[
-                    "asesor_digital",
-                    "actualizado",
-                ]
-            )
-
+            cambios.append("asesor_digital")
+        if login:
+            expediente.usuario_crm_asignado = login
+            cambios.append("usuario_crm_asignado")
+            if not expediente.asignado_automaticamente_at:
+                expediente.asignado_automaticamente_at = timezone.now()
+                cambios.append("asignado_automaticamente_at")
+        if cambios:
+            expediente.save(update_fields=[*cambios, "actualizado"])
         return expediente
 
     # Ya tiene una cuenta válida asignada.
@@ -212,6 +280,11 @@ def asegurar_asignacion_expediente(
             ]
         )
 
+        return expediente
+
+    # Un histórico con asesor escrito pero NO presente en el reparto vigente
+    # no debe pasar silenciosamente al siguiente asesor por round-robin.
+    if _texto(expediente.asesor_digital):
         return expediente
 
     # Control bloqueado para evitar asignaciones duplicadas

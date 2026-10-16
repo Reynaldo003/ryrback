@@ -40,7 +40,7 @@ ETAPAS_CRM = (
              "Registrar cita con fecha, hora y sucursal"),
     EtapaCRM("cita_asistida", "Cita asistida", "registro_manual",
              "Confirmar asistencia y registrar la fecha real de visita"),
-    EtapaCRM("documentos_enviados", "Documentos enviados", "registro_manual",
+    EtapaCRM("documentos_enviados", "Documentos recibidos", "registro_manual",
              "Confirmar recepción de documentación por el asesor y su fecha"),
     EtapaCRM("autorizado_no_formalizado", "Autorizado no formalizado", "seleccion_manual",
              "Seleccionar etapa al confirmar crédito autorizado sin formalizar"),

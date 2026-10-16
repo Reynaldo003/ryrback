@@ -320,7 +320,11 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         if filtros_manuales.children:
             filtro |= Q(_tiene_cualquier_mensaje=False) & filtros_manuales
 
-        return queryset.filter(filtro)
+        return _filtrar_expedientes_por_asignacion(
+            request=self.request,
+            queryset=queryset.filter(filtro),
+            numero_asesor=numeros[0],
+        )
 
     def _aplicar_filtros_listado(self, queryset):
         params = self.request.query_params
@@ -531,6 +535,19 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 queryset = self._base_queryset()
                 return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
 
+        # Misma autorización que contacto_por_telefono: el chat puede abrir
+        # expedientes propios sin mensajes en la línea activa (Facebook/llamada).
+        # Para ver/editar una ficha, comprobar agencia y propiedad, no forzar
+        # que exista un MensajeWhatsApp asociado a esa línea específica.
+        # _get_numero_asesor_request siempre valida la línea del usuario JWT.
+        if accion in {"retrieve", "update", "partial_update"}:
+            numero = _get_numero_asesor_request(self.request)
+            return _filtrar_expedientes_por_asignacion(
+                request=self.request,
+                queryset=self._base_queryset(),
+                numero_asesor=numero,
+            )
+
         # Solo coordinadores digitales autenticados pueden reunir sus líneas;
         # los demás usuarios continúan usando la validación original por línea.
         if (
@@ -648,6 +665,25 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 agencia_linea = str((WHATSAPP_LINES.get(numero_asesor) or {}).get("agencia") or "").strip()
                 if not agencia_linea or _clave_agencia(agencia_linea) != _clave_agencia(agencia_solicitada):
                     raise PermissionDenied("La agencia del prospecto no corresponde a la linea autorizada.")
+
+            # El alta puede reutilizar un expediente existente por teléfono.
+            # No permitir que ese camino alternativo cambie el estado histórico
+            # de un expediente ya incorporado a V3.
+            if (expediente_previo is not None
+                    and expediente_previo.etapa_comercial_v3 is not None):
+                estado_enviado = serializer.validated_data.get("estado")
+                if ("estado" in serializer.validated_data
+                        and str(estado_enviado or "").strip()
+                            != str(expediente_previo.estado or "").strip()):
+                    raise PermissionDenied(
+                        "El estado de un expediente V3 no se puede cambiar desde el alta."
+                    )
+                if ("motivo_descalificacion" in serializer.validated_data
+                        and str(serializer.validated_data.get("motivo_descalificacion") or "").strip()
+                            != str(expediente_previo.motivo_descalificacion or "").strip()):
+                    raise PermissionDenied(
+                        "El motivo histórico requiere una corrección comercial autorizada."
+                    )
 
             expediente = serializer.save()
             expediente = _asegurar_asignacion_salida_manual(
@@ -1039,51 +1075,9 @@ def _es_usuario_autenticado(request) -> bool:
 
 
 def _usuario_es_admin(user) -> bool:
-    """Reconoce administradores tanto por rol como por permisos del CRM."""
-    if not user or not getattr(user, "is_authenticated", False):
-        return False
-
-    if bool(getattr(user, "is_superuser", False)):
-        return True
-
-    try:
-        rol_obj = getattr(user, "rol", None)
-        rol = (
-            getattr(rol_obj, "nombre", "")
-            or getattr(rol_obj, "name", "")
-            or (rol_obj if isinstance(rol_obj, str) else "")
-            or ""
-        ).strip().lower()
-
-        if rol in ("administrador", "admin"):
-            return True
-    except Exception:
-        pass
-
-    permisos = getattr(user, "permisos", None)
-
-    try:
-        if hasattr(permisos, "all"):
-            permisos = permisos.all()
-
-        valores = set()
-        for permiso in permisos or []:
-            if isinstance(permiso, str):
-                valores.add(permiso.strip().upper())
-                continue
-
-            valores.add(
-                str(
-                    getattr(permiso, "codigo", "")
-                    or getattr(permiso, "nombre", "")
-                    or getattr(permiso, "name", "")
-                    or permiso
-                ).strip().upper()
-            )
-
-        return bool({"ALL", "USUARIOS_ADMIN"} & valores)
-    except Exception:
-        return False
+    # Misma política efectiva de V3; el rol por sí solo NO otorga permisos.
+    from .permisos_comerciales_v3 import es_administrador_comercial
+    return es_administrador_comercial(user)
 
 def _usuario_login(user) -> str:
     return str(
@@ -1109,48 +1103,103 @@ def _rol_usuario(user) -> str:
 
 
 def _usuario_puede_ver_toda_linea(user) -> bool:
-    if _usuario_es_admin(user):
-        return True
-
-    rol = _rol_usuario(user)
-
-    return (
-        "coordinador" in rol
-        and "digital" in rol
-    )
+    # No concede supervisión solo por un nombre de rol. Reutiliza V3.
+    from .permisos_comerciales_v3 import puede_supervisar_comercial
+    return puede_supervisar_comercial(user)
 
 
 def _filtrar_expedientes_por_asignacion(
-    *,
-    request,
-    queryset,
-    numero_asesor: str,
+    *, request, queryset, numero_asesor: str,
 ):
-    if not linea_tiene_reparto(
-        numero_asesor
-    ):
-        return queryset
+    """Restringe listas/chat por propietario real, además de la línea.
 
+    Una línea individual NO otorga acceso a todos los expedientes que
+    comparten su número o su cliente. Los históricos sin usuario CRM solo
+    se muestran al asesor cuyo nombre y agencia coinciden de manera única.
+    """
     user = getattr(request, "user", None)
-
-    if _usuario_puede_ver_toda_linea(user):
+    if not user or not getattr(user, "is_authenticated", False):
+        return queryset.none()
+    if _usuario_es_admin(user):
         return queryset
 
-    usuario = _usuario_login(user)
+    from .actividades_views import _agencia_clave, _agencias_usuario
 
-    asesor = obtener_asesor_por_usuario(
-        numero_asesor,
-        usuario,
-    )
-
-    if not asesor:
+    permitidas = _agencias_usuario(user)
+    if not permitidas:
         return queryset.none()
 
-    return queryset.filter(
-        usuario_crm_asignado__iexact=(
-            asesor["usuario"]
-        )
+    # ORM iexact no quita acentos. Usar los nombres reales de las agencias
+    # conocidas, sin aceptar una agencia enviada desde React como permiso.
+    nombres_agencia = {
+        parte.strip() for parte in str(getattr(user, "agencia", "") or "").split("|")
+        if parte.strip()
+    }
+    for valor in (getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ()):
+        if _agencia_clave(valor) in permitidas:
+            nombres_agencia.add(str(valor).strip())
+    for config in WHATSAPP_LINES.values():
+        valor = str((config or {}).get("agencia") or "").strip()
+        if valor and _agencia_clave(valor) in permitidas:
+            nombres_agencia.add(valor)
+    if not nombres_agencia:
+        return queryset.none()
+    filtro_agencia = Q()
+    for nombre in nombres_agencia:
+        filtro_agencia |= Q(agencia__iexact=nombre)
+    queryset = queryset.filter(filtro_agencia)
+
+    if _usuario_puede_ver_toda_linea(user):
+        # Coordinadores: varias carteras de sus agencias, nunca otras agencias.
+        return queryset
+
+    if _rol_usuario(user) not in {"asesor digital", "asesor general"}:
+        return queryset.none()
+    login = _usuario_login(user)
+    if not login:
+        return queryset.none()
+
+    # Línea compartida: sin asignación CRM verificable, no se muestra.
+    if linea_tiene_reparto(numero_asesor):
+        asesor = obtener_asesor_por_usuario(numero_asesor, login)
+        if not asesor:
+            return queryset.none()
+        return queryset.filter(usuario_crm_asignado__iexact=asesor["usuario"])
+
+    filtro_propietario = Q(usuario_crm_asignado__iexact=login)
+    nombre = f"{getattr(user, 'nombre', '') or ''} {getattr(user, 'apellidos', '') or ''}".strip()
+    if not nombre:
+        return queryset.filter(filtro_propietario)
+
+    # No confiar en coincidencias de nombre ambiguas en la misma agencia.
+    candidatos = Usuario.objects.select_related("rol").filter(
+        nombre__iexact=str(getattr(user, "nombre", "") or "").strip(),
+        apellidos__iexact=str(getattr(user, "apellidos", "") or "").strip(),
     )
+    coincidentes = [
+        cuenta.pk for cuenta in candidatos
+        if _rol_usuario(cuenta) in {"asesor general", "asesor digital"}
+        and _agencias_usuario(cuenta).intersection(permitidas)
+    ]
+    if coincidentes != [user.pk]:
+        return queryset.filter(filtro_propietario)
+
+    filtro_sin_asignacion = (
+        (Q(usuario_crm_asignado__isnull=True) | Q(usuario_crm_asignado=""))
+        & Q(asesor_digital__iexact=nombre)
+    )
+    asesor_linea = str((WHATSAPP_LINES.get(numero_asesor) or {}).get("asesor_digital") or "")
+    if _agencia_clave(asesor_linea) != _agencia_clave(nombre):
+        # Para líneas cuyo responsable no está verificado: solo registros
+        # históricos que NO tienen mensajes en ninguna línea WhatsApp.
+        queryset = queryset.annotate(
+            _mensajes_para_propiedad=Exists(
+                MensajeWhatsApp.objects.filter(cliente_id=OuterRef("cliente_id"))
+            )
+        )
+        filtro_sin_asignacion &= Q(_mensajes_para_propiedad=False)
+
+    return queryset.filter(filtro_propietario | filtro_sin_asignacion)
 
 
 def _validar_acceso_expediente(
@@ -1166,17 +1215,16 @@ def _validar_acceso_expediente(
 
     user = getattr(request, "user", None)
 
-    if _usuario_puede_ver_toda_linea(user):
-        return
-
-    if not usuario_puede_ver_expediente(
-        expediente=expediente,
+    # Validar la propiedad igual que en los listados; una línea individual
+    # tampoco concede por sí sola acceso a chats/acciones de otros asesores.
+    visible = _filtrar_expedientes_por_asignacion(
+        request=request,
+        queryset=ExpedienteDigital.objects.filter(pk=expediente.pk),
         numero_asesor=numero_asesor,
-        usuario=_usuario_login(user),
-    ):
+    ).exists()
+    if not visible:
         raise PermissionDenied(
-            "Este prospecto está asignado "
-            "a otro asesor digital."
+            "No tienes acceso a este expediente en tu agencia y cartera."
         )
     
 def _asegurar_asignacion_salida_manual(
@@ -1193,6 +1241,11 @@ def _asegurar_asignacion_salida_manual(
     # Línea normal:
     # conserva el asesor único configurado en WHATSAPP_LINES.
     if not linea_tiene_reparto(numero_asesor):
+        # No actualizar primero el asesor de otro expediente para después
+        # comprobar permisos: la validación debe preceder toda asignación.
+        _validar_acceso_expediente(
+            request=request, expediente=expediente, numero_asesor=numero_asesor,
+        )
         return asegurar_asignacion_expediente(
             expediente,
             numero_asesor,

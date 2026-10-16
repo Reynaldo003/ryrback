@@ -22,7 +22,9 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+import unicodedata
 from dataclasses import dataclass
+from types import SimpleNamespace
 from datetime import date, datetime
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
@@ -62,6 +64,7 @@ class ResultadoRegistro:
 # Eventos cuyos datos podemos validar contra el modelo o una confirmacion
 # realizada por un usuario autenticado. El resto queda DESHABILITADO.
 _TIPOS_EVENTO = {
+    "contacto_externo_confirmado": "seguimiento",
     "respuesta_humana_registrada": "seguimiento",
     "cotizacion_confirmada": "cotizacion_enviada",
     "cita_registrada": "cita_agendada",
@@ -72,6 +75,7 @@ _TIPOS_EVENTO = {
 }
 
 _ORIGEN_EVENTO = {
+    "contacto_externo_confirmado": "registro_manual",
     "respuesta_humana_registrada": "automatico",
     "cotizacion_confirmada": "registro_manual",
     "cita_registrada": "registro_manual",
@@ -162,9 +166,29 @@ def _identidad_cita(expediente: ExpedienteDigital, cita: Cita) -> None:
         raise ErrorActividadComercial("agencia_no_coincide", "La agencia de la cita no coincide con la del expediente.")
 
 
+def _cita_historica_vinculada(expediente: ExpedienteDigital, cita: Cita) -> bool:
+    """La etapa histórica no basta: validar la cita precisa del expediente.
+
+    Para una Cita real anterior a V3, se requiere la referencia explícita
+    `ultima_cita_id` y una homologación de cita/documentos del expediente.
+    Si no existe cita real, el flujo independiente de captura histórica ya
+    implementado en _preparar conserva sus propias validaciones.
+    """
+    return bool(
+        expediente.etapa_comercial_v3 in {"cita_agendada", "documentos_enviados"}
+        and expediente.ultima_cita_id is not None
+        and expediente.ultima_cita_id == cita.pk
+        and ActividadComercialDigital.objects.filter(
+            expediente_id=expediente.pk,
+            etapa_resultante__in={"cita_agendada", "documentos_enviados"},
+            detalle__evento__in=["homologacion_historica_v3", "clasificacion_historica_v3"],
+        ).exists()
+    )
+
+
 def _obtener_cita_bloqueada(expediente: ExpedienteDigital, cita_id: Any) -> Cita:
     if isinstance(cita_id, bool) or not str(cita_id or "").isdigit():
-        raise ErrorActividadComercial("cita_invalida", "Se requiere el ID de una cita existente.")
+        raise ErrorActividadComercial("cita_invalida", "Selecciona una cita existente del prospecto por fecha y sucursal.")
     cita = Cita.objects.select_for_update().filter(pk=int(cita_id)).first()
     if cita is None:
         raise ErrorActividadComercial("cita_inexistente", "No se encontró la cita.")
@@ -202,6 +226,26 @@ def _preparar(
         }
         return payload, _TIPOS_EVENTO[evento], origen, fecha_actividad, fecha_hora, None
 
+    if evento == "contacto_externo_confirmado":
+        # Este registro NO fabrica un mensaje WhatsApp: una persona confirma
+        # contacto real por otro canal. La fecha efectiva queda auditada.
+        if datos.get("confirmado") is not True:
+            raise ErrorActividadComercial("contacto_no_confirmado", "Confirma que realmente contactaste al prospecto.")
+        medio = _texto(datos.get("medio"), 40)
+        if medio not in {"llamada", "facebook", "presencial", "whatsapp_externo", "otro"}:
+            raise ErrorActividadComercial("medio_invalido", "Selecciona el canal real del contacto.")
+        observacion = datos.get("observacion")
+        if not isinstance(observacion, str) or not 10 <= len(observacion.strip()) <= 600:
+            raise ErrorActividadComercial("observacion_requerida", "Describe el contacto real (10 a 600 caracteres).")
+        fecha_actividad = _fecha(datos.get("fecha_contacto"), "fecha_contacto", no_futura=True)
+        payload = {
+            "registrado": True, "confirmado": True,
+            "medio": medio, "fecha_contacto": fecha_actividad.isoformat(),
+            "observacion": observacion.strip(),
+            "fuente": "declaracion_asesor", "mensaje_whatsapp_verificado": False,
+        }
+        return payload, _TIPOS_EVENTO[evento], origen, fecha_actividad, None, None
+
     if evento == "respuesta_humana_registrada":
         mensaje_id = datos.get("mensaje_id")
         if isinstance(mensaje_id, bool) or not str(mensaje_id or "").isdigit():
@@ -237,6 +281,48 @@ def _preparar(
     if evento in {"cita_registrada", "asistencia_confirmada"}:
         if datos.get("confirmado") is not True:
             raise ErrorActividadComercial("confirmacion_requerida", "La operación de cita debe confirmarse explícitamente.")
+        if evento == "asistencia_confirmada" and cita_id is None:
+            # Se usa solo para expediente heredado en Cita agendada que no
+            # tiene ninguna cita real asociada en el CRM. Nunca se inventa
+            # una fila en Cita ni se modifica la agenda de otra persona.
+            if expediente.etapa_comercial_v3 not in {"cita_agendada", "documentos_enviados"} or not ActividadComercialDigital.objects.filter(
+                expediente_id=expediente.pk,
+                etapa_resultante__in={"cita_agendada", "documentos_enviados"},
+                detalle__evento__in=["homologacion_historica_v3", "clasificacion_historica_v3"],
+            ).exists():
+                raise ErrorActividadComercial("cita_no_vinculada_v3", "La captura histórica requiere una etapa heredada con cita o documentos recibidos.")
+            if ActividadComercialDigital.objects.filter(
+                expediente_id=expediente.pk, tipo="cita_asistida",
+            ).exists():
+                raise ErrorActividadComercial("asistencia_ya_registrada", "Ya existe una asistencia registrada; utiliza la corrección auditada.")
+            def clave(v):
+                t = unicodedata.normalize("NFKD", str(v or ""))
+                return " ".join("".join(c for c in t if not unicodedata.combining(c)).casefold().split())
+            if clave(datos.get("sucursal")) != clave(expediente.agencia) or not clave(expediente.agencia):
+                raise ErrorActividadComercial("agencia_no_coincide", "La sucursal no coincide con el expediente.")
+            citas_del_cliente = Cita.objects.filter(cliente_id=expediente.cliente_id)
+            if any(clave(a) == clave(expediente.agencia) for a in citas_del_cliente.values_list("agencia", flat=True)):
+                raise ErrorActividadComercial("cita_existente", "Este cliente ya tiene citas en la sucursal. Selecciona la que corresponda por fecha y hora.")
+            try:
+                programada = datetime.fromisoformat(str(datos.get("fecha_hora_cita", "")))
+            except (ValueError, TypeError):
+                raise ErrorActividadComercial("fecha_cita_invalida", "Fecha y hora programadas inválidas.")
+            if timezone.is_naive(programada):
+                programada = timezone.make_aware(programada, ZoneInfo(settings.TIME_ZONE))
+            programada = programada.astimezone(ZoneInfo(settings.TIME_ZONE))
+            if programada > datetime.now(ZoneInfo(settings.TIME_ZONE)):
+                raise ErrorActividadComercial("cita_aun_no_ocurre", "No puedes confirmar asistencia a una cita futura.")
+            fecha_actividad = _fecha(datos.get("fecha_asistencia_real"), "fecha_asistencia_real", no_futura=True)
+            if fecha_actividad < programada.date():
+                raise ErrorActividadComercial("asistencia_antes_de_cita", "La fecha real no puede preceder a la cita programada.")
+            payload = {
+                "confirmado": True, "asistio": True,
+                "fecha_hora_cita": programada.isoformat(),
+                "fecha_asistencia_real": fecha_actividad.isoformat(),
+                "sucursal": expediente.agencia,
+                "fuente": "confirmacion_historica_sin_cita_crm",
+            }
+            return payload, _TIPOS_EVENTO[evento], origen, fecha_actividad, None, None
         cita = _obtener_cita_bloqueada(expediente, cita_id)
         if evento == "cita_registrada":
             if cita.estado_asistencia not in (None, "pendiente") or cita.asistencia:
@@ -268,21 +354,13 @@ def _preparar(
             # Excepción controlada para citas heredadas del CRM anterior.
             # La homologación no crea una vinculación ficticia:
             # se exige que el expediente identifique esta cita exacta.
-            vinculada_historica = (
-                expediente.etapa_comercial_v3 == "cita_agendada"
-                and expediente.ultima_cita_id == cita.pk
-                and ActividadComercialDigital.objects.filter(
-                    expediente_id=expediente.pk,
-                    etapa_resultante="cita_agendada",
-                    detalle__evento="homologacion_historica_v3",
-                ).exists()
-            )
+            vinculada_historica = _cita_historica_vinculada(expediente, cita)
 
             if not (vinculada_v3 or vinculada_historica):
                 raise ErrorActividadComercial(
                     "cita_no_vinculada_v3",
-                    "La cita debe estar vinculada al expediente mediante "
-                    "el flujo V3 o mediante su referencia histórica."
+                    "La cita debe estar vinculada al expediente comercial "
+                    "o contar con una referencia histórica verificable."
                 )
             # Las citas futuras siguen pendientes: la sola programación nunca
             # constituye prueba de asistencia. Normalizar fecha-hora legacy naive.
@@ -338,9 +416,11 @@ def _preparar(
             fecha_actividad = _fecha(datos.get("fecha_autorizacion"),
                                      "fecha_autorizacion", no_futura=True)
             referencia_bruta = datos.get("referencia_autorizacion")
-            if not isinstance(referencia_bruta, str) or not (1 <= len(referencia_bruta.strip()) <= 120):
+            if referencia_bruta is None:
+                referencia_bruta = ""
+            if not isinstance(referencia_bruta, str) or len(referencia_bruta.strip()) > 120:
                 raise ErrorActividadComercial(
-                    "referencia_requerida", "Indica una referencia de autorización de 1 a 120 caracteres."
+                    "referencia_invalida", "La referencia de autorización debe ser texto de hasta 120 caracteres."
                 )
             if any(ord(c) < 32 for c in referencia_bruta):
                 raise ErrorActividadComercial("referencia_invalida", "La referencia contiene caracteres no permitidos.")
@@ -457,7 +537,7 @@ def registrar_actividad_v3(
     usuario = _actor_autenticado(actor)
     evento = str(evento or "").strip()
     if evento not in _ORIGEN_EVENTO:
-        raise ErrorActividadComercial("evento_no_habilitado", "El evento todavía no admite escritura V3.")
+        raise ErrorActividadComercial("evento_no_habilitado", "Este tipo de actividad todavía no está habilitado.")
     if not isinstance(clave_idempotencia, str) or not _PATRON_CLAVE.fullmatch(clave_idempotencia):
         raise ErrorActividadComercial("idempotencia_invalida", "Usa una clave estable de 8 a 120 caracteres.")
     if datos is None:
@@ -485,7 +565,7 @@ def registrar_actividad_v3(
             raise ErrorActividadComercial("expediente_inexistente", "No se encontró el expediente.")
         if expediente.etapa_comercial_v3 is None:
             raise ErrorActividadComercial("flujo_v3_no_iniciado",
-                                        "El expediente todavía no está incorporado al flujo V3.")
+                                        "Primero incorpora el prospecto a las etapas comerciales.")
         if not expediente.agencia.strip():
             raise ErrorActividadComercial("agencia_sin_asignar", "Se requiere una agencia en el expediente.")
 
@@ -506,7 +586,20 @@ def registrar_actividad_v3(
         payload, tipo, origen, fecha_negocio, hora_negocio, cita = _preparar(
             expediente=expediente, evento=evento, datos=datos, cita_id=cita_id,
         )
-        decision = evaluar_transicion(expediente.etapa_comercial_v3, evento, datos=payload)
+        if evento == "contacto_externo_confirmado":
+            # Único nuevo movimiento permitido: Nuevo prospecto -> En seguimiento.
+            # No aceptar selecciones arbitrarias ni retroceder etapas ya avanzadas.
+            # Reutiliza TODA la validación de identidad/agencia/expediente del POST.
+            if expediente.etapa_comercial_v3 != "nuevo_prospecto":
+                raise ErrorActividadComercial("contacto_etapa_no_permitida",
+                    "El contacto inicial solo se registra desde Nuevo prospecto.")
+            decision = SimpleNamespace(
+                permitida=True, registrar_actividad=True,
+                etapa_anterior="nuevo_prospecto", etapa_resultante="en_seguimiento",
+                cambiar_etapa=True, codigo="contacto_externo_confirmado",
+            )
+        else:
+            decision = evaluar_transicion(expediente.etapa_comercial_v3, evento, datos=payload)
         if not decision.permitida or not decision.registrar_actividad or not decision.etapa_resultante:
             raise ErrorActividadComercial(decision.codigo, decision.detalle)
 
