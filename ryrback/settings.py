@@ -142,6 +142,7 @@ INSTALLED_APPS = [
     "VentaRefacciones",
     "logs",
     "BusinessPlan",
+    "inspector_ai",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
