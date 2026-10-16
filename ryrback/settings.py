@@ -61,6 +61,7 @@ ALLOWED_HOSTS = [
     "hoja-ingresos-cba.vercel.app",
     "hoja-ingresos-oba.vercel.app",
     "visualiza-citas-vw.vercel.app",
+    "analizador-autos.vercel.app",
 ]
 
 
@@ -98,6 +99,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://hoja-ingresos-cba.vercel.app",
     "https://hoja-ingresos-oba.vercel.app",
     "https://visualiza-citas-vw.vercel.app",
+    "https://analizador-autos.vercel.app",
 ]
 
 # Application definition
@@ -141,6 +143,8 @@ INSTALLED_APPS = [
     "ordenes_facturadas",
     "VentaRefacciones",
     "logs",
+    "BusinessPlan",
+    "inspector_ai",
 ]
 
 SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
@@ -278,6 +282,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://hoja-ingresos-cba.vercel.app",
     "https://hoja-ingresos-oba.vercel.app",
     "https://visualiza-citas-vw.vercel.app",
+    "https://analizador-autos.vercel.app",
 ]
 
 
@@ -287,8 +292,8 @@ DATABASES = {
         "NAME": "crm_ryr",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-         #"HOST": "127.0.0.1",
-         "HOST": "45.82.73.31",
+        "HOST": "127.0.0.1",
+        #"HOST": "45.82.73.31",
         "PORT": "5432",
     },
     "tdsql": {
@@ -296,8 +301,8 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-      # "HOST": "127.0.0.1",
-       "HOST": "45.82.73.31",
+        "HOST": "127.0.0.1",
+       #"HOST": "45.82.73.31",
         "PORT": "5432",
     },
     'sqlserver': {
