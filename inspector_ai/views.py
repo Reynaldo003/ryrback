@@ -1,3 +1,4 @@
+#inspector_ai/views.py
 import base64
 import io
 import json
