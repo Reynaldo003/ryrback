@@ -61,6 +61,7 @@ ALLOWED_HOSTS = [
     "hoja-ingresos-cba.vercel.app",
     "hoja-ingresos-oba.vercel.app",
     "visualiza-citas-vw.vercel.app",
+    "analizador-autos.vercel.app",
 ]
 
 
@@ -98,6 +99,7 @@ CSRF_TRUSTED_ORIGINS = [
     "https://hoja-ingresos-cba.vercel.app",
     "https://hoja-ingresos-oba.vercel.app",
     "https://visualiza-citas-vw.vercel.app",
+    "https://analizador-autos.vercel.app",
 ]
 
 # Application definition
@@ -280,6 +282,7 @@ CORS_ALLOWED_ORIGINS = [
     "https://hoja-ingresos-cba.vercel.app",
     "https://hoja-ingresos-oba.vercel.app",
     "https://visualiza-citas-vw.vercel.app",
+    "https://analizador-autos.vercel.app",
 ]
 
 
