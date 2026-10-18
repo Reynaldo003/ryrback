@@ -444,7 +444,10 @@ CRM_ETAPAS_V3_AGENCIAS_HABILITADAS = (
 CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS = ()
 
 # No activar automatización de facturación por VIN
-CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO = False
+CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO = (
+    getenv("CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO", "0").strip().lower()
+    in ("1", "true", "yes", "on")
+)
 
 # CRM V3: equivalencias verificadas de nombres comerciales
 CRM_ETAPAS_V3_ASESORES_LEGACY = {
