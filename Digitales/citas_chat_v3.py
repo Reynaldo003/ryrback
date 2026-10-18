@@ -24,7 +24,7 @@ from rest_framework.response import Response
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from citas.models import Cita
 from citas.serializers import CitaSerializer
-from .actividades_views import _autorizado, _usuario_en_piloto_o_general
+from .actividades_views import _autorizado, _usuario_en_piloto_o_general, _agencia_clave
 from .actividades_service import ErrorActividadComercial, registrar_actividad_v3
 from .models import ActividadComercialDigital, ExpedienteDigital
 
@@ -100,7 +100,7 @@ def agendar_cita_chat_v3_view(request):
                 return _error("expediente_inexistente", "Expediente no disponible.", 404)
             if not _autorizado(usuario, expediente):
                 return _error("sin_permiso_expediente", "No tienes acceso a este expediente.", 403)
-            if sucursal.casefold() != str(expediente.agencia or "").strip().casefold():
+            if _agencia_clave(sucursal) != _agencia_clave(expediente.agencia) or not _agencia_clave(sucursal):
                 return _error("agencia_no_coincide", "La cita debe corresponder a la agencia del expediente.", 409)
 
             # Un reintento idéntico devuelve el vínculo anterior sin crear otra cita.

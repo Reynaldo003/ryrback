@@ -689,7 +689,12 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             if (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
                     and _clave_agencia(agencia_solicitada) in habilitadas):
                 agencia_linea = str((WHATSAPP_LINES.get(numero_asesor) or {}).get("agencia") or "").strip()
-                if not agencia_linea or _clave_agencia(agencia_linea) != _clave_agencia(agencia_solicitada):
+                agencia_valida = _clave_agencia(agencia_linea) == _clave_agencia(agencia_solicitada)
+                if _clave_agencia(agencia_linea) == "vw cordoba" and _clave_agencia(agencia_solicitada) == "vw cordoba usados":
+                    agencia_valida = True
+                if _clave_agencia(agencia_linea) == "vw orizaba" and _clave_agencia(agencia_solicitada) == "vw orizaba usados":
+                    agencia_valida = True
+                if not agencia_linea or not agencia_valida:
                     raise PermissionDenied("La agencia del prospecto no corresponde a la linea autorizada.")
 
             # El alta puede reutilizar un expediente existente por teléfono.

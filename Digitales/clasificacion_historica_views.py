@@ -158,7 +158,12 @@ def disponible_para_clasificacion(expediente):
         corte = date.fromisoformat(str(getattr(settings, "CRM_ETAPAS_V3_CORTE_HISTORICOS", "2026-10-20")))
     except ValueError:
         return False
-    return expediente.creado is not None and expediente.creado.date() < corte
+    if expediente.creado is None:
+        return False
+    inicio_corte = datetime.combine(corte, datetime.min.time())
+    if settings.USE_TZ:
+        inicio_corte = timezone.make_aware(inicio_corte, timezone.get_current_timezone())
+    return expediente.creado < inicio_corte
 
 
 @api_view(["POST"])

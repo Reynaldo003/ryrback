@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 import unicodedata
+import re
 
 from CrmConformidad.models import Usuario
 from django.utils import timezone
@@ -69,9 +71,25 @@ def resolver_usuario_crm_por_linea(numero_asesor: str, nombre_asesor: str, agenc
         Q(rol__nombre__iexact="Asesor Digital") |
         Q(rol__nombre__iexact="Asesor General")
     )
+    alias_legacy = getattr(settings, "CRM_ETAPAS_V3_ASESORES_LEGACY", {}) or {}
+    alias_unico = (
+        isinstance(alias_legacy, dict)
+        and sum(_clave(v) == nombre for v in alias_legacy.values()) == 1
+    )
     for cuenta in cuentas:
-        if _clave(f"{cuenta.nombre or ''} {cuenta.apellidos or ''}") != nombre:
+        nombre_real = _clave(f"{cuenta.nombre or ''} {cuenta.apellidos or ''}")
+        es_alias = (alias_unico and not asesores
+                    and _clave(alias_legacy.get(cuenta.pk, alias_legacy.get(str(cuenta.pk), ""))) == nombre)
+        if nombre_real != nombre and not es_alias:
             continue
+        if es_alias:
+            # Solo la línea INDIVIDUAL explícitamente vinculada a esta cuenta.
+            lineas_cuenta = {
+                normaliza_tel_mx(p) for p in re.split(r"[|,;\n]+", _texto(cuenta.telefono))
+                if p.strip()
+            }
+            if numero not in lineas_cuenta:
+                continue
         if agencia_clave not in _agencias_admitidas(cuenta.agencia):
             continue
         if login_configurado and _normalizar_usuario(cuenta.usuario) != login_configurado:

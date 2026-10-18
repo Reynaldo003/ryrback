@@ -108,10 +108,18 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
             puede_corregir = False
         clave_fecha = {"cotizacion_enviada": "fecha_envio", "documentos_recibidos": "fecha_recepcion",
                        "cita_asistida": "fecha_asistencia_real"}.get(tipo_corregible)
+        if es_historico and (actividad.detalle or {}).get("evento") == "clasificacion_historica_v3":
+            clave_fecha = {
+                "en_seguimiento": "fecha_contacto",
+                "cotizacion_enviada": "fecha_envio",
+                "cita_asistida": "fecha_asistencia_real",
+                "documentos_enviados": "fecha_recepcion",
+                "autorizado_no_formalizado": "fecha_autorizacion",
+            }.get(actividad.etapa_resultante)
         fecha_efectiva = (datos_efectivos.get(clave_fecha) if clave_fecha else None)
         valores_ui = {clave: datos_efectivos.get(clave) for clave in (
             "fecha_envio", "vehiculo", "referencia", "fecha_recepcion", "documentos",
-            "fecha_hora_cita", "fecha_asistencia_real") if clave in datos_efectivos}
+            "fecha_hora_cita", "fecha_asistencia_real", "fecha_contacto", "fecha_autorizacion") if clave in datos_efectivos}
         if cita_historica and cita_historica.fecha_hora_cita and not reciente:
             fecha_cita = cita_historica.fecha_hora_cita
             zona = ZoneInfo(settings.TIME_ZONE)
@@ -172,8 +180,7 @@ def consultar_etapas_comerciales_v3_view(request, expediente_id):
         if (
             cita_historica is not None
             and cita_historica.cliente_id == expediente.cliente_id
-            and (cita_historica.agencia or "").strip().casefold()
-                == (expediente.agencia or "").strip().casefold()
+            and _agencia_clave(cita_historica.agencia) == _agencia_clave(expediente.agencia)
             and bool((expediente.agencia or "").strip())
         ):
             cita_vinculada_id = cita_historica.pk

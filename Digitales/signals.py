@@ -46,20 +46,22 @@ def marcar_primer_contacto_humano(sender, instance, created, **kwargs):
         return
     if instance.direction != "out" or instance.from_ia:
         return
+    if str(instance.status or "").strip().casefold() in {"failed", "error", "deleted"}:
+        return
+
     existe = MensajeWhatsApp.objects.filter(
         telefono=instance.telefono,
         numero_asesor=instance.numero_asesor,
         direction="out",
         from_ia=False,
         id__lt=instance.id,
-    ).exists()
-    if existe:
-        return
-    # Compatibilidad: conservar la transición histórica existente.
-    ExpedienteDigital.objects.filter(
-        cliente__telefono=instance.telefono,
-        estado=ESTADO_SIN_CONTACTAR,
-    ).update(estado=ESTADO_CONTACTADO)
+    ).exclude(status__in=["failed", "error", "deleted"]).exists()
+    if not existe:
+        # Mantener el primer contacto del CRM histórico sin marcar envíos fallidos.
+        ExpedienteDigital.objects.filter(
+            cliente__telefono=instance.telefono,
+            estado=ESTADO_SIN_CONTACTAR,
+        ).update(estado=ESTADO_CONTACTADO)
 
     # V3 es optativo y solo está activo para agencias habilitadas.
     # No se inicializan expedientes antiguos ni se fuerza una etapa.

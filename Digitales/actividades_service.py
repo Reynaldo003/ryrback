@@ -162,7 +162,8 @@ def _fecha(valor: Any, campo: str, *, no_futura: bool = False) -> date:
 def _identidad_cita(expediente: ExpedienteDigital, cita: Cita) -> None:
     if cita.cliente_id != expediente.cliente_id:
         raise ErrorActividadComercial("cita_otro_cliente", "La cita no corresponde al cliente del expediente.")
-    if not cita.agencia or not expediente.agencia or cita.agencia.strip().casefold() != expediente.agencia.strip().casefold():
+    from .actividades_views import _agencia_clave
+    if not cita.agencia or not expediente.agencia or _agencia_clave(cita.agencia) != _agencia_clave(expediente.agencia):
         raise ErrorActividadComercial("agencia_no_coincide", "La agencia de la cita no coincide con la del expediente.")
 
 
@@ -260,7 +261,7 @@ def _preparar(
         if mensaje.status.strip().casefold() in {"failed", "error", "deleted"}:
             raise ErrorActividadComercial("mensaje_fallido", "El mensaje no fue enviado correctamente.")
         fecha_hora = mensaje.created_at
-        fecha_actividad = mensaje.created_at.date()
+        fecha_actividad = timezone.localtime(mensaje.created_at, ZoneInfo(settings.TIME_ZONE)).date() if timezone.is_aware(mensaje.created_at) else mensaje.created_at.date()
         payload = {
             "mensaje_id": mensaje.pk, "direccion": "out", "es_humano": True,
             "registrado": True,
