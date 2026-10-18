@@ -143,9 +143,8 @@ def _validar_datos(evento: str, datos: Mapping[str, Any]) -> str | None:
             datos.get("confirmado") is True
             and _fecha_valida(datos.get("fecha_envio"))
             and _existe(datos.get("vehiculo"))
-            and (_existe(datos.get("referencia")) or _existe(datos.get("archivo_id")))
         ):
-            return "Confirma la cotización e indica fecha, vehículo y referencia o archivo."
+            return "Confirma la cotización e indica fecha y vehículo."
     elif evento == "cita_registrada":
         if not (
             datos.get("confirmado") is True

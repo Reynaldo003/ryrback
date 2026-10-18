@@ -238,6 +238,83 @@ def _usuario_en_piloto_o_general(usuario):
     return str(usuario.pk) in ids_piloto
 
 
+
+def _identidad_asesor_legacy_v3(usuario):
+    """Alias V3 explicitamente aprobado + linea individual en el perfil CRM.
+
+    Retorna (nombre_comercial, linea, agencias_validas), o None.
+    No escribe expedientes, no concede acceso por un nombre libre y nunca
+    interpreta una linea compartida como prueba de titularidad individual.
+    """
+    if not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
+        return None
+    if not _usuario_en_piloto_o_general(usuario):
+        return None
+    if _rol_clave_usuario(usuario) not in {"asesor digital", "asesor general"}:
+        return None
+
+    mapa = getattr(settings, "CRM_ETAPAS_V3_ASESORES_LEGACY", {}) or {}
+    if not isinstance(mapa, dict):
+        return None
+    nombre = str(mapa.get(usuario.pk, mapa.get(str(usuario.pk), "")) or "").strip()
+    if not nombre:
+        return None
+
+    # Una identidad historica no debe estar asignada a dos cuentas.
+    if sum(_agencia_clave(v) == _agencia_clave(nombre) for v in mapa.values()) != 1:
+        return None
+
+    telefonos = {
+        normaliza_tel_mx(parte)
+        for parte in re.split(r"[|,;\n]+", str(getattr(usuario, "telefono", "") or ""))
+        if parte.strip()
+    }
+    telefonos.discard("")
+    if not telefonos:
+        return None
+
+    agencias_usuario = _agencias_usuario(usuario)
+    candidatas = []
+    for numero, cfg in WHATSAPP_LINES.items():
+        # No emplear equivalencias de nombres sobre reparto entre asesores.
+        if not isinstance(cfg, dict) or cfg.get("asesores"):
+            continue
+        linea = normaliza_tel_mx(numero)
+        if not linea or linea not in telefonos:
+            continue
+        if _agencia_clave(cfg.get("asesor_digital")) != _agencia_clave(nombre):
+            continue
+
+        agencia_linea = _agencia_clave(cfg.get("agencia"))
+        agencias_linea = {agencia_linea} if agencia_linea else set()
+        if agencia_linea == "vw cordoba":
+            agencias_linea.add("vw cordoba usados")
+        elif agencia_linea == "vw orizaba":
+            agencias_linea.add("vw orizaba usados")
+        agencias_linea.intersection_update(agencias_usuario)
+        if agencias_linea:
+            candidatas.append((nombre, linea, frozenset(agencias_linea)))
+
+    # Denegar cuando hay mas de una linea candidata.
+    return candidatas[0] if len(candidatas) == 1 else None
+
+
+def _autorizado_alias_legacy_v3(usuario, expediente, agencia):
+    """Compatibilidad V3 solo para expedientes sin login CRM ya asignado."""
+    if not expediente.cliente_id or str(expediente.usuario_crm_asignado or "").strip():
+        return False
+    identidad = _identidad_asesor_legacy_v3(usuario)
+    if identidad is None:
+        return False
+    nombre, linea, agencias = identidad
+    if agencia not in agencias or _agencia_clave(expediente.asesor_digital) != _agencia_clave(nombre):
+        return False
+    # No inferir propiedad con una linea si el cliente tambien tiene mensajes
+    # en otra. Los casos manuales sin mensajes son posibles bajo alias explicito.
+    return not MensajeWhatsApp.objects.filter(
+        cliente_id=expediente.cliente_id
+    ).exclude(numero_asesor=linea).exists()
+
 def _resolver_propietario_historico_v3(expediente, agencia):
     """Devuelve el usuario CRM único de un expediente histórico, o "".
 
@@ -279,10 +356,9 @@ def _resolver_propietario_historico_v3(expediente, agencia):
         # anterior: identidad inequívoca por nombre completo + agencia.
         return candidato
 
-    # No introducir accesos nuevos a expedientes ya clasificados con líneas
-    # mixtas: esta vía excepcional es para regularización, una sola vez.
-    if (expediente.etapa_comercial_v3 or "").strip():
-        return ""
+    # Una etapa V3 homologada no invalida la titularidad historica. Exigir
+    # evidencia POSITIVA de una linea individual vinculada a la cuenta CRM.
+    # Las otras lineas del cliente no conceden acceso a sus asesoras.
 
     for numero in lineas:
         # Una línea con reparto entre varios asesores carece de evidencia
@@ -384,7 +460,8 @@ def _autorizado(usuario, expediente):
     if asignado:
         return asignado == identificador
     return (_autorizado_historico_sin_whatsapp(usuario, expediente, agencia)
-            or _autorizado_legacy_por_linea(usuario, expediente, agencia))
+            or _autorizado_legacy_por_linea(usuario, expediente, agencia)
+            or _autorizado_alias_legacy_v3(usuario, expediente, agencia))
 
 
 def _error(codigo, mensaje, http_status):

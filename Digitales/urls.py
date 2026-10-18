@@ -17,7 +17,7 @@ from .canal_diario import canal_diario_view
 from .negocio_stats import negocio_stats_view
 from .actividades_views import registrar_actividad_comercial_v3_view
 from .citas_chat_v3 import agendar_cita_chat_v3_view
-from .actividades_consulta_views import consultar_etapas_comerciales_v3_view
+from .actividades_consulta_views import consultar_etapas_comerciales_v3_view, disponibilidad_etapas_comerciales_v3_view
 from .correcciones_views import corregir_actividad_comercial_v3_view
 from .clasificacion_historica_views import clasificar_expediente_historico_v3_view
 from .views import (
@@ -147,6 +147,8 @@ urlpatterns = [
     path("analitica/negocio-stats/", negocio_stats_view, name="digitales-negocio-stats"),
 
     path("api/", include(router.urls)),
+    path("api/etapas-v3/disponibilidad/", disponibilidad_etapas_comerciales_v3_view,
+         name="digitales-disponibilidad-etapas-v3"),
     path("api/etapas-v3/expedientes/<int:expediente_id>/",
          consultar_etapas_comerciales_v3_view, name="digitales-consulta-etapas-v3"),
 

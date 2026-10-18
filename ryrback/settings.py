@@ -14,6 +14,7 @@ https://docs.djangoproject.com/en/5.2/ref/settings/
 import os
 import socket
 from pathlib import Path
+from os import getenv
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -417,4 +418,38 @@ REST_FRAMEWORK = {
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "CrmConformidad.jwt_authentication.CRMJWTAuthentication",
     ),
+}
+
+
+# Desactivado hasta autorizar el despliegue
+CRM_ETAPAS_V3_API_HABILITADA = (
+    getenv("CRM_ETAPAS_V3_API_HABILITADA", "0").strip().lower()
+    in ("1", "true", "yes", "on")
+)
+
+# Agencias habilitadas para CRM V3
+CRM_ETAPAS_V3_AGENCIAS_HABILITADAS = (
+    "VW Cordoba",
+    "VW Cordoba Usados",
+    "VW Córdoba Usados",
+    "VW Orizaba",
+    "VW Orizaba Usados",
+    "VW Poza Rica",
+    "VW Tuxpan",
+    "VW Tuxtepec",
+    "Automotriz R&R",
+)
+
+# Sin restricciones temporales por usuarios piloto
+CRM_ETAPAS_V3_USUARIOS_PILOTO_IDS = ()
+
+# No activar automatización de facturación por VIN
+CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO = False
+
+# CRM V3: equivalencias verificadas de nombres comerciales
+CRM_ETAPAS_V3_ASESORES_LEGACY = {
+    38: "Bianca Isabel Chavez Alarcon",
+    37: "Candy Denisse Marquez",
+    33: "Dulce Abigail Garcia Olivares",
+    63: "Edgar Omar Noguera Solis",
 }

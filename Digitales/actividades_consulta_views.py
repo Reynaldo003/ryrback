@@ -28,6 +28,18 @@ from citas.models import Cita
 @api_view(["GET"])
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
+def disponibilidad_etapas_comerciales_v3_view(request):
+    """Estado de V3 para el usuario autenticado; no consulta expedientes ni escribe."""
+    if not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
+        return Response({"codigo": "v3_desactivado"}, status=status.HTTP_404_NOT_FOUND)
+    if not _usuario_en_piloto_o_general(request.user):
+        return Response({"codigo": "usuario_no_autorizado"}, status=status.HTTP_403_FORBIDDEN)
+    return Response({"habilitada": True}, status=status.HTTP_200_OK)
+
+
+@api_view(["GET"])
+@authentication_classes([CRMJWTAuthentication])
+@permission_classes([IsAuthenticated])
 def consultar_etapas_comerciales_v3_view(request, expediente_id):
     """Retorna la etapa V3 y las últimas 30 actividades del expediente autorizado."""
     if not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):

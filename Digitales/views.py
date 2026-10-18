@@ -541,6 +541,23 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         # que exista un MensajeWhatsApp asociado a esa línea específica.
         # _get_numero_asesor_request siempre valida la línea del usuario JWT.
         if accion in {"retrieve", "update", "partial_update"}:
+            # CRM V3: una cuenta comercial sin linea WhatsApp puede abrir su
+            # propia ficha. La regla normal de agencia y propietario se conserva.
+            # No alterar el comportamiento anterior con V3 desactivado.
+            linea_solicitada = str(self.request.query_params.get("numero_asesor", "") or "").strip()
+            if not linea_solicitada and self.request.method in {"PUT", "PATCH"}:
+                datos = self.request.data
+                if hasattr(datos, "get"):
+                    linea_solicitada = str(datos.get("numero_asesor", "") or "").strip()
+            if (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
+                    and user is not None
+                    and not linea_solicitada
+                    and not _numeros_whatsapp_usuario(user)):
+                return _filtrar_expedientes_por_asignacion(
+                    request=self.request,
+                    queryset=self._base_queryset(),
+                    numero_asesor="",
+                )
             numero = _get_numero_asesor_request(self.request)
             return _filtrar_expedientes_por_asignacion(
                 request=self.request,
@@ -571,6 +588,15 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         # numero_asesor específico, aplicamos aislamiento por su agencia y asignación.
         # Si solicitó una línea ajena o inválida, _get_numero_asesor_request rechaza con 403.
         if user and not es_admin and not param_linea and not numeros_usr:
+            # CRM V3: usar la misma politica de propiedad que la ficha, y
+            # reconocer las variantes de agencia autorizadas (p. ej. Usados).
+            if getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
+                queryset = _filtrar_expedientes_por_asignacion(
+                    request=self.request,
+                    queryset=self._base_queryset(),
+                    numero_asesor="",
+                )
+                return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
             from .actividades_views import _ROLES_EXCLUIDOS_DIGITALES, _rol_clave_usuario
             if _rol_clave_usuario(user) in _ROLES_EXCLUIDOS_DIGITALES:
                 return self._base_queryset().none()
@@ -692,6 +718,72 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 numero_asesor=numero_asesor,
             )
             serializer.instance = expediente
+
+    @action(detail=True, methods=["post"], url_path="facturacion-v3")
+    def facturacion_v3(self, request, pk=None):
+        """Captura operativa del VIN y actividad V3 en una sola transacción.
+
+        No equivale a validar un CFDI. No toca los endpoints de WhatsApp.
+        """
+        import hashlib
+        from rest_framework.exceptions import ValidationError
+        from .actividades_views import _autorizado, _usuario_en_piloto_o_general
+        from .actividades_service import registrar_actividad_v3, ErrorActividadComercial
+
+        if not (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
+                and getattr(settings, "CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO", False)):
+            return Response({"codigo": "facturacion_v3_desactivada"}, status=404)
+        if not _usuario_en_piloto_o_general(request.user):
+            raise PermissionDenied("No tienes permisos para registrar facturación comercial.")
+        datos = request.data
+        if not isinstance(datos, dict) or set(datos) != {"vin_facturado", "confirmado"}:
+            raise ValidationError({"detalle": "Envía únicamente VIN y confirmación."})
+        if datos.get("confirmado") is not True:
+            raise ValidationError({"confirmado": "Confirma la captura del VIN facturado."})
+        vin = str(datos.get("vin_facturado") or "").strip().upper()
+        if not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin):
+            raise ValidationError({"vin_facturado": "Ingresa un VIN válido de 17 caracteres."})
+
+        with transaction.atomic(using="default"):
+            # La autorización y la comparación de VIN se hacen bajo el mismo bloqueo.
+            expediente = ExpedienteDigital.objects.select_for_update().select_related("cliente").filter(pk=pk).first()
+            if expediente is None:
+                raise PermissionDenied("Expediente no disponible para esta cuenta.")
+            if not _autorizado(request.user, expediente):
+                raise PermissionDenied("No tienes acceso comercial a este expediente.")
+            if expediente.etapa_comercial_v3 is None:
+                raise ValidationError({"detalle": "Primero incorpora el expediente a CRM V3."})
+            if expediente.etapa_comercial_v3 in {"facturado", "compra_futura", "lead_perdido"}:
+                raise ValidationError({"detalle": "Etapa terminal o suspendida; no se permite facturar desde aquí."})
+            if str(expediente.estado or "").strip().casefold() == "descalificado":
+                raise ValidationError({"detalle": "El expediente está descalificado."})
+            existente = str(expediente.vin_facturado or "").strip().upper()
+            if existente and existente != vin:
+                raise ValidationError({"vin_facturado": "Ya hay otro VIN registrado; requiere rectificación autorizada."})
+
+            # El serializador conserva el comportamiento anterior del CRM:
+            # vin_facturado, facturado_at y estado histórico, sin nuevos campos.
+            serializer = self.get_serializer(expediente, data={"vin_facturado": vin}, partial=True)
+            serializer.is_valid(raise_exception=True)
+            serializer.save()
+            firma = hashlib.sha256(vin.encode("ascii")).hexdigest()[:32]
+            try:
+                resultado = registrar_actividad_v3(
+                    expediente_id=expediente.pk,
+                    evento="vin_facturado_registrado",
+                    datos={}, actor=request.user,
+                    clave_idempotencia=f"v3.vin.{expediente.pk}.{firma}",
+                )
+            except ErrorActividadComercial as exc:
+                # Una excepción dentro de atomic revierte también el VIN y estado.
+                raise ValidationError({"codigo": exc.codigo, "detalle": str(exc)}) from exc
+
+        return Response({
+            "vin_facturado": vin,
+            "etapa_comercial_v3": resultado.etapa_resultante,
+            "actividad_id": resultado.actividad_id,
+            "duplicado": resultado.duplicado,
+        }, status=200)
 
     def perform_update(self, serializer):
         # Pilotaje V3 independiente de la lógica histórica del serializador.
@@ -1199,7 +1291,36 @@ def _filtrar_expedientes_por_asignacion(
         )
         filtro_sin_asignacion &= Q(_mensajes_para_propiedad=False)
 
-    return queryset.filter(filtro_propietario | filtro_sin_asignacion)
+    # CRM V3: nombres comerciales largos que no coinciden con el nombre
+    # abreviado del perfil. Solo alias explicito, linea individual verificada,
+    # agencia autorizada y expediente sin cuenta CRM asignada.
+    filtro_alias_v3 = Q(pk__in=[])
+    if getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
+        from .actividades_views import _identidad_asesor_legacy_v3
+        identidad = _identidad_asesor_legacy_v3(user)
+        if identidad is not None:
+            nombre_alias, linea_alias, agencias_alias = identidad
+            if not numero_asesor or normaliza_tel_mx(numero_asesor) == linea_alias:
+                agencias_del_alias = Q()
+                for nombre_agencia in nombres_agencia:
+                    if _agencia_clave(nombre_agencia) in agencias_alias:
+                        agencias_del_alias |= Q(agencia__iexact=nombre_agencia)
+                if agencias_del_alias.children:
+                    queryset = queryset.annotate(
+                        _v3_alias_otra_linea=Exists(
+                            MensajeWhatsApp.objects.filter(
+                                cliente_id=OuterRef("cliente_id")
+                            ).exclude(numero_asesor=linea_alias)
+                        )
+                    )
+                    filtro_alias_v3 = (
+                        (Q(usuario_crm_asignado__isnull=True) | Q(usuario_crm_asignado=""))
+                        & Q(asesor_digital__iexact=nombre_alias)
+                        & agencias_del_alias
+                        & Q(_v3_alias_otra_linea=False)
+                    )
+
+    return queryset.filter(filtro_propietario | filtro_sin_asignacion | filtro_alias_v3)
 
 
 def _validar_acceso_expediente(

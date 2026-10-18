@@ -155,7 +155,7 @@ def disponible_para_clasificacion(expediente):
     if _agencia_clave(expediente.estado) == "facturado" or expediente.vin_facturado:
         return False
     try:
-        corte = date.fromisoformat(str(getattr(settings, "CRM_ETAPAS_V3_CORTE_HISTORICOS", "2026-10-16")))
+        corte = date.fromisoformat(str(getattr(settings, "CRM_ETAPAS_V3_CORTE_HISTORICOS", "2026-10-20")))
     except ValueError:
         return False
     return expediente.creado is not None and expediente.creado.date() < corte
