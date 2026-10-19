@@ -1315,17 +1315,27 @@ def _filtrar_expedientes_por_asignacion(
                         agencias_del_alias |= Q(agencia__iexact=nombre_agencia)
                 if agencias_del_alias.children:
                     queryset = queryset.annotate(
-                        _v3_alias_otra_linea=Exists(
+                        _v3_alias_tiene_mensajes=Exists(
                             MensajeWhatsApp.objects.filter(
                                 cliente_id=OuterRef("cliente_id")
-                            ).exclude(numero_asesor=linea_alias)
-                        )
+                            )
+                        ),
+                        _v3_alias_mensajes_propios=Exists(
+                            MensajeWhatsApp.objects.filter(
+                                cliente_id=OuterRef("cliente_id"),
+                                numero_asesor=linea_alias,
+                            )
+                        ),
                     )
+
                     filtro_alias_v3 = (
                         (Q(usuario_crm_asignado__isnull=True) | Q(usuario_crm_asignado=""))
                         & Q(asesor_digital__iexact=nombre_alias)
                         & agencias_del_alias
-                        & Q(_v3_alias_otra_linea=False)
+                        & (
+                            Q(_v3_alias_tiene_mensajes=False)
+                            | Q(_v3_alias_mensajes_propios=True)
+                        )
                     )
 
     return queryset.filter(filtro_propietario | filtro_sin_asignacion | filtro_alias_v3)
