@@ -322,11 +322,20 @@ def _autorizado_alias_legacy_v3(usuario, expediente, agencia):
     nombre, linea, agencias = identidad
     if agencia not in agencias or _agencia_clave(expediente.asesor_digital) != _agencia_clave(nombre):
         return False
-    # No inferir propiedad con una linea si el cliente tambien tiene mensajes
-    # en otra. Los casos manuales sin mensajes son posibles bajo alias explicito.
-    return not MensajeWhatsApp.objects.filter(
+    # El expediente debe pertenecer al alias autorizado y a su agencia.
+    # Si el cliente tiene mensajes de WhatsApp, exigir evidencia positiva
+    # de la linea individual de esta asesora, aunque existan otras lineas.
+    mensajes_cliente = MensajeWhatsApp.objects.filter(
         cliente_id=expediente.cliente_id
-    ).exclude(numero_asesor=linea).exists()
+    )
+
+    if not mensajes_cliente.exists():
+        # Compatibilidad con expedientes manuales sin WhatsApp.
+        return True
+
+    return mensajes_cliente.filter(
+        numero_asesor=linea
+    ).exists()
 
 def _resolver_propietario_historico_v3(expediente, agencia):
     """Devuelve el usuario CRM único de un expediente histórico, o "".
