@@ -150,13 +150,26 @@ def _agencia_clave(valor):
 
 
 def _agencias_usuario(usuario):
+    # Los administradores con permiso ALL tienen acceso a todas las
+    # agencias habilitadas, independientemente de la agencia de su perfil.
+    if (
+        _rol_clave_usuario(usuario) in {"admin", "administrador"}
+        and "ALL" in _permisos_efectivos_v3(usuario)
+    ):
+        return {
+            _agencia_clave(agencia)
+            for agencia in (
+                getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ()
+            )
+            if str(agencia).strip()
+        }
+
     agencias = {
         _agencia_clave(a)
         for a in str(usuario.agencia or "").split("|")
         if a.strip()
     }
 
-    # Acceso explícito a la división de seminuevos/usados.
     equivalencias = {
         "vw cordoba": {"vw cordoba usados"},
         "vw orizaba": {"vw orizaba usados"},
