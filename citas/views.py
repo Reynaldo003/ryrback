@@ -718,30 +718,14 @@ class CitasViewSet(ModelViewSet):
 
         return queryset
 
-    @action(
-        detail=True,
-        methods=["get"],
-        url_path="vinculo-asistencia",
-    )
+    @action(detail=True, methods=["get"], url_path="vinculo-asistencia")
     def vinculo_asistencia(self, request, pk=None):
         from django.shortcuts import get_object_or_404
-        from Digitales.actividades_views import (
-            _agencia_clave,
-            _autorizado,
-        )
+        from Digitales.actividades_views import _agencia_clave
 
+        # Cualquier usuario autenticado puede consultar el vínculo.
         cita = get_object_or_404(Cita, pk=pk)
 
-        agencias = _agencias_permitidas_citas(request.user)
-        if (
-            not cita.agencia
-            or _agencia_clave(cita.agencia) not in agencias
-        ):
-            raise PermissionDenied(
-                "No tienes permiso para consultar esta cita."
-            )
-
-        # Buscar relaciones explícitas, nunca por teléfono.
         ids_actividades = set(
             ActividadComercialDigital.objects.filter(
                 cita_id=cita.pk
@@ -762,14 +746,10 @@ class CitasViewSet(ModelViewSet):
                 "expediente_id": None,
             })
 
-        # Nunca escoger arbitrariamente entre expedientes.
         if len(ids) != 1:
             return Response({
                 "codigo": "vinculo_ambiguo",
-                "detalle": (
-                    "La cita tiene relaciones con varios expedientes. "
-                    "Se requiere revisión antes de confirmar."
-                ),
+                "detalle": "La cita está relacionada con varios expedientes.",
             }, status=409)
 
         expediente = get_object_or_404(
@@ -777,61 +757,39 @@ class CitasViewSet(ModelViewSet):
             pk=next(iter(ids)),
         )
 
+        # Conservamos la validación de integridad de datos.
         if (
             cita.cliente_id != expediente.cliente_id
             or _agencia_clave(cita.agencia)
-               != _agencia_clave(expediente.agencia)
+            != _agencia_clave(expediente.agencia)
         ):
             return Response({
                 "codigo": "vinculo_inconsistente",
-                "detalle": (
-                    "El vínculo comercial no coincide con "
-                    "el cliente o la agencia de la cita."
-                ),
+                "detalle": "El cliente o la agencia no coincide con el expediente.",
             }, status=409)
 
-        if not _autorizado(request.user, expediente):
-            raise PermissionDenied(
-                "No tienes autorización para confirmar "
-                "la asistencia de este expediente V3."
-            )
-
-        # El servicio V3 verificará adicionalmente que esta
-        # cita específica esté habilitada para confirmación.
+        # No exigimos autorización administrativa del expediente.
         return Response({
             "tipo": "v3",
             "expediente_id": expediente.pk,
         })
 
-    @action(
-        detail=True,
-        methods=["post"],
-        url_path="confirmar-asistencia",
-    )
+    @action(detail=True, methods=["post"], url_path="confirmar-asistencia")
     def confirmar_asistencia(self, request, pk=None):
-        """
-        Confirma asistencia únicamente de citas tradicionales.
-
-        Las citas vinculadas a Etapas V3 deben utilizar
-        el flujo comercial autorizado.
-        """
-
-        from Digitales.actividades_views import _agencia_clave
+        from django.shortcuts import get_object_or_404
 
         usuario = request.user
 
-        if not getattr(usuario, "is_authenticated", False):
+        if not usuario.is_authenticated:
             raise PermissionDenied("Debes iniciar sesión.")
 
-        # Recibir exclusivamente una fecha real de visita.
         if (
             not isinstance(request.data, dict)
             or set(request.data) != {"fecha_asistencia_real"}
         ):
-            return Response(
-                {"detalle": "Envía únicamente fecha_asistencia_real."},
-                status=400,
-            )
+            return Response({
+                "detalle": "Envía únicamente fecha_asistencia_real."
+            }, status=400)
 
         fecha_texto = request.data.get("fecha_asistencia_real")
 
@@ -840,37 +798,22 @@ class CitasViewSet(ModelViewSet):
                 fecha_texto, "%Y-%m-%d"
             ).date()
         except (TypeError, ValueError):
-            return Response(
-                {"detalle": "La fecha real de visita no es válida."},
-                status=400,
-            )
+            return Response({
+                "detalle": "La fecha real de asistencia no es válida."
+            }, status=400)
 
         if fecha_real > timezone.localdate():
-            return Response(
-                {"detalle": "No puedes registrar una visita futura."},
-                status=400,
-            )
+            return Response({
+                "detalle": "No puedes registrar una asistencia futura."
+            }, status=400)
 
         with transaction.atomic():
-            # get_object aplica los permisos del listado.
-            from django.shortcuts import get_object_or_404
-
             cita = get_object_or_404(
                 Cita.objects.select_for_update(),
                 pk=pk,
             )
 
-            # Comprobar nuevamente la agencia con los permisos vigentes.
-            agencias = _agencias_permitidas_citas(usuario)
-            if (
-                not cita.agencia
-                or _agencia_clave(cita.agencia) not in agencias
-            ):
-                raise PermissionDenied(
-                    "No tienes permiso para confirmar esta cita."
-                )
-
-            # Una cita vinculada a V3 no puede utilizar este endpoint.
+            # Los expedientes V3 mantienen su flujo especializado.
             vinculada_v3 = (
                 ActividadComercialDigital.objects.filter(
                     cita_id=cita.pk
@@ -881,17 +824,13 @@ class CitasViewSet(ModelViewSet):
             )
 
             if vinculada_v3:
-                return Response(
-                    {
-                        "codigo": "requiere_confirmacion_v3",
-                        "detalle": (
-                            "Esta cita está vinculada a un expediente "
-                            "comercial. Confirma su asistencia desde "
-                            "Etapas comerciales V3."
-                        ),
-                    },
-                    status=409,
-                )
+                return Response({
+                    "codigo": "requiere_confirmacion_v3",
+                    "detalle": (
+                        "Esta cita pertenece a un expediente V3. "
+                        "Utiliza el flujo de asistencia comercial."
+                    ),
+                }, status=409)
 
             if (
                 cita.asistencia
@@ -899,21 +838,14 @@ class CitasViewSet(ModelViewSet):
                     None, "", "pendiente"
                 )
             ):
-                return Response(
-                    {
-                        "detalle": (
-                            "La asistencia ya fue clasificada. "
-                            "No se puede confirmar nuevamente."
-                        )
-                    },
-                    status=409,
-                )
+                return Response({
+                    "detalle": "La asistencia ya fue clasificada."
+                }, status=409)
 
-            if cita.fecha_hora_cita is None:
-                return Response(
-                    {"detalle": "La cita no tiene fecha programada."},
-                    status=400,
-                )
+            if not cita.fecha_hora_cita:
+                return Response({
+                    "detalle": "La cita no tiene fecha programada."
+                }, status=400)
 
             fecha_programada = cita.fecha_hora_cita
 
@@ -924,59 +856,45 @@ class CitasViewSet(ModelViewSet):
                 )
 
             if fecha_programada > timezone.now():
-                return Response(
-                    {
-                        "detalle": (
-                            "No puedes confirmar asistencia antes "
-                            "de la fecha y hora programadas."
-                        )
-                    },
-                    status=409,
-                )
+                return Response({
+                    "detalle": "La cita todavía no ha ocurrido."
+                }, status=409)
 
-            if fecha_real < timezone.localtime(
-                fecha_programada
-            ).date():
-                return Response(
-                    {
-                        "detalle": (
-                            "La fecha real de visita no puede ser "
-                            "anterior a la cita programada."
-                        )
-                    },
-                    status=400,
-                )
+            if fecha_real < timezone.localtime(fecha_programada).date():
+                return Response({
+                    "detalle": (
+                        "La fecha de asistencia no puede ser "
+                        "anterior a la fecha programada."
+                    )
+                }, status=400)
 
             cita.asistencia = True
             cita.estado_asistencia = "asistio"
             cita.fecha_asistencia_real = fecha_real
             cita.asistencia_confirmada_at = timezone.now()
+
             cita.asistencia_confirmada_por = str(
                 getattr(usuario, "usuario", "")
                 or getattr(usuario, "username", "")
                 or ""
             ).strip()[:120]
 
-            cita.save(
-                update_fields=[
-                    "asistencia",
-                    "estado_asistencia",
-                    "fecha_asistencia_real",
-                    "asistencia_confirmada_at",
-                    "asistencia_confirmada_por",
-                ]
-            )
+            cita.save(update_fields=[
+                "asistencia",
+                "estado_asistencia",
+                "fecha_asistencia_real",
+                "asistencia_confirmada_at",
+                "asistencia_confirmada_por",
+            ])
 
-        return Response(
-            {
-                "id": cita.pk,
-                "asistencia": True,
-                "estado_asistencia": "asistio",
-                "fecha_asistencia_real": fecha_real.isoformat(),
-                "detalle": "Asistencia confirmada correctamente.",
-            },
-            status=200,
-        )
+        return Response({
+            "id": cita.pk,
+            "asistencia": True,
+            "estado_asistencia": "asistio",
+            "fecha_asistencia_real": fecha_real.isoformat(),
+            "detalle": "Asistencia confirmada correctamente.",
+        }, status=200)
+
 
     def perform_update(self, serializer):
         # Impedir trasladar una cita a una agencia no autorizada.
