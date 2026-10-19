@@ -587,6 +587,10 @@ class ClienteComercialViewSet(ModelViewSet):
         data.sort(key=lambda r: (r["fecha_hora"] is None, r["fecha_hora"], r["id"]))
         return Response(data)
 
+def _agencias_permitidas_citas(usuario):
+    from Digitales.actividades_views import _agencias_usuario
+
+    return _agencias_usuario(usuario)
 
 class CitasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
@@ -611,15 +615,30 @@ class CitasViewSet(ModelViewSet):
             usuario = self.request.user
             if not getattr(usuario, "is_authenticated", False):
                 return queryset.none()
-            agencias = [
-                parte.strip() for parte in str(getattr(usuario, "agencia", "") or "").split("|")
-                if parte.strip()
-            ]
+            agencias = _agencias_permitidas_citas(usuario)
+
             if not agencias:
                 return queryset.none()
+
+            from Digitales.actividades_views import _agencia_clave
+
+            nombres = [
+                "VW Cordoba",
+                "VW Cordoba Usados",
+                "VW Córdoba Usados",
+                "VW Orizaba",
+                "VW Orizaba Usados",
+                "VW Poza Rica",
+                "VW Tuxpan",
+                "VW Tuxtepec",
+                "Automotriz R&R",
+            ]
+
             filtro_agencias = Q()
-            for nombre_agencia in agencias:
-                filtro_agencias |= Q(agencia__iexact=nombre_agencia)
+            for nombre in nombres:
+                if _agencia_clave(nombre) in agencias:
+                    filtro_agencias |= Q(agencia__iexact=nombre)
+
             queryset = queryset.filter(filtro_agencias)
 
         params = self.request.query_params
@@ -698,16 +717,20 @@ class CitasViewSet(ModelViewSet):
         return queryset
 
     def perform_update(self, serializer):
-        # Una cita visible tampoco puede trasladarse a otra agencia por PATCH/PUT.
+        # Impedir trasladar una cita a una agencia no autorizada.
         if "agencia" in serializer.validated_data:
-            nueva_agencia = str(serializer.validated_data["agencia"] or "").strip().casefold()
-            permitidas = {
-                parte.strip().casefold()
-                for parte in str(getattr(self.request.user, "agencia", "") or "").split("|")
-                if parte.strip()
-            }
+            from Digitales.actividades_views import _agencia_clave
+
+            permitidas = _agencias_permitidas_citas(self.request.user)
+            nueva_agencia = _agencia_clave(
+                serializer.validated_data["agencia"]
+            )
+
             if nueva_agencia not in permitidas:
-                raise PermissionDenied("No puedes trasladar la cita a una agencia no autorizada.")
+                raise PermissionDenied(
+                    "No puedes trasladar la cita a una agencia no autorizada."
+                )
+
         serializer.save()
 
     def get_permissions(self):
@@ -715,25 +738,41 @@ class CitasViewSet(ModelViewSet):
 
     def perform_create(self, serializer):
         usuario = getattr(self.request, "user", None)
+
         if getattr(usuario, "is_authenticated", False):
-            permitidas = {
-                parte.strip().casefold()
-                for parte in str(getattr(usuario, "agencia", "") or "").split("|")
-                if parte.strip()
-            }
-            nueva_agencia = str(serializer.validated_data.get("agencia") or "").strip().casefold()
-            if not permitidas or (nueva_agencia and nueva_agencia not in permitidas):
-                raise PermissionDenied("No puedes registrar citas en una agencia no autorizada.")
+            from Digitales.actividades_views import _agencia_clave
+
+            permitidas = _agencias_permitidas_citas(usuario)
+            nueva_agencia = _agencia_clave(
+                serializer.validated_data.get("agencia") or ""
+            )
+
+            if not permitidas or (
+                nueva_agencia and nueva_agencia not in permitidas
+            ):
+                raise PermissionDenied(
+                    "No puedes registrar citas en una agencia no autorizada."
+                )
+
             campo_reg = Cita._meta.get_field("registrada_por_crm")
             es_bool = campo_reg.get_internal_type() == "BooleanField"
+
             valor_crm = True if es_bool else str(
-                getattr(usuario, "usuario", "") or getattr(usuario, "username", "") or "crm"
+                getattr(usuario, "usuario", "")
+                or getattr(usuario, "username", "")
+                or "crm"
             ).strip()[:120]
+
             serializer.save(registrada_por_crm=valor_crm)
+
         else:
+            # Conservar la creación pública para formularios existentes.
             campo_reg = Cita._meta.get_field("registrada_por_crm")
             es_bool = campo_reg.get_internal_type() == "BooleanField"
-            serializer.save(registrada_por_crm=False if es_bool else "")
+
+            serializer.save(
+                registrada_por_crm=False if es_bool else ""
+            )
 
 class RegistroPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
