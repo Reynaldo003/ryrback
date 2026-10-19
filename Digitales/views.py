@@ -1279,7 +1279,10 @@ def _filtrar_expedientes_por_asignacion(
         and _agencias_usuario(cuenta).intersection(permitidas)
     ]
     if coincidentes != [user.pk]:
-        return queryset.filter(filtro_propietario)
+        from .actividades_views import _identidad_asesor_legacy_v3
+
+        if _identidad_asesor_legacy_v3(user) is None:
+            return queryset.filter(filtro_propietario)
 
     filtro_sin_asignacion = (
         (Q(usuario_crm_asignado__isnull=True) | Q(usuario_crm_asignado=""))
