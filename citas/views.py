@@ -57,6 +57,8 @@ from .serializers import (
     EntregasSerializer,
     EntregasListSerializer,
 )
+from django.db import transaction
+from Digitales.models import ActividadComercialDigital, ExpedienteDigital
 
 NEGRO = colors.black
 BLANCO = colors.white
@@ -715,6 +717,266 @@ class CitasViewSet(ModelViewSet):
             queryset = queryset.filter(fecha_hora_cita__date__lte=fecha_hasta)
 
         return queryset
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path="vinculo-asistencia",
+    )
+    def vinculo_asistencia(self, request, pk=None):
+        from django.shortcuts import get_object_or_404
+        from Digitales.actividades_views import (
+            _agencia_clave,
+            _autorizado,
+        )
+
+        cita = get_object_or_404(Cita, pk=pk)
+
+        agencias = _agencias_permitidas_citas(request.user)
+        if (
+            not cita.agencia
+            or _agencia_clave(cita.agencia) not in agencias
+        ):
+            raise PermissionDenied(
+                "No tienes permiso para consultar esta cita."
+            )
+
+        # Buscar relaciones explícitas, nunca por teléfono.
+        ids_actividades = set(
+            ActividadComercialDigital.objects.filter(
+                cita_id=cita.pk
+            ).values_list("expediente_id", flat=True)
+        )
+
+        ids_historicos = set(
+            ExpedienteDigital.objects.filter(
+                ultima_cita_id=cita.pk
+            ).values_list("id", flat=True)
+        )
+
+        ids = ids_actividades | ids_historicos
+
+        if not ids:
+            return Response({
+                "tipo": "tradicional",
+                "expediente_id": None,
+            })
+
+        # Nunca escoger arbitrariamente entre expedientes.
+        if len(ids) != 1:
+            return Response({
+                "codigo": "vinculo_ambiguo",
+                "detalle": (
+                    "La cita tiene relaciones con varios expedientes. "
+                    "Se requiere revisión antes de confirmar."
+                ),
+            }, status=409)
+
+        expediente = get_object_or_404(
+            ExpedienteDigital,
+            pk=next(iter(ids)),
+        )
+
+        if (
+            cita.cliente_id != expediente.cliente_id
+            or _agencia_clave(cita.agencia)
+               != _agencia_clave(expediente.agencia)
+        ):
+            return Response({
+                "codigo": "vinculo_inconsistente",
+                "detalle": (
+                    "El vínculo comercial no coincide con "
+                    "el cliente o la agencia de la cita."
+                ),
+            }, status=409)
+
+        if not _autorizado(request.user, expediente):
+            raise PermissionDenied(
+                "No tienes autorización para confirmar "
+                "la asistencia de este expediente V3."
+            )
+
+        # El servicio V3 verificará adicionalmente que esta
+        # cita específica esté habilitada para confirmación.
+        return Response({
+            "tipo": "v3",
+            "expediente_id": expediente.pk,
+        })
+
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="confirmar-asistencia",
+    )
+    def confirmar_asistencia(self, request, pk=None):
+        """
+        Confirma asistencia únicamente de citas tradicionales.
+
+        Las citas vinculadas a Etapas V3 deben utilizar
+        el flujo comercial autorizado.
+        """
+
+        from Digitales.actividades_views import _agencia_clave
+
+        usuario = request.user
+
+        if not getattr(usuario, "is_authenticated", False):
+            raise PermissionDenied("Debes iniciar sesión.")
+
+        # Recibir exclusivamente una fecha real de visita.
+        if (
+            not isinstance(request.data, dict)
+            or set(request.data) != {"fecha_asistencia_real"}
+        ):
+            return Response(
+                {"detalle": "Envía únicamente fecha_asistencia_real."},
+                status=400,
+            )
+
+        fecha_texto = request.data.get("fecha_asistencia_real")
+
+        try:
+            fecha_real = datetime.strptime(
+                fecha_texto, "%Y-%m-%d"
+            ).date()
+        except (TypeError, ValueError):
+            return Response(
+                {"detalle": "La fecha real de visita no es válida."},
+                status=400,
+            )
+
+        if fecha_real > timezone.localdate():
+            return Response(
+                {"detalle": "No puedes registrar una visita futura."},
+                status=400,
+            )
+
+        with transaction.atomic():
+            # get_object aplica los permisos del listado.
+            from django.shortcuts import get_object_or_404
+
+            cita = get_object_or_404(
+                Cita.objects.select_for_update(),
+                pk=pk,
+            )
+
+            # Comprobar nuevamente la agencia con los permisos vigentes.
+            agencias = _agencias_permitidas_citas(usuario)
+            if (
+                not cita.agencia
+                or _agencia_clave(cita.agencia) not in agencias
+            ):
+                raise PermissionDenied(
+                    "No tienes permiso para confirmar esta cita."
+                )
+
+            # Una cita vinculada a V3 no puede utilizar este endpoint.
+            vinculada_v3 = (
+                ActividadComercialDigital.objects.filter(
+                    cita_id=cita.pk
+                ).exists()
+                or ExpedienteDigital.objects.filter(
+                    ultima_cita_id=cita.pk
+                ).exists()
+            )
+
+            if vinculada_v3:
+                return Response(
+                    {
+                        "codigo": "requiere_confirmacion_v3",
+                        "detalle": (
+                            "Esta cita está vinculada a un expediente "
+                            "comercial. Confirma su asistencia desde "
+                            "Etapas comerciales V3."
+                        ),
+                    },
+                    status=409,
+                )
+
+            if (
+                cita.asistencia
+                or cita.estado_asistencia not in (
+                    None, "", "pendiente"
+                )
+            ):
+                return Response(
+                    {
+                        "detalle": (
+                            "La asistencia ya fue clasificada. "
+                            "No se puede confirmar nuevamente."
+                        )
+                    },
+                    status=409,
+                )
+
+            if cita.fecha_hora_cita is None:
+                return Response(
+                    {"detalle": "La cita no tiene fecha programada."},
+                    status=400,
+                )
+
+            fecha_programada = cita.fecha_hora_cita
+
+            if timezone.is_naive(fecha_programada):
+                fecha_programada = timezone.make_aware(
+                    fecha_programada,
+                    timezone.get_current_timezone(),
+                )
+
+            if fecha_programada > timezone.now():
+                return Response(
+                    {
+                        "detalle": (
+                            "No puedes confirmar asistencia antes "
+                            "de la fecha y hora programadas."
+                        )
+                    },
+                    status=409,
+                )
+
+            if fecha_real < timezone.localtime(
+                fecha_programada
+            ).date():
+                return Response(
+                    {
+                        "detalle": (
+                            "La fecha real de visita no puede ser "
+                            "anterior a la cita programada."
+                        )
+                    },
+                    status=400,
+                )
+
+            cita.asistencia = True
+            cita.estado_asistencia = "asistio"
+            cita.fecha_asistencia_real = fecha_real
+            cita.asistencia_confirmada_at = timezone.now()
+            cita.asistencia_confirmada_por = str(
+                getattr(usuario, "usuario", "")
+                or getattr(usuario, "username", "")
+                or ""
+            ).strip()[:120]
+
+            cita.save(
+                update_fields=[
+                    "asistencia",
+                    "estado_asistencia",
+                    "fecha_asistencia_real",
+                    "asistencia_confirmada_at",
+                    "asistencia_confirmada_por",
+                ]
+            )
+
+        return Response(
+            {
+                "id": cita.pk,
+                "asistencia": True,
+                "estado_asistencia": "asistio",
+                "fecha_asistencia_real": fecha_real.isoformat(),
+                "detalle": "Asistencia confirmada correctamente.",
+            },
+            status=200,
+        )
 
     def perform_update(self, serializer):
         # Impedir trasladar una cita a una agencia no autorizada.
