@@ -645,37 +645,49 @@ class CitasViewSet(ModelViewSet):
     def get_queryset(self):
         queryset = super().get_queryset()
 
-        # Permisos siempre desde el usuario autenticado, nunca desde ?agencia=.
-        # Sin sucursal asignada se deniega el acceso (fail closed).
         if getattr(self, "action", None) != "create":
             usuario = self.request.user
+
             if not getattr(usuario, "is_authenticated", False):
                 return queryset.none()
-            agencias = _agencias_permitidas_citas(usuario)
 
-            if not agencias:
-                return queryset.none()
+            from Digitales.actividades_views import (
+                _agencia_clave,
+                _rol_clave_usuario,
+                _permisos_efectivos_v3,
+            )
 
-            from Digitales.actividades_views import _agencia_clave
+            rol = _rol_clave_usuario(usuario)
+            permisos = _permisos_efectivos_v3(usuario)
 
-            nombres = [
-                "VW Cordoba",
-                "VW Cordoba Usados",
-                "VW Córdoba Usados",
-                "VW Orizaba",
-                "VW Orizaba Usados",
-                "VW Poza Rica",
-                "VW Tuxpan",
-                "VW Tuxtepec",
-                "Automotriz R&R",
-            ]
+            es_admin = (
+                rol in {"admin", "administrador"}
+                and "ALL" in permisos
+            )
 
-            filtro_agencias = Q()
-            for nombre in nombres:
-                if _agencia_clave(nombre) in agencias:
-                    filtro_agencias |= Q(agencia__iexact=nombre)
+            if not es_admin:
+                agencias_permitidas = _agencias_permitidas_citas(usuario)
 
-            queryset = queryset.filter(filtro_agencias)
+                if not agencias_permitidas:
+                    return queryset.none()
+
+                agencias_existentes = (
+                    Cita.objects.order_by()
+                    .values_list("agencia", flat=True)
+                    .distinct()
+                )
+
+                nombres_autorizados = [
+                    nombre
+                    for nombre in agencias_existentes
+                    if nombre
+                    and _agencia_clave(nombre) in agencias_permitidas
+                ]
+
+                if not nombres_autorizados:
+                    return queryset.none()
+
+                queryset = queryset.filter(agencia__in=nombres_autorizados)
 
         params = self.request.query_params
 
@@ -687,31 +699,50 @@ class CitasViewSet(ModelViewSet):
                 try:
                     inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d")
                     if settings.USE_TZ:
-                        inicio = timezone.make_aware(inicio, timezone.get_current_timezone())
+                        inicio = timezone.make_aware(
+                            inicio, timezone.get_current_timezone()
+                        )
                     queryset = queryset.filter(creado_en__gte=inicio)
                 except ValueError:
                     pass
+
             if fecha_fin:
                 try:
-                    fin = datetime.strptime(fecha_fin, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
+                    fin = datetime.strptime(
+                        fecha_fin, "%Y-%m-%d"
+                    ).replace(hour=23, minute=59, second=59)
+
                     if settings.USE_TZ:
-                        fin = timezone.make_aware(fin, timezone.get_current_timezone())
+                        fin = timezone.make_aware(
+                            fin, timezone.get_current_timezone()
+                        )
+
                     queryset = queryset.filter(creado_en__lte=fin)
                 except ValueError:
                     pass
         else:
-            queryset = _filtrar_por_mes(queryset, "creado_en", params.get("mes"))
+            queryset = _filtrar_por_mes(
+                queryset, "creado_en", params.get("mes")
+            )
 
-        # Estado real de pruebas de manejo del cliente, según el módulo de Pruebas de Manejo.
-        prueba_asistida = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=True)
-        prueba_programada = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=False)
+        prueba_asistida = PruebaManejo.objects.filter(
+            cliente=OuterRef("cliente"),
+            asistencia=True,
+        )
+        prueba_programada = PruebaManejo.objects.filter(
+            cliente=OuterRef("cliente"),
+            asistencia=False,
+        )
+
         queryset = queryset.annotate(
             tiene_prueba_asistida=Exists(prueba_asistida),
             tiene_prueba_programada=Exists(prueba_programada),
         )
 
         if _param_bool(params.get("solo_digital")):
-            queryset = queryset.exclude(asesor_digital="").exclude(asesor_digital__isnull=True)
+            queryset = queryset.exclude(
+                asesor_digital=""
+            ).exclude(asesor_digital__isnull=True)
 
         asesor_digital = str(params.get("asesor_digital") or "").strip()
         agencia = str(params.get("agencia") or "").strip()
@@ -720,17 +751,26 @@ class CitasViewSet(ModelViewSet):
         tipo_cita = str(params.get("tipo_cita") or "").strip()
 
         if asesor_digital:
-            queryset = queryset.filter(asesor_digital__iexact=asesor_digital)
-        if agencia:
+            queryset = queryset.filter(
+                asesor_digital__iexact=asesor_digital
+            )
+
+        if agencia and agencia != "Todos":
             queryset = queryset.filter(agencia__iexact=agencia)
+
         if asesor_piso:
             queryset = queryset.filter(asesor_piso__iexact=asesor_piso)
+
         if tipo_cita and tipo_cita != "Todas":
             queryset = queryset.filter(tipo_cita__iexact=tipo_cita)
+
         if asistencia not in (None, ""):
-            queryset = queryset.filter(asistencia=_param_bool(asistencia))
+            queryset = queryset.filter(
+                asistencia=_param_bool(asistencia)
+            )
 
         search = str(params.get("search") or "").strip()
+
         if search:
             queryset = queryset.filter(
                 Q(cliente__nombre__icontains=search)
@@ -745,10 +785,16 @@ class CitasViewSet(ModelViewSet):
 
         fecha_desde = str(params.get("fecha_desde") or "").strip()
         fecha_hasta = str(params.get("fecha_hasta") or "").strip()
+
         if fecha_desde:
-            queryset = queryset.filter(fecha_hora_cita__date__gte=fecha_desde)
+            queryset = queryset.filter(
+                fecha_hora_cita__date__gte=fecha_desde
+            )
+
         if fecha_hasta:
-            queryset = queryset.filter(fecha_hora_cita__date__lte=fecha_hasta)
+            queryset = queryset.filter(
+                fecha_hora_cita__date__lte=fecha_hasta
+            )
 
         return queryset
 
