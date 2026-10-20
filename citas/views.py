@@ -951,10 +951,6 @@ class CitasViewSet(ModelViewSet):
         cita_lectura = get_object_or_404(Cita, pk=pk)
         agencias_permitidas = _agencias_permitidas_citas(usuario)
         agencia_cita = _agencia_clave(cita_lectura.agencia)
-        if not agencia_cita or agencia_cita not in agencias_permitidas:
-            raise PermissionDenied(
-                "No tienes autorización para confirmar citas de esta agencia."
-            )
 
         tipo, expediente, error_response = self._resolver_vinculo_cita_v3(cita_lectura)
         if error_response is not None:
@@ -1041,13 +1037,6 @@ class CitasViewSet(ModelViewSet):
                 Cita.objects.select_for_update(), pk=pk
             )
             agencia_actual = _agencia_clave(cita.agencia)
-            if (
-                not agencia_actual
-                or agencia_actual not in _agencias_permitidas_citas(usuario)
-            ):
-                raise PermissionDenied(
-                    "No tienes autorización para confirmar citas de esta agencia."
-                )
 
             tipo_actual, _, error_actual = self._resolver_vinculo_cita_v3(cita)
             if error_actual is not None:
