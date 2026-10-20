@@ -1,3 +1,4 @@
+#Digitales/actividades_views.py
 """API HTTP piloto de actividades CRM V3. NO habilitada por defecto.
 
 Ruta prevista: POST /digitales/api/etapas-v3/actividades/

@@ -25,7 +25,7 @@ from rest_framework.response import Response
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
 from citas.models import Cita
 from citas.serializers import CitaSerializer
-from .actividades_views import _autorizado, _usuario_en_piloto_o_general, _agencia_clave
+from .actividades_views import _agencia_clave
 from .actividades_service import ErrorActividadComercial, registrar_actividad_v3
 from .models import ActividadComercialDigital, ExpedienteDigital
 
@@ -57,13 +57,6 @@ def _error(codigo, mensaje, http_status):
 @permission_classes([IsAuthenticated])
 def agendar_cita_chat_v3_view(request):
     usuario = request.user
-    if not _usuario_en_piloto_o_general(usuario):
-        return _error(
-            "usuario_no_autorizado",
-            "No tienes permiso para gestionar etapas comerciales.",
-            403,
-        )
-
     permitidos = {
         "expediente_id",
         "clave_idempotencia",
@@ -144,14 +137,6 @@ def agendar_cita_chat_v3_view(request):
                     "Expediente no disponible.",
                     404,
                 )
-
-            if not _autorizado(usuario, expediente):
-                return _error(
-                    "sin_permiso_expediente",
-                    "No tienes acceso a este expediente.",
-                    403,
-                )
-
             if (
                 _agencia_clave(sucursal) != _agencia_clave(expediente.agencia)
                 or not _agencia_clave(sucursal)
