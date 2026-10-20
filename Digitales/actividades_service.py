@@ -1,22 +1,3 @@
-"""Persistencia transaccional CRM V3 (escrituras autenticadas del piloto).
-
-Ubicacion: Digitales/actividades_service.py
-Requiere migraciones locales citas.0014, Digitales.0034 y Digitales.0035.
-
-GARANTIAS:
-* No modifica ExpedienteDigital.estado ni reinterpreta expedientes V3=NULL.
-* El responsable se toma de un actor autenticado del backend, NO del payload.
-* Bloquea el expediente con select_for_update y usa una transaccion atomica.
-* Guarda actividad, cambio V3 y bitacora en la misma transaccion.
-* La clave de idempotencia evita duplicados por reintentos.
-* No ofrece aun endpoints publicos ni habilita facturacion/correcciones sin fuente
-  y permisos de servidor verificables.
-
-NO LLAMAR desde vistas con AllowAny. Antes de conectar a React hace falta un
-endpoint autenticado con permisos por agencia y procedencia verificable de
-los eventos. La autorizacion comercial especifica aun no esta resuelta aqui.
-"""
-
 from __future__ import annotations
 
 import hashlib
@@ -26,7 +7,7 @@ import unicodedata
 from dataclasses import dataclass
 from types import SimpleNamespace
 from datetime import date, datetime
-from typing import Any, Mapping
+from typing import Any, Mapping, Callable
 from zoneinfo import ZoneInfo
 
 from django.conf import settings
@@ -526,8 +507,14 @@ def _guardar_bitacora(
 
 
 def registrar_actividad_v3(
-    *, expediente_id: int, evento: str, datos: Mapping[str, Any] | None,
-    actor: Any, clave_idempotencia: str, cita_id: int | None = None,
+    *,
+    expediente_id: int,
+    evento: str,
+    datos: Mapping[str, Any] | None,
+    actor: Any,
+    clave_idempotencia: str,
+    cita_id: int | None = None,
+    validar_autorizacion_cita: Callable[[ExpedienteDigital, Cita, Any], None] | None = None,
 ) -> ResultadoRegistro:
     """Guarda una actividad comercial y, si procede, su avance V3, atómicamente.
 
@@ -569,6 +556,25 @@ def registrar_actividad_v3(
                                         "Primero incorpora el prospecto a las etapas comerciales.")
         if not expediente.agencia.strip():
             raise ErrorActividadComercial("agencia_sin_asignar", "Se requiere una agencia en el expediente.")
+        # Autorización adicional exclusiva del endpoint de Citas.
+        # Ejecutar antes de la idempotencia y con ambas filas bloqueadas.
+        if validar_autorizacion_cita is not None:
+            if evento != "asistencia_confirmada" or cita_id is None:
+                raise ErrorActividadComercial(
+                    "autorizacion_cita_invalida",
+                    "Esta autorización solo permite confirmar una asistencia."
+                )
+
+            cita_autorizada = _obtener_cita_bloqueada(
+                expediente,
+                cita_id,
+            )
+
+            validar_autorizacion_cita(
+                expediente,
+                cita_autorizada,
+                actor,
+            )
 
         existente = ActividadComercialDigital.objects.filter(clave_idempotencia=clave_idempotencia).first()
         if existente:
