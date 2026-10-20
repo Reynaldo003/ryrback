@@ -1,3 +1,4 @@
+#Digitales/etapas_crm_v3.py
 """Catálogo de etapas comerciales V3 (propuesta, aún NO conectado al CRM).
 
 Distingue tres orígenes de transición:

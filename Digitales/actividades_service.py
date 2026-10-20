@@ -1,3 +1,4 @@
+#Digitales/actividades_service.py
 from __future__ import annotations
 
 import hashlib
@@ -22,15 +23,11 @@ from .models import (
     ExpedienteDigital,
     MensajeWhatsApp,
 )
-
-
 class ErrorActividadComercial(ValueError):
     """Rechazo sin escritura parcial. `codigo` es apto para la futura API."""
-
     def __init__(self, codigo: str, mensaje: str):
         self.codigo = codigo
         super().__init__(mensaje)
-
 
 @dataclass(frozen=True)
 class ResultadoRegistro:
@@ -40,7 +37,6 @@ class ResultadoRegistro:
     cambio_etapa: bool
     duplicado: bool
     codigo: str
-
 
 # Eventos cuyos datos podemos validar contra el modelo o una confirmacion
 # realizada por un usuario autenticado. El resto queda DESHABILITADO.
@@ -506,6 +502,7 @@ def _guardar_bitacora(
     )
 
 
+
 def registrar_actividad_v3(
     *,
     expediente_id: int,
@@ -516,53 +513,99 @@ def registrar_actividad_v3(
     cita_id: int | None = None,
     validar_autorizacion_cita: Callable[[ExpedienteDigital, Cita, Any], None] | None = None,
 ) -> ResultadoRegistro:
-    """Guarda una actividad comercial y, si procede, su avance V3, atómicamente.
+    """Registra una actividad comercial V3 de forma transaccional.
 
-    `actor` DEBE ser el usuario autenticado obtenido por el backend.
-    `clave_idempotencia` DEBE ser estable entre reintentos del mismo evento.
-    No existe ruta HTTP por defecto; falta autorizacion por agencia en la vista.
+    Conserva las validaciones de autenticación, identidad,
+    idempotencia y autorización adicional de asistencia.
+
+    Permite registrar citas desde cualquier etapa V3 iniciada,
+    sin exigir una cotización previa ni retroceder etapas avanzadas.
     """
     usuario = _actor_autenticado(actor)
     evento = str(evento or "").strip()
+
     if evento not in _ORIGEN_EVENTO:
-        raise ErrorActividadComercial("evento_no_habilitado", "Este tipo de actividad todavía no está habilitado.")
+        raise ErrorActividadComercial(
+            "evento_no_habilitado",
+            "Este tipo de actividad todavía no está habilitado.",
+        )
+
     if not isinstance(clave_idempotencia, str) or not _PATRON_CLAVE.fullmatch(clave_idempotencia):
-        raise ErrorActividadComercial("idempotencia_invalida", "Usa una clave estable de 8 a 120 caracteres.")
+        raise ErrorActividadComercial(
+            "idempotencia_invalida",
+            "Usa una clave estable de 8 a 120 caracteres.",
+        )
+
     if datos is None:
         datos = {}
-    if not isinstance(datos, Mapping):
-        raise ErrorActividadComercial("datos_invalidos", "Los datos deben ser un objeto.")
-    if isinstance(expediente_id, bool) or not str(expediente_id).isdigit():
-        raise ErrorActividadComercial("expediente_invalido", "Identificador de expediente inválido.")
 
-    # La identidad del intento se verifica en los reintentos: la misma clave
-    # NO puede reutilizarse con otra cita, otro payload u otro expediente.
-    entrada = json.dumps({"evento": evento, "cita_id": cita_id, "datos": dict(datos)},
-                         sort_keys=True, ensure_ascii=False, default=str)
+    if not isinstance(datos, Mapping):
+        raise ErrorActividadComercial(
+            "datos_invalidos",
+            "Los datos deben ser un objeto.",
+        )
+
+    if isinstance(expediente_id, bool) or not str(expediente_id).isdigit():
+        raise ErrorActividadComercial(
+            "expediente_invalido",
+            "Identificador de expediente inválido.",
+        )
+
+    entrada = json.dumps(
+        {
+            "evento": evento,
+            "cita_id": cita_id,
+            "datos": dict(datos),
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+        default=str,
+    )
+
     if len(entrada) > 6000:
-        raise ErrorActividadComercial("datos_demasiado_grandes", "Los datos superan el límite de 6000 caracteres.")
-    firma_operacion = hashlib.sha256(entrada.encode("utf-8")).hexdigest()
+        raise ErrorActividadComercial(
+            "datos_demasiado_grandes",
+            "Los datos superan el límite de 6000 caracteres.",
+        )
+
+    firma_operacion = hashlib.sha256(
+        entrada.encode("utf-8")
+    ).hexdigest()
 
     with transaction.atomic(using="default"):
         expediente = (
-            ExpedienteDigital.objects.select_for_update()
+            ExpedienteDigital.objects
+            .select_for_update()
             .select_related("cliente")
-            .filter(pk=int(expediente_id)).first()
+            .filter(pk=int(expediente_id))
+            .first()
         )
+
         if expediente is None:
-            raise ErrorActividadComercial("expediente_inexistente", "No se encontró el expediente.")
+            raise ErrorActividadComercial(
+                "expediente_inexistente",
+                "No se encontró el expediente.",
+            )
+
         if expediente.etapa_comercial_v3 is None:
-            raise ErrorActividadComercial("flujo_v3_no_iniciado",
-                                        "Primero incorpora el prospecto a las etapas comerciales.")
+            raise ErrorActividadComercial(
+                "flujo_v3_no_iniciado",
+                "Primero incorpora el prospecto a las etapas comerciales.",
+            )
+
         if not expediente.agencia.strip():
-            raise ErrorActividadComercial("agencia_sin_asignar", "Se requiere una agencia en el expediente.")
-        # Autorización adicional exclusiva del endpoint de Citas.
-        # Ejecutar antes de la idempotencia y con ambas filas bloqueadas.
+            raise ErrorActividadComercial(
+                "agencia_sin_asignar",
+                "Se requiere una agencia en el expediente.",
+            )
+
+        # Conservar la validación adicional incorporada para asistencia.
+        # Se ejecuta antes de consultar idempotencia.
         if validar_autorizacion_cita is not None:
             if evento != "asistencia_confirmada" or cita_id is None:
                 raise ErrorActividadComercial(
                     "autorizacion_cita_invalida",
-                    "Esta autorización solo permite confirmar una asistencia."
+                    "Esta autorización solo permite confirmar una asistencia.",
                 )
 
             cita_autorizada = _obtener_cita_bloqueada(
@@ -576,63 +619,154 @@ def registrar_actividad_v3(
                 actor,
             )
 
-        existente = ActividadComercialDigital.objects.filter(clave_idempotencia=clave_idempotencia).first()
+        # Evitar duplicados por reintentos de la misma operación.
+        existente = ActividadComercialDigital.objects.filter(
+            clave_idempotencia=clave_idempotencia
+        ).first()
+
         if existente:
-            if (existente.expediente_id != expediente.pk
-                    or existente.usuario_crm != usuario
-                    or (existente.detalle or {}).get("evento") != evento
-                    or (existente.detalle or {}).get("firma_operacion") != firma_operacion
-                    or existente.cita_id != (int(cita_id) if str(cita_id or "").isdigit() else None)):
-                raise ErrorActividadComercial("idempotencia_en_conflicto", "La clave ya se utilizó para otra operación.")
+            cita_original = (
+                int(cita_id)
+                if str(cita_id or "").isdigit()
+                else None
+            )
+
+            if (
+                existente.expediente_id != expediente.pk
+                or existente.usuario_crm != usuario
+                or (existente.detalle or {}).get("evento") != evento
+                or (existente.detalle or {}).get("firma_operacion") != firma_operacion
+                or existente.cita_id != cita_original
+            ):
+                raise ErrorActividadComercial(
+                    "idempotencia_en_conflicto",
+                    "La clave ya se utilizó para otra operación.",
+                )
+
             return ResultadoRegistro(
-                existente.pk, existente.etapa_anterior or None,
-                existente.etapa_resultante, existente.etapa_anterior != existente.etapa_resultante,
-                True, "reintento_idempotente",
+                existente.pk,
+                existente.etapa_anterior or None,
+                existente.etapa_resultante,
+                existente.etapa_anterior != existente.etapa_resultante,
+                True,
+                "reintento_idempotente",
             )
 
+        # Preparar y validar los datos de la actividad.
         payload, tipo, origen, fecha_negocio, hora_negocio, cita = _preparar(
-            expediente=expediente, evento=evento, datos=datos, cita_id=cita_id,
+            expediente=expediente,
+            evento=evento,
+            datos=datos,
+            cita_id=cita_id,
         )
-        if evento == "contacto_externo_confirmado":
-            # Único nuevo movimiento permitido: Nuevo prospecto -> En seguimiento.
-            # No aceptar selecciones arbitrarias ni retroceder etapas ya avanzadas.
-            # Reutiliza TODA la validación de identidad/agencia/expediente del POST.
-            if expediente.etapa_comercial_v3 != "nuevo_prospecto":
-                raise ErrorActividadComercial("contacto_etapa_no_permitida",
-                    "El contacto inicial solo se registra desde Nuevo prospecto.")
-            decision = SimpleNamespace(
-                permitida=True, registrar_actividad=True,
-                etapa_anterior="nuevo_prospecto", etapa_resultante="en_seguimiento",
-                cambiar_etapa=True, codigo="contacto_externo_confirmado",
-            )
-        else:
-            decision = evaluar_transicion(expediente.etapa_comercial_v3, evento, datos=payload)
-        if not decision.permitida or not decision.registrar_actividad or not decision.etapa_resultante:
-            raise ErrorActividadComercial(decision.codigo, decision.detalle)
 
-        # El registro de cita no cambia asistencia de una cita histórica;
-        # para una cita sin clasificar se establece pendiente en la nueva capa.
+        etapa_actual = expediente.etapa_comercial_v3
+
+        # NUEVO: permitir agendar sin cotización previa.
+        if evento == "cita_registrada":
+            etapas_conservadas = {
+                "cita_asistida",
+                "documentos_enviados",
+                "autorizado_no_formalizado",
+                "compra_futura",
+                "facturado",
+                "lead_perdido",
+            }
+
+            # Si el expediente ya avanzó más allá de la cita,
+            # registrar el evento sin retroceder su etapa.
+            if etapa_actual in etapas_conservadas:
+                etapa_resultante = etapa_actual
+            else:
+                etapa_resultante = "cita_agendada"
+
+            decision = SimpleNamespace(
+                permitida=True,
+                registrar_actividad=True,
+                etapa_anterior=etapa_actual,
+                etapa_resultante=etapa_resultante,
+                cambiar_etapa=etapa_actual != etapa_resultante,
+                codigo="cita_registrada",
+                detalle="",
+            )
+
+        elif evento == "contacto_externo_confirmado":
+            if etapa_actual != "nuevo_prospecto":
+                raise ErrorActividadComercial(
+                    "contacto_etapa_no_permitida",
+                    "El contacto inicial solo se registra desde Nuevo prospecto.",
+                )
+
+            decision = SimpleNamespace(
+                permitida=True,
+                registrar_actividad=True,
+                etapa_anterior="nuevo_prospecto",
+                etapa_resultante="en_seguimiento",
+                cambiar_etapa=True,
+                codigo="contacto_externo_confirmado",
+                detalle="",
+            )
+
+        else:
+            # El resto de eventos conserva sus reglas existentes.
+            decision = evaluar_transicion(
+                etapa_actual,
+                evento,
+                datos=payload,
+            )
+
+        if (
+            not decision.permitida
+            or not decision.registrar_actividad
+            or not decision.etapa_resultante
+        ):
+            raise ErrorActividadComercial(
+                decision.codigo,
+                decision.detalle,
+            )
+
+        # Registrar una cita sin modificar su asistencia histórica.
         if cita is not None and evento == "cita_registrada":
             actualizar = []
+
             if cita.estado_asistencia is None and not cita.asistencia:
                 cita.estado_asistencia = "pendiente"
                 actualizar.append("estado_asistencia")
+
             if not cita.registrada_por_crm:
-                cita.registrada_por_crm = usuario
+                campo_reg = Cita._meta.get_field("registrada_por_crm")
+                cita.registrada_por_crm = (
+                    True
+                    if campo_reg.get_internal_type() == "BooleanField"
+                    else usuario
+                )
                 actualizar.append("registrada_por_crm")
+
             if actualizar:
                 cita.save(update_fields=actualizar)
+
+        # Conservar el proceso de confirmación de asistencia.
         elif cita is not None and evento == "asistencia_confirmada":
             cita.estado_asistencia = "asistio"
-            cita.asistencia = True  # Compatibilidad temporal con pantallas antiguas.
+            cita.asistencia = True
             cita.fecha_asistencia_real = fecha_negocio
             cita.asistencia_confirmada_por = usuario
             cita.asistencia_confirmada_at = timezone.now()
-            cita.save(update_fields=["estado_asistencia", "asistencia", "fecha_asistencia_real",
-                                     "asistencia_confirmada_por", "asistencia_confirmada_at"])
+
+            cita.save(
+                update_fields=[
+                    "estado_asistencia",
+                    "asistencia",
+                    "fecha_asistencia_real",
+                    "asistencia_confirmada_por",
+                    "asistencia_confirmada_at",
+                ]
+            )
 
         anterior = decision.etapa_anterior
         resultante = decision.etapa_resultante
+
+        # Persistir el evento comercial con su etapa real.
         actividad = ActividadComercialDigital.objects.create(
             expediente=expediente,
             cita=cita,
@@ -644,23 +778,47 @@ def registrar_actividad_v3(
             fecha_actividad=fecha_negocio,
             fecha_hora_actividad=hora_negocio,
             vehiculo=_texto(payload.get("vehiculo")),
-            folio=_texto(payload.get("referencia") or payload.get("referencia_autorizacion")
-                         or payload.get("folio_factura"), 120),
-            detalle={"evento": evento, "datos": payload, "decision": decision.codigo,
-                     "firma_operacion": firma_operacion},
+            folio=_texto(
+                payload.get("referencia")
+                or payload.get("referencia_autorizacion")
+                or payload.get("folio_factura"),
+                120,
+            ),
+            detalle={
+                "evento": evento,
+                "datos": payload,
+                "decision": decision.codigo,
+                "firma_operacion": firma_operacion,
+            },
             etapa_anterior=anterior or "",
             etapa_resultante=resultante,
             clave_idempotencia=clave_idempotencia,
         )
+
+        # Actualizar la etapa únicamente cuando corresponde.
         if decision.cambiar_etapa:
-            ExpedienteDigital.objects.filter(pk=expediente.pk).update(
+            ExpedienteDigital.objects.filter(
+                pk=expediente.pk
+            ).update(
                 etapa_comercial_v3=resultante,
                 actualizado=timezone.now(),
             )
+
+        # Registrar auditoría de la actividad.
         _guardar_bitacora(
-            expediente=expediente, usuario_crm=usuario, evento=evento,
-            actividad=actividad, anterior=anterior, resultante=resultante,
+            expediente=expediente,
+            usuario_crm=usuario,
+            evento=evento,
+            actividad=actividad,
+            anterior=anterior,
+            resultante=resultante,
         )
+
         return ResultadoRegistro(
-            actividad.pk, anterior, resultante, decision.cambiar_etapa, False, decision.codigo,
+            actividad.pk,
+            anterior,
+            resultante,
+            decision.cambiar_etapa,
+            False,
+            decision.codigo,
         )
