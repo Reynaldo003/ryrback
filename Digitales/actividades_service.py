@@ -144,24 +144,54 @@ def _identidad_cita(expediente: ExpedienteDigital, cita: Cita) -> None:
         raise ErrorActividadComercial("agencia_no_coincide", "La agencia de la cita no coincide con la del expediente.")
 
 
-def _cita_historica_vinculada(expediente: ExpedienteDigital, cita: Cita) -> bool:
-    """La etapa histórica no basta: validar la cita precisa del expediente.
 
-    Para una Cita real anterior a V3, se requiere la referencia explícita
-    `ultima_cita_id` y una homologación de cita/documentos del expediente.
-    Si no existe cita real, el flujo independiente de captura histórica ya
-    implementado en _preparar conserva sus propias validaciones.
+def _cita_historica_vinculada(
+    expediente: ExpedienteDigital,
+    cita: Cita,
+) -> bool:
     """
-    return bool(
-        expediente.etapa_comercial_v3 in {"cita_agendada", "documentos_enviados"}
-        and expediente.ultima_cita_id is not None
-        and expediente.ultima_cita_id == cita.pk
-        and ActividadComercialDigital.objects.filter(
-            expediente_id=expediente.pk,
-            etapa_resultante__in={"cita_agendada", "documentos_enviados"},
-            detalle__evento__in=["homologacion_historica_v3", "clasificacion_historica_v3"],
-        ).exists()
-    )
+    Reconoce citas históricas vinculadas expresamente al expediente,
+    aunque no exista una actividad de homologación V3.
+
+    Nunca relaciona citas únicamente por compartir cliente o agencia.
+    """
+    from .actividades_views import _agencia_clave
+
+    if not expediente.etapa_comercial_v3:
+        return False
+
+    # La cita debe ser exactamente la identificada por el expediente.
+    if expediente.ultima_cita_id != cita.pk:
+        return False
+
+    # Verificar que corresponda al mismo cliente.
+    if cita.cliente_id != expediente.cliente_id:
+        return False
+
+    # Verificar que coincida la agencia.
+    agencia_expediente = _agencia_clave(expediente.agencia)
+    agencia_cita = _agencia_clave(cita.agencia)
+
+    if not agencia_expediente or agencia_expediente != agencia_cita:
+        return False
+
+    # Rechazar vínculos ambiguos entre expedientes.
+    otro_expediente = ExpedienteDigital.objects.filter(
+        ultima_cita_id=cita.pk
+    ).exclude(pk=expediente.pk).exists()
+
+    if otro_expediente:
+        return False
+
+    # Rechazar una cita ya asociada por actividades a otro expediente.
+    otra_actividad = ActividadComercialDigital.objects.filter(
+        cita_id=cita.pk
+    ).exclude(expediente_id=expediente.pk).exists()
+
+    if otra_actividad:
+        return False
+
+    return True
 
 
 def _obtener_cita_bloqueada(expediente: ExpedienteDigital, cita_id: Any) -> Cita:
@@ -303,7 +333,7 @@ def _preparar(
             return payload, _TIPOS_EVENTO[evento], origen, fecha_actividad, None, None
         cita = _obtener_cita_bloqueada(expediente, cita_id)
         if evento == "cita_registrada":
-            if cita.estado_asistencia not in (None, "pendiente") or cita.asistencia:
+            if cita.estado_asistencia not in (None, "", "pendiente") or cita.asistencia:
                 raise ErrorActividadComercial(
                     "cita_ya_clasificada", "Esta cita ya tiene asistencia clasificada."
                 )
@@ -317,7 +347,7 @@ def _preparar(
                        "fecha_hora_cita": cita.fecha_hora_cita.isoformat(),
                        "sucursal": cita.agencia}
         else:
-            if cita.estado_asistencia not in (None, "pendiente") or cita.asistencia:
+            if cita.estado_asistencia not in (None, "", "pendiente") or cita.asistencia:
                 raise ErrorActividadComercial("asistencia_ya_registrada",
                                             "La asistencia ya fue clasificada; corregir exige un procedimiento específico.")
             # No aceptar una visita de otra cita del mismo cliente: debe estar
