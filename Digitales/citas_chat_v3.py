@@ -137,15 +137,6 @@ def agendar_cita_chat_v3_view(request):
                     "Expediente no disponible.",
                     404,
                 )
-            if (
-                _agencia_clave(sucursal) != _agencia_clave(expediente.agencia)
-                or not _agencia_clave(sucursal)
-            ):
-                return _error(
-                    "agencia_no_coincide",
-                    "La cita debe corresponder a la agencia del expediente.",
-                    409,
-                )
 
             # Recuperar reintentos anteriores sin crear citas duplicadas.
             anterior = ActividadComercialDigital.objects.filter(
