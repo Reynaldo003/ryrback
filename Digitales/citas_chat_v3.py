@@ -56,13 +56,6 @@ def _error(codigo, mensaje, http_status):
 @authentication_classes([CRMJWTAuthentication])
 @permission_classes([IsAuthenticated])
 def agendar_cita_chat_v3_view(request):
-    if not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
-        return _error(
-            "v3_desactivado",
-            "Las etapas comerciales no están habilitadas.",
-            404,
-        )
-
     usuario = request.user
     if not _usuario_en_piloto_o_general(usuario):
         return _error(
