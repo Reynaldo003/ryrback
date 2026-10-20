@@ -418,3 +418,21 @@ REST_FRAMEWORK = {
         "CrmConformidad.jwt_authentication.CRMJWTAuthentication",
     ),
 }
+
+# ==========================================
+# ETAPAS COMERCIALES V3
+# ==========================================
+
+CRM_ETAPAS_V3_API_HABILITADA = True
+
+CRM_ETAPAS_V3_AGENCIAS_HABILITADAS = (
+    "VW Cordoba",
+    "VW Cordoba Usados",
+    "VW Cordoba Usados",
+    "VW Orizaba",
+    "VW Orizaba Usados",
+    "VW Poza Rica",
+    "VW Tuxpan",
+    "VW Tuxtepec",
+    "Automotriz R&R",
+)
