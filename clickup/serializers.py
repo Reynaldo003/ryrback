@@ -53,12 +53,13 @@ class InvitacionEquipoSerializer(serializers.ModelSerializer):
     invitado_por = UsuarioMiniSerializer(read_only=True)
     aceptado_por = UsuarioMiniSerializer(read_only=True)
     usuario_invitado = UsuarioMiniSerializer(read_only=True)
+    equipo_nombre = serializers.CharField(source="equipo.nombre", read_only=True)
     esta_expirada = serializers.SerializerMethodField()
 
     class Meta:
         model = InvitacionEquipo
         fields = (
-            "id", "equipo", "correo", "usuario_invitado", "rol", "token",
+            "id", "equipo", "equipo_nombre", "correo", "usuario_invitado", "rol", "token",
             "estado", "invitado_por", "creado_en", "expira_en", "esta_expirada",
             "aceptado_en", "aceptado_por",
         )

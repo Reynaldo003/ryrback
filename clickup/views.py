@@ -27,7 +27,12 @@ from .models import (
     ReporteIncidencia,
     EvidenciaTarea,
 )
-from .permissions import EsMiembroEquipo, EsAdminOPropietarioEquipo
+from .permissions import (
+    EsMiembroEquipo,
+    EsMiembroDeEsteEquipo,
+    EsAdminOPropietarioEquipo,
+    EsAdminPropietarioOInvitadoEquipo,
+)
 from .serializers import (
     EquipoSerializer,
     MiembroEquipoSerializer,
@@ -189,7 +194,23 @@ class EquipoViewSet(viewsets.ModelViewSet):
             defaults={"rol": "OWNER", "activo": True},
         )
 
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, EsMiembroEquipo])
+    def destroy(self, request, *args, **kwargs):
+        # El borrado es en cascada (proyectos, listas, tareas): solo el dueño.
+        equipo = self.get_object()
+        if equipo.propietario_id != request.user.id_usuario:
+            return Response(
+                {"detail": "Solo el propietario del equipo puede eliminarlo."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
+        self.perform_destroy(equipo)
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+    @action(
+        detail=True,
+        methods=["get"],
+        permission_classes=[IsAuthenticated, EsMiembroDeEsteEquipo],
+    )
     def miembros(self, request, pk=None):
         qs = (
             MiembroEquipo.objects.filter(equipo_id=pk, activo=True)
@@ -202,7 +223,7 @@ class EquipoViewSet(viewsets.ModelViewSet):
         detail=True,
         methods=["patch"],
         url_path=r"miembros/(?P<miembro_id>\d+)/color",
-        permission_classes=[IsAuthenticated, EsMiembroEquipo],
+        permission_classes=[IsAuthenticated, EsMiembroDeEsteEquipo],
     )
     def asignar_color_miembro(self, request, pk=None, miembro_id=None):
         miembro = get_object_or_404(
@@ -221,11 +242,34 @@ class EquipoViewSet(viewsets.ModelViewSet):
         miembro.save(update_fields=["color"])
         return Response(MiembroEquipoSerializer(miembro).data)
 
-    @action(detail=True, methods=["get"], permission_classes=[IsAuthenticated, EsAdminOPropietarioEquipo])
+    @action(
+        detail=True,
+        methods=["get"],
+        permission_classes=[IsAuthenticated, EsAdminPropietarioOInvitadoEquipo],
+    )
     def invitaciones(self, request, pk=None):
+        # Solo pendientes: así una invitación aceptada/rechazada/expirada
+        # deja de aparecer en la interfaz al recargar.
         qs = (
-            InvitacionEquipo.objects.filter(equipo_id=pk)
+            InvitacionEquipo.objects.filter(equipo_id=pk, estado="PENDING")
             .select_related("usuario_invitado", "invitado_por", "aceptado_por")
+            .order_by("-creado_en")
+        )
+        return Response(InvitacionEquipoSerializer(qs, many=True).data)
+
+    @action(
+        detail=False,
+        methods=["get"],
+        url_path="mis-invitaciones",
+        permission_classes=[IsAuthenticated],
+    )
+    def mis_invitaciones(self, request):
+        qs = (
+            InvitacionEquipo.objects.filter(
+                usuario_invitado=request.user,
+                estado="PENDING",
+            )
+            .select_related("equipo", "usuario_invitado", "invitado_por")
             .order_by("-creado_en")
         )
         return Response(InvitacionEquipoSerializer(qs, many=True).data)
@@ -286,44 +330,96 @@ class EquipoViewSet(viewsets.ModelViewSet):
 
         return Response(InvitacionEquipoSerializer(inv).data, status=status.HTTP_201_CREATED)
 
+    def _marcar_notificacion_invitacion(self, invitacion, estado):
+        NotificacionClickup.objects.filter(
+            invitacion=invitacion,
+            estado="PENDING",
+        ).update(estado=estado, leido_en=timezone.now())
+
+    def _pertenece_a(self, invitacion, usuario):
+        if invitacion.usuario_invitado_id:
+            return invitacion.usuario_invitado_id == usuario.id_usuario
+
+        correo_invitacion = (invitacion.correo or "").strip().lower()
+        correo_usuario = (usuario.correo or "").strip().lower()
+        return bool(correo_invitacion) and correo_invitacion == correo_usuario
+
     @action(detail=False, methods=["post"], url_path="aceptar", permission_classes=[IsAuthenticated])
     @transaction.atomic
     def aceptar(self, request):
         invitacion_id = request.data.get("invitacion_id")
-        inv = InvitacionEquipo.objects.filter(id=invitacion_id).select_related("equipo", "usuario_invitado").first()
+        inv = (
+            InvitacionEquipo.objects.filter(id=invitacion_id)
+            .select_related("equipo", "usuario_invitado")
+            .first()
+        )
 
         if not inv:
             return Response({"detail": "Invitación inválida."}, status=status.HTTP_404_NOT_FOUND)
 
-        if inv.estado != "PENDING":
-            return Response({"detail": f"Invitación no disponible: {inv.estado}."}, status=status.HTTP_400_BAD_REQUEST)
+        if not self._pertenece_a(inv, request.user):
+            return Response({"detail": "Esta invitación no te pertenece."}, status=status.HTTP_403_FORBIDDEN)
 
-        if inv.esta_expirada():
+        if inv.estado in ("REJECTED", "REVOKED"):
+            return Response(
+                {"detail": f"Invitación no disponible: {inv.estado}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if inv.estado == "PENDING" and inv.esta_expirada():
             inv.estado = "EXPIRED"
             inv.save(update_fields=["estado"])
             return Response({"detail": "Invitación expirada."}, status=status.HTTP_400_BAD_REQUEST)
 
-        if inv.usuario_invitado_id and inv.usuario_invitado_id != request.user.id_usuario:
-            return Response({"detail": "Esta invitación no te pertenece."}, status=status.HTTP_403_FORBIDDEN)
-
+        # Siempre garantiza la membresía: aunque la invitación ya figure
+        # como ACCEPTED, se repara la fila faltante en lugar de fallar.
         MiembroEquipo.objects.update_or_create(
             equipo=inv.equipo,
             usuario=request.user,
-            defaults={"rol": inv.rol, "activo": True},
+            defaults={"rol": inv.rol or "MEMBER", "activo": True},
         )
 
-        inv.estado = "ACCEPTED"
-        inv.aceptado_en = timezone.now()
-        inv.aceptado_por = request.user
-        inv.save(update_fields=["estado", "aceptado_en", "aceptado_por"])
+        if inv.estado != "ACCEPTED":
+            inv.estado = "ACCEPTED"
+            inv.aceptado_en = timezone.now()
+            inv.aceptado_por = request.user
+            inv.save(update_fields=["estado", "aceptado_en", "aceptado_por"])
 
-        NotificacionClickup.objects.filter(
-            invitacion=inv,
-            usuario=request.user,
-            estado="PENDING",
-        ).update(estado="ACCEPTED", leido_en=timezone.now())
+        self._marcar_notificacion_invitacion(inv, "ACCEPTED")
 
         return Response({"ok": True, "equipo_id": inv.equipo_id})
+
+    @action(detail=False, methods=["post"], url_path="rechazar", permission_classes=[IsAuthenticated])
+    @transaction.atomic
+    def rechazar(self, request):
+        invitacion_id = request.data.get("invitacion_id")
+        inv = (
+            InvitacionEquipo.objects.filter(id=invitacion_id)
+            .select_related("equipo", "usuario_invitado")
+            .first()
+        )
+
+        if not inv:
+            return Response({"detail": "Invitación inválida."}, status=status.HTTP_404_NOT_FOUND)
+
+        if not self._pertenece_a(inv, request.user):
+            return Response({"detail": "Esta invitación no te pertenece."}, status=status.HTTP_403_FORBIDDEN)
+
+        if inv.estado == "REJECTED":
+            self._marcar_notificacion_invitacion(inv, "DISMISSED")
+            return Response({"ok": True})
+
+        if inv.estado != "PENDING":
+            return Response(
+                {"detail": f"Invitación no disponible: {inv.estado}."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        inv.estado = "REJECTED"
+        inv.save(update_fields=["estado"])
+        self._marcar_notificacion_invitacion(inv, "DISMISSED")
+
+        return Response({"ok": True})
 
 
 class ProyectoViewSet(viewsets.ModelViewSet):
