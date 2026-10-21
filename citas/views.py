@@ -1,14 +1,11 @@
 # citas/views.py
 from io import BytesIO
-import re
 from pathlib import Path
-from datetime import datetime, date
-from collections.abc import Mapping
-from zoneinfo import ZoneInfo
+from datetime import datetime
 from html import escape
 
 from django.conf import settings
-from django.db.models import Count, Exists, OuterRef, Q
+from django.db.models import Count, Exists, OuterRef
 from django.http import FileResponse
 from django.utils import timezone
 from django.utils.text import slugify
@@ -18,7 +15,6 @@ from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser
 from rest_framework.permissions import AllowAny, IsAuthenticated
-from rest_framework.exceptions import PermissionDenied
 
 from .pagination import CitasPagination
 
@@ -60,8 +56,6 @@ from .serializers import (
     EntregasSerializer,
     EntregasListSerializer,
 )
-from django.db import transaction
-from Digitales.models import ActividadComercialDigital, ExpedienteDigital
 
 NEGRO = colors.black
 BLANCO = colors.white
@@ -592,50 +586,13 @@ class ClienteComercialViewSet(ModelViewSet):
         data.sort(key=lambda r: (r["fecha_hora"] is None, r["fecha_hora"], r["id"]))
         return Response(data)
 
-def _agencias_permitidas_citas(usuario):
-    from Digitales.actividades_views import _agencias_usuario
-
-    return _agencias_usuario(usuario)
-
-def _validar_autorizacion_asistencia_v3(expediente, cita, usuario):
-    """Valida la autorización de Citas con expediente y cita bloqueados.
-
-    No concede permisos de consulta o edición sobre los expedientes digitales.
-    """
-    from Digitales.actividades_views import _agencia_clave
-
-    agencia_cita = _agencia_clave(cita.agencia)
-    agencia_expediente = _agencia_clave(expediente.agencia)
-    agencias_permitidas = _agencias_permitidas_citas(usuario)
-    agencias_v3 = {
-        _agencia_clave(nombre)
-        for nombre in (
-            getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ()
-        )
-        if str(nombre).strip()
-    }
-
-    if (
-        not getattr(usuario, "is_authenticated", False)
-        or not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
-        or not agencia_cita
-        or agencia_cita not in agencias_permitidas
-        or agencia_cita not in agencias_v3
-        or agencia_expediente != agencia_cita
-        or cita.cliente_id != expediente.cliente_id
-    ):
-        raise PermissionDenied(
-            "No tienes autorización para confirmar esta asistencia."
-        )
 
 class CitasViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     queryset = Cita.objects.select_related("cliente").all().order_by("-id")
     serializer_class = CitaSerializer
     pagination_class = CitasPagination
-    # La creación sigue siendo pública por compatibilidad con formularios existentes.
-    # Las consultas y modificaciones requieren JWT.
-    acciones_publicas = {"create"}
+    acciones_publicas = {"list", "retrieve", "create"}
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -644,51 +601,6 @@ class CitasViewSet(ModelViewSet):
 
     def get_queryset(self):
         queryset = super().get_queryset()
-
-        if getattr(self, "action", None) != "create":
-            usuario = self.request.user
-
-            if not getattr(usuario, "is_authenticated", False):
-                return queryset.none()
-
-            from Digitales.actividades_views import (
-                _agencia_clave,
-                _rol_clave_usuario,
-                _permisos_efectivos_v3,
-            )
-
-            rol = _rol_clave_usuario(usuario)
-            permisos = _permisos_efectivos_v3(usuario)
-
-            es_admin = (
-                rol in {"admin", "administrador"}
-                and "ALL" in permisos
-            )
-
-            if not es_admin:
-                agencias_permitidas = _agencias_permitidas_citas(usuario)
-
-                if not agencias_permitidas:
-                    return queryset.none()
-
-                agencias_existentes = (
-                    Cita.objects.order_by()
-                    .values_list("agencia", flat=True)
-                    .distinct()
-                )
-
-                nombres_autorizados = [
-                    nombre
-                    for nombre in agencias_existentes
-                    if nombre
-                    and _agencia_clave(nombre) in agencias_permitidas
-                ]
-
-                if not nombres_autorizados:
-                    return queryset.none()
-
-                queryset = queryset.filter(agencia__in=nombres_autorizados)
-
         params = self.request.query_params
 
         fecha_inicio = str(params.get("fecha_inicio") or "").strip()
@@ -699,79 +611,49 @@ class CitasViewSet(ModelViewSet):
                 try:
                     inicio = datetime.strptime(fecha_inicio, "%Y-%m-%d")
                     if settings.USE_TZ:
-                        inicio = timezone.make_aware(
-                            inicio, timezone.get_current_timezone()
-                        )
+                        inicio = timezone.make_aware(inicio, timezone.get_current_timezone())
                     queryset = queryset.filter(creado_en__gte=inicio)
                 except ValueError:
                     pass
-
             if fecha_fin:
                 try:
-                    fin = datetime.strptime(
-                        fecha_fin, "%Y-%m-%d"
-                    ).replace(hour=23, minute=59, second=59)
-
+                    fin = datetime.strptime(fecha_fin, "%Y-%m-%d").replace(hour=23, minute=59, second=59)
                     if settings.USE_TZ:
-                        fin = timezone.make_aware(
-                            fin, timezone.get_current_timezone()
-                        )
-
+                        fin = timezone.make_aware(fin, timezone.get_current_timezone())
                     queryset = queryset.filter(creado_en__lte=fin)
                 except ValueError:
                     pass
         else:
-            queryset = _filtrar_por_mes(
-                queryset, "creado_en", params.get("mes")
-            )
+            queryset = _filtrar_por_mes(queryset, "creado_en", params.get("mes"))
 
-        prueba_asistida = PruebaManejo.objects.filter(
-            cliente=OuterRef("cliente"),
-            asistencia=True,
-        )
-        prueba_programada = PruebaManejo.objects.filter(
-            cliente=OuterRef("cliente"),
-            asistencia=False,
-        )
-
+        # Estado real de pruebas de manejo del cliente, según el módulo de Pruebas de Manejo.
+        prueba_asistida = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=True)
+        prueba_programada = PruebaManejo.objects.filter(cliente=OuterRef("cliente"), asistencia=False)
         queryset = queryset.annotate(
             tiene_prueba_asistida=Exists(prueba_asistida),
             tiene_prueba_programada=Exists(prueba_programada),
         )
 
         if _param_bool(params.get("solo_digital")):
-            queryset = queryset.exclude(
-                asesor_digital=""
-            ).exclude(asesor_digital__isnull=True)
+            queryset = queryset.exclude(asesor_digital="").exclude(asesor_digital__isnull=True)
 
         asesor_digital = str(params.get("asesor_digital") or "").strip()
         agencia = str(params.get("agencia") or "").strip()
         asesor_piso = str(params.get("asesor_piso") or "").strip()
         asistencia = params.get("asistencia")
-        tipo_cita = str(params.get("tipo_cita") or "").strip()
 
         if asesor_digital:
-            queryset = queryset.filter(
-                asesor_digital__iexact=asesor_digital
-            )
-
-        if agencia and agencia != "Todos":
+            queryset = queryset.filter(asesor_digital__iexact=asesor_digital)
+        if agencia:
             queryset = queryset.filter(agencia__iexact=agencia)
-
         if asesor_piso:
             queryset = queryset.filter(asesor_piso__iexact=asesor_piso)
-
-        if tipo_cita and tipo_cita != "Todas":
-            queryset = queryset.filter(tipo_cita__iexact=tipo_cita)
-
         if asistencia not in (None, ""):
-            queryset = queryset.filter(
-                asistencia=_param_bool(asistencia)
-            )
+            queryset = queryset.filter(asistencia=_param_bool(asistencia))
 
         search = str(params.get("search") or "").strip()
-
         if search:
+            from django.db.models import Q
             queryset = queryset.filter(
                 Q(cliente__nombre__icontains=search)
                 | Q(cliente__telefono__icontains=search)
@@ -785,375 +667,18 @@ class CitasViewSet(ModelViewSet):
 
         fecha_desde = str(params.get("fecha_desde") or "").strip()
         fecha_hasta = str(params.get("fecha_hasta") or "").strip()
-
         if fecha_desde:
-            queryset = queryset.filter(
-                fecha_hora_cita__date__gte=fecha_desde
-            )
-
+            queryset = queryset.filter(fecha_hora_cita__date__gte=fecha_desde)
         if fecha_hasta:
-            queryset = queryset.filter(
-                fecha_hora_cita__date__lte=fecha_hasta
-            )
+            queryset = queryset.filter(fecha_hora_cita__date__lte=fecha_hasta)
 
         return queryset
 
-    def _resolver_vinculo_cita_v3(self, cita):
-        """Clasifica la cita sin degradar vínculos inconsistentes a tradicionales."""
-        from Digitales.actividades_views import _agencia_clave
-
-        ids_actividades = set(
-            ActividadComercialDigital.objects.filter(
-                cita_id=cita.pk
-            ).values_list("expediente_id", flat=True)
-        )
-
-        ids_historicos = set(
-            ExpedienteDigital.objects.filter(
-                ultima_cita_id=cita.pk
-            ).values_list("id", flat=True)
-        )
-
-        ids = ids_actividades | ids_historicos
-
-        if not ids:
-            return "tradicional", None, None
-
-        if len(ids) != 1:
-            return "error", None, Response({
-                "codigo": "vinculo_ambiguo",
-                "detalle": "La cita está relacionada con varios expedientes.",
-            }, status=409)
-
-        expediente = ExpedienteDigital.objects.filter(
-            pk=next(iter(ids))
-        ).first()
-
-        if expediente is None:
-            return "error", None, Response({
-                "codigo": "vinculo_inconsistente",
-                "detalle": "No se encontró el expediente vinculado.",
-            }, status=409)
-
-        if (
-            cita.cliente_id != expediente.cliente_id
-            or not _agencia_clave(cita.agencia)
-            or _agencia_clave(cita.agencia) != _agencia_clave(expediente.agencia)
-        ):
-            return "error", None, Response({
-                "codigo": "vinculo_inconsistente",
-                "detalle": "El cliente o la agencia no coincide con el expediente.",
-            }, status=409)
-
-        if expediente.etapa_comercial_v3 is None:
-            if ids_actividades:
-                return "error", None, Response({
-                    "codigo": "flujo_v3_inconsistente",
-                    "detalle": "La cita tiene actividades V3 sin una etapa comercial activa.",
-                }, status=409)
-
-            return "tradicional", None, None
-
-        if not str(expediente.etapa_comercial_v3).strip():
-            return "error", None, Response({
-                "codigo": "flujo_v3_inconsistente",
-                "detalle": "El expediente tiene una etapa comercial inválida.",
-            }, status=409)
-
-        return "v3", expediente, None
-
-    @action(detail=True, methods=["get"], url_path="vinculo-asistencia")
-    def vinculo_asistencia(self, request, pk=None):
-        """Respuesta de compatibilidad: no revela identificadores de expedientes."""
-        from django.shortcuts import get_object_or_404
-        from Digitales.actividades_views import _agencia_clave
-
-        cita = get_object_or_404(Cita, pk=pk)
-        agencia = _agencia_clave(cita.agencia)
-        if not agencia or agencia not in _agencias_permitidas_citas(request.user):
-            raise PermissionDenied(
-                "No tienes autorización para consultar citas de esta agencia."
-            )
-
-        tipo, _, error_response = self._resolver_vinculo_cita_v3(cita)
-        if error_response is not None:
-            return error_response
-        return Response({"tipo": tipo})
-
-    @action(detail=True, methods=["post"], url_path="confirmar-asistencia")
-    def confirmar_asistencia(self, request, pk=None):
-        """Una sola API de asistencia; no concede permisos comerciales V3."""
-        from django.db import IntegrityError
-        from django.shortcuts import get_object_or_404
-        from Digitales.actividades_views import _agencia_clave, _CONFLICTOS
-        from Digitales.actividades_service import (
-            ErrorActividadComercial,
-            _PATRON_CLAVE,
-            registrar_actividad_v3,
-        )
-
-        usuario = request.user
-        if not getattr(usuario, "is_authenticated", False):
-            raise PermissionDenied("Debes iniciar sesión.")
-
-        datos = request.data
-        permitidos = {"fecha_asistencia_real", "clave_idempotencia"}
-        if (
-            not isinstance(datos, Mapping)
-            or "fecha_asistencia_real" not in datos
-            or set(datos) - permitidos
-        ):
-            return Response({
-                "detalle": "Envía fecha_asistencia_real y, opcionalmente, clave_idempotencia."
-            }, status=400)
-
-        # FormParser/MultiPartParser pueden entregar un QueryDict con claves repetidas.
-        if hasattr(datos, "getlist") and any(
-            len(datos.getlist(campo)) != 1 for campo in datos
-        ):
-            return Response({
-                "detalle": "No se permiten campos repetidos."
-            }, status=400)
-
-        fecha_texto = datos.get("fecha_asistencia_real")
-        if (
-            not isinstance(fecha_texto, str)
-            or len(fecha_texto) != 10
-            or not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", fecha_texto)
-        ):
-            return Response({
-                "detalle": "La fecha real de asistencia debe tener formato YYYY-MM-DD."
-            }, status=400)
-        try:
-            fecha_real = date.fromisoformat(fecha_texto)
-        except ValueError:
-            return Response({
-                "detalle": "La fecha real de asistencia no es válida."
-            }, status=400)
-
-        zona_negocio = ZoneInfo(settings.TIME_ZONE)
-        if fecha_real > datetime.now(zona_negocio).date():
-            return Response({
-                "detalle": "No puedes registrar una asistencia futura."
-            }, status=400)
-
-        clave_idem = datos.get("clave_idempotencia")
-        if clave_idem is not None and (
-            not isinstance(clave_idem, str)
-            or _PATRON_CLAVE.fullmatch(clave_idem) is None
-        ):
-            return Response({
-                "codigo": "idempotencia_invalida",
-                "detalle": "La clave_idempotencia no es válida (8 a 120 caracteres)."
-            }, status=400)
-
-        # NO bloquear la cita en esta lectura: V3 requiere Expediente -> Cita.
-        cita_lectura = get_object_or_404(Cita, pk=pk)
-        agencias_permitidas = _agencias_permitidas_citas(usuario)
-        agencia_cita = _agencia_clave(cita_lectura.agencia)
-
-        tipo, expediente, error_response = self._resolver_vinculo_cita_v3(cita_lectura)
-        if error_response is not None:
-            return error_response
-
-        if tipo == "v3":
-            if not getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
-                return Response({
-                    "codigo": "v3_desactivado",
-                    "detalle": "El flujo comercial V3 de esta cita está desactivado."
-                }, status=409)
-
-            if clave_idem is None:
-                return Response({
-                    "codigo": "idempotencia_requerida",
-                    "detalle": "Se requiere clave_idempotencia para confirmar esta cita V3."
-                }, status=400)
-
-            def validar_cita_v3_bloqueada(expediente_bloqueado, cita_bloqueada, actor):
-                # El callback ocurre dentro de la transacción del servicio y antes
-                # de responder incluso si la clave es un reintento idempotente.
-                _validar_autorizacion_asistencia_v3(
-                    expediente_bloqueado, cita_bloqueada, actor
-                )
-                tipo_actual, exp_actual, inconsistencia = (
-                    self._resolver_vinculo_cita_v3(cita_bloqueada)
-                )
-                if (
-                    inconsistencia is not None
-                    or tipo_actual != "v3"
-                    or exp_actual is None
-                    or exp_actual.pk != expediente_bloqueado.pk
-                ):
-                    raise ErrorActividadComercial(
-                        "vinculo_inconsistente",
-                        "La cita ya no tiene un vínculo comercial V3 único y válido."
-                    )
-
-            try:
-                resultado = registrar_actividad_v3(
-                    expediente_id=expediente.pk,
-                    evento="asistencia_confirmada",
-                    datos={
-                        "confirmado": True,
-                        "fecha_asistencia_real": fecha_real.isoformat(),
-                    },
-                    actor=usuario,
-                    clave_idempotencia=clave_idem,
-                    cita_id=cita_lectura.pk,
-                    validar_autorizacion_cita=validar_cita_v3_bloqueada,
-                )
-            except ErrorActividadComercial as exc:
-                if exc.codigo in {"expediente_inexistente", "cita_inexistente"}:
-                    codigo_http = 404
-                elif exc.codigo in _CONFLICTOS or exc.codigo in {
-                    "vinculo_inconsistente", "cita_otro_cliente",
-                    "agencia_no_coincide", "etapa_no_permitida"
-                }:
-                    codigo_http = 409
-                else:
-                    codigo_http = 400
-                return Response({
-                    "codigo": exc.codigo, "detalle": str(exc)
-                }, status=codigo_http)
-            except IntegrityError:
-                return Response({
-                    "codigo": "conflicto_concurrencia",
-                    "detalle": "Hubo una operación simultánea. Actualiza la cita y reintenta."
-                }, status=409)
-
-            return Response({
-                "id": cita_lectura.pk,
-                "tipo": "v3",
-                "asistencia": True,
-                "estado_asistencia": "asistio",
-                "fecha_asistencia_real": fecha_real.isoformat(),
-                "duplicado": resultado.duplicado,
-                "detalle": "Asistencia confirmada correctamente.",
-            }, status=200)
-
-        # Tradicional: solo se bloquea y modifica Cita; no se escriben expedientes.
-        with transaction.atomic(using="default"):
-            cita = get_object_or_404(
-                Cita.objects.select_for_update(), pk=pk
-            )
-            agencia_actual = _agencia_clave(cita.agencia)
-
-            tipo_actual, _, error_actual = self._resolver_vinculo_cita_v3(cita)
-            if error_actual is not None:
-                return error_actual
-            if tipo_actual != "tradicional":
-                return Response({
-                    "codigo": "requiere_confirmacion_v3",
-                    "detalle": "La cita adquirió un vínculo V3. Actualiza e intenta nuevamente."
-                }, status=409)
-
-            if cita.asistencia or cita.estado_asistencia not in (None, "", "pendiente"):
-                return Response({
-                    "codigo": "asistencia_ya_registrada",
-                    "detalle": "La asistencia ya fue clasificada."
-                }, status=409)
-            if cita.fecha_hora_cita is None:
-                return Response({
-                    "codigo": "sin_fecha_cita",
-                    "detalle": "La cita no tiene fecha programada."
-                }, status=400)
-
-            programada = cita.fecha_hora_cita
-            if timezone.is_naive(programada):
-                programada = timezone.make_aware(programada, zona_negocio)
-            programada_local = timezone.localtime(programada, zona_negocio)
-            if programada_local > datetime.now(zona_negocio):
-                return Response({
-                    "codigo": "cita_aun_no_ocurre",
-                    "detalle": "La cita todavía no ha ocurrido."
-                }, status=409)
-            if fecha_real < programada_local.date():
-                return Response({
-                    "codigo": "asistencia_antes_de_cita",
-                    "detalle": "La fecha real no puede preceder a la fecha programada."
-                }, status=409)
-
-            cita.asistencia = True
-            cita.estado_asistencia = "asistio"
-            cita.fecha_asistencia_real = fecha_real
-            cita.asistencia_confirmada_at = timezone.now()
-            cita.asistencia_confirmada_por = str(
-                getattr(usuario, "usuario", "")
-                or getattr(usuario, "username", "")
-                or ""
-            ).strip()[:120]
-            cita.save(update_fields=[
-                "asistencia", "estado_asistencia", "fecha_asistencia_real",
-                "asistencia_confirmada_at", "asistencia_confirmada_por",
-            ])
-
-        return Response({
-            "id": cita.pk,
-            "tipo": "tradicional",
-            "asistencia": True,
-            "estado_asistencia": "asistio",
-            "fecha_asistencia_real": fecha_real.isoformat(),
-            "duplicado": False,
-            "detalle": "Asistencia confirmada correctamente.",
-        }, status=200)
-
-    def perform_update(self, serializer):
-        # Impedir trasladar una cita a una agencia no autorizada.
-        if "agencia" in serializer.validated_data:
-            from Digitales.actividades_views import _agencia_clave
-
-            permitidas = _agencias_permitidas_citas(self.request.user)
-            nueva_agencia = _agencia_clave(
-                serializer.validated_data["agencia"]
-            )
-
-            if nueva_agencia not in permitidas:
-                raise PermissionDenied(
-                    "No puedes trasladar la cita a una agencia no autorizada."
-                )
-
-        serializer.save()
+    def get_authenticators(self):
+        return [] if getattr(self, "action", None) in self.acciones_publicas else [CRMJWTAuthentication()]
 
     def get_permissions(self):
         return [AllowAny()] if getattr(self, "action", None) in self.acciones_publicas else [IsAuthenticated()]
-
-    def perform_create(self, serializer):
-        usuario = getattr(self.request, "user", None)
-
-        if getattr(usuario, "is_authenticated", False):
-            from Digitales.actividades_views import _agencia_clave
-
-            permitidas = _agencias_permitidas_citas(usuario)
-            nueva_agencia = _agencia_clave(
-                serializer.validated_data.get("agencia") or ""
-            )
-
-            if not permitidas or (
-                nueva_agencia and nueva_agencia not in permitidas
-            ):
-                raise PermissionDenied(
-                    "No puedes registrar citas en una agencia no autorizada."
-                )
-
-            campo_reg = Cita._meta.get_field("registrada_por_crm")
-            es_bool = campo_reg.get_internal_type() == "BooleanField"
-
-            valor_crm = True if es_bool else str(
-                getattr(usuario, "usuario", "")
-                or getattr(usuario, "username", "")
-                or "crm"
-            ).strip()[:120]
-
-            serializer.save(registrada_por_crm=valor_crm)
-
-        else:
-            # Conservar la creación pública para formularios existentes.
-            campo_reg = Cita._meta.get_field("registrada_por_crm")
-            es_bool = campo_reg.get_internal_type() == "BooleanField"
-
-            serializer.save(
-                registrada_por_crm=False if es_bool else ""
-            )
 
 class RegistroPisoViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]

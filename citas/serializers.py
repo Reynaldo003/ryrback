@@ -23,12 +23,12 @@ class ClienteComercialListSerializer(serializers.ModelSerializer):
         fields = "__all__"
 
 
-def obtener_o_crear_cliente(*, nombre, telefono, correo, permitir_actualizar=True) -> ClienteComercial:
+def obtener_o_crear_cliente(*, nombre, telefono, correo) -> ClienteComercial:
     telefono = normaliza_tel_mx(telefono)
     if not telefono:
         raise serializers.ValidationError({"telefono": "El teléfono es requerido y debe ser válido."})
 
-    cliente, creado = ClienteComercial.objects.get_or_create(
+    cliente, _ = ClienteComercial.objects.get_or_create(
         telefono=telefono,
         defaults={
             "nombre": (nombre or "").strip(),
@@ -36,31 +36,15 @@ def obtener_o_crear_cliente(*, nombre, telefono, correo, permitir_actualizar=Tru
         },
     )
 
-    if creado:
-        return cliente
-
     cambios = False
-    nombre_limpio = (nombre or "").strip() if nombre is not None else ""
-    correo_limpio = (correo or "").strip() if correo is not None else ""
 
-    # Si la petición es anónima, solo completamos campos que estuvieran vacíos en BD;
-    # nunca sobrescribimos ni borramos datos existentes de un cliente.
-    if nombre_limpio:
-        if permitir_actualizar and (cliente.nombre or "").strip() != nombre_limpio:
-            cliente.nombre = nombre_limpio
-            cambios = True
-        elif not permitir_actualizar and not (cliente.nombre or "").strip():
-            cliente.nombre = nombre_limpio
-            cambios = True
+    if nombre is not None and nombre.strip() and (cliente.nombre or "").strip() != nombre.strip():
+        cliente.nombre = nombre.strip()
+        cambios = True
 
-    # Evitar que un correo vacío ("") borre el correo existente del cliente
-    if correo_limpio:
-        if permitir_actualizar and (cliente.correo or "").strip() != correo_limpio:
-            cliente.correo = correo_limpio
-            cambios = True
-        elif not permitir_actualizar and not (cliente.correo or "").strip():
-            cliente.correo = correo_limpio
-            cambios = True
+    if correo is not None and (cliente.correo or "").strip() != (correo or "").strip():
+        cliente.correo = (correo or "").strip()
+        cambios = True
 
     if cambios:
         cliente.save(update_fields=["nombre", "correo", "actualizado_en"])
@@ -86,19 +70,9 @@ class BaseConClienteInputMixin(serializers.ModelSerializer):
         allow_null=True,
     )
 
-    def _es_peticion_autenticada(self):
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        return bool(user and getattr(user, "is_authenticated", False))
-
     def _resolver_cliente(self, validated_data):
-        es_autenticado = self._es_peticion_autenticada()
         cliente = validated_data.get("cliente")
         if cliente:
-            if not es_autenticado:
-                raise serializers.ValidationError({
-                    "cliente_id": "No se permite asociar un cliente_id directamente sin autenticación."
-                })
             return cliente
 
         nombre = validated_data.pop("nombre", "")
@@ -115,7 +89,6 @@ class BaseConClienteInputMixin(serializers.ModelSerializer):
             nombre=nombre,
             telefono=telefono,
             correo=correo,
-            permitir_actualizar=es_autenticado,
         )
 
     def create(self, validated_data):
@@ -166,55 +139,6 @@ class CitaSerializer(BaseConClienteInputMixin):
     class Meta:
         model = Cita
         fields = "__all__"
-        # CRÍTICO: create de citas es público en citas/views.py.
-        # Ningún cliente puede autoconfirmar asistencia ni suplantar usuario.
-        # Los campos se escribirán SOLO desde endpoint protegido del backend.
-        read_only_fields = (
-            "estado_asistencia", "fecha_asistencia_real",
-            "asistencia_confirmada_at", "asistencia_confirmada_por",
-            "registrada_por_crm",
-        )
-
-    def validate(self, attrs):
-        attrs = super().validate(attrs)
-
-        # La ruta de alta de citas admite usuarios anonimos: no pueden
-        # declarar asistencia al crear. Se tolera False por compatibilidad
-        # con los formularios actuales; la confirmacion real es otro flujo.
-        if self.instance is None and attrs.get("asistencia") is True:
-            raise serializers.ValidationError({
-                "asistencia": (
-                    "Una cita nueva no puede marcarse asistida desde este formulario. "
-                    "Utiliza el flujo autenticado de confirmacion de asistencia."
-                )
-            })
-
-        # Proteger la identidad de la cita: el cliente asociado no es un campo
-        # editable desde PATCH/PUT. Un cliente_id identico se acepta para
-        # conservar compatibilidad con formularios existentes.
-        if self.instance is not None and "cliente" in attrs:
-            cliente_nuevo = attrs["cliente"]
-            if cliente_nuevo is None or cliente_nuevo.pk != self.instance.cliente_id:
-                raise serializers.ValidationError({
-                    "cliente_id": (
-                        "No se permite reasignar el cliente de una cita desde este formulario. "
-                        "Requiere un procedimiento autorizado independiente."
-                    )
-                })
-
-        if (
-            self.instance is not None
-            and "asistencia" in attrs
-            and attrs["asistencia"] != self.instance.asistencia
-        ):
-            raise serializers.ValidationError({
-                "asistencia": (
-                    "La asistencia solo se modifica mediante "
-                    "el flujo autorizado de confirmación."
-                )
-            })
-
-        return attrs
 
     def get_tiene_prueba_asistida(self, obj):
         return bool(getattr(obj, "tiene_prueba_asistida", False))
@@ -222,48 +146,6 @@ class CitaSerializer(BaseConClienteInputMixin):
     def get_tiene_prueba_programada(self, obj):
         return bool(getattr(obj, "tiene_prueba_programada", False))
 
-    def _es_peticion_autenticada(self):
-        request = self.context.get("request")
-        user = getattr(request, "user", None)
-        return bool(user and getattr(user, "is_authenticated", False))
-
-    def _resolver_cliente(self, validated_data):
-        es_autenticado = self._es_peticion_autenticada()
-        cliente = validated_data.get("cliente")
-        if cliente:
-            if not es_autenticado:
-                raise serializers.ValidationError({
-                    "cliente_id": "No se permite asociar un cliente_id directamente sin autenticación."
-                })
-            return cliente
-
-        nombre = validated_data.pop("nombre", "")
-        telefono = validated_data.pop("telefono", "")
-        correo = validated_data.pop("correo", "")
-
-        telefono = (telefono or "").strip()
-        if not telefono:
-            raise serializers.ValidationError({
-                "cliente_id": "Envía cliente_id o envía al menos teléfono para crear/unir el cliente."
-            })
-
-        return obtener_o_crear_cliente(
-            nombre=nombre,
-            telefono=telefono,
-            correo=correo,
-            permitir_actualizar=es_autenticado,
-        )
-
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        if not self._es_peticion_autenticada():
-            # Contrato público mínimo: no exponer correo ni metadatos internos del cliente en alta anónima
-            data["cliente"] = {
-                "id_cliente": instance.cliente_id,
-                "nombre": getattr(instance.cliente, "nombre", "") or "",
-                "telefono": getattr(instance.cliente, "telefono", "") or "",
-            }
-        return data
 
 class ClienteComercialLightSerializer(serializers.ModelSerializer):
     class Meta:

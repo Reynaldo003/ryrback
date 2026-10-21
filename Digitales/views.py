@@ -13,7 +13,7 @@ import re
 
 from django.conf import settings
 from django.core.cache import cache
-from django.db import close_old_connections, transaction
+from django.db import close_old_connections
 from django.core.files.storage import default_storage
 from django.db.models import (
     Avg,
@@ -262,6 +262,14 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 & Q(agencia__iexact=agencia_linea)
             )
 
+            if (
+                not linea_tiene_reparto(numero_asesor)
+                and asesor_linea
+            ):
+                filtro_manual &= Q(
+                    asesor_digital__iexact=asesor_linea
+                )
+
             filtro_linea |= filtro_manual
 
         queryset = queryset.filter(filtro_linea)
@@ -312,11 +320,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         if filtros_manuales.children:
             filtro |= Q(_tiene_cualquier_mensaje=False) & filtros_manuales
 
-        return _filtrar_expedientes_por_asignacion(
-            request=self.request,
-            queryset=queryset.filter(filtro),
-            numero_asesor=numeros[0],
-        )
+        return queryset.filter(filtro)
 
     def _aplicar_filtros_listado(self, queryset):
         params = self.request.query_params
@@ -527,35 +531,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                 queryset = self._base_queryset()
                 return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
 
-        # Misma autorización que contacto_por_telefono: el chat puede abrir
-        # expedientes propios sin mensajes en la línea activa (Facebook/llamada).
-        # Para ver/editar una ficha, comprobar agencia y propiedad, no forzar
-        # que exista un MensajeWhatsApp asociado a esa línea específica.
-        # _get_numero_asesor_request siempre valida la línea del usuario JWT.
-        if accion in {"retrieve", "update", "partial_update"}:
-            # Una cuenta comercial sin linea WhatsApp puede abrir su
-            # propia ficha. La regla normal de agencia y propietario se conserva.
-            linea_solicitada = str(self.request.query_params.get("numero_asesor", "") or "").strip()
-            if not linea_solicitada and self.request.method in {"PUT", "PATCH"}:
-                datos = self.request.data
-                if hasattr(datos, "get"):
-                    linea_solicitada = str(datos.get("numero_asesor", "") or "").strip()
-            if (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
-                    and user is not None
-                    and not linea_solicitada
-                    and not _numeros_whatsapp_usuario(user)):
-                return _filtrar_expedientes_por_asignacion(
-                    request=self.request,
-                    queryset=self._base_queryset(),
-                    numero_asesor="",
-                )
-            numero = _get_numero_asesor_request(self.request)
-            return _filtrar_expedientes_por_asignacion(
-                request=self.request,
-                queryset=self._base_queryset(),
-                numero_asesor=numero,
-            )
-
         # Solo coordinadores digitales autenticados pueden reunir sus líneas;
         # los demás usuarios continúan usando la validación original por línea.
         if (
@@ -567,26 +542,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             queryset = self._queryset_coordinador_todas_las_lineas(user)
             return self._aplicar_filtros_listado(queryset)
 
-        param_linea = str(self.request.query_params.get("numero_asesor", "") or "").strip()
-        if not param_linea:
-            try:
-                param_linea = str(self.request.data.get("numero_asesor", "") or "").strip()
-            except Exception:
-                param_linea = ""
-        numeros_usr = _numeros_whatsapp_usuario(user) if user else []
-        
-        if user and not es_admin and not param_linea and not numeros_usr:
-            queryset = _filtrar_expedientes_por_asignacion(
-                request=self.request,
-                queryset=self._base_queryset(),
-                numero_asesor="",
-            )
-            return (
-                self._aplicar_filtros_listado(queryset)
-                if accion == "list"
-                else queryset
-            )
-
+        numero_asesor = _get_numero_asesor_request(self.request)
         queryset = self._queryset_por_linea(numero_asesor)
         return self._aplicar_filtros_listado(queryset) if accion == "list" else queryset
 
@@ -627,204 +583,44 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         )
 
     def perform_create(self, serializer):
-        # El POST puede reutilizar un expediente por telefono. Autorizar el
-        # acceso ANTES de tocar nombre, correo o datos comerciales existentes.
-        with transaction.atomic(using="default"):
-            numero_asesor = _get_numero_asesor_request(self.request)
-            telefono = normaliza_tel_mx(serializer.validated_data.get("telefono", ""))
-            cliente = (ClienteComercial.objects.select_for_update()
-                       .filter(telefono=telefono).first())
-            expediente_previo = (ExpedienteDigital.objects.filter(cliente=cliente).first()
-                                 if cliente else None)
-            if (expediente_previo is not None
-                    and not self.get_queryset().filter(pk=expediente_previo.pk).exists()):
-                raise PermissionDenied(
-                    "Este prospecto ya existe en una linea o asignacion diferente."
-                )
+        expediente = serializer.save()
 
-            # debe coincidir con la sucursal configurada para la linea.
-            from .etapas_alta_v3 import _clave_agencia
-            agencia_solicitada = str(serializer.validated_data.get("agencia") or "").strip()
-            if (expediente_previo is not None and agencia_solicitada
-                    and str(expediente_previo.agencia or "").strip()
-                    and _clave_agencia(expediente_previo.agencia) != _clave_agencia(agencia_solicitada)):
-                raise PermissionDenied("No se permite trasladar un expediente existente a otra agencia desde el alta.")
-            habilitadas = {
-                _clave_agencia(agencia)
-                for agencia in (getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ())
-                if str(agencia).strip()
-            }
-            if (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
-                    and _clave_agencia(agencia_solicitada) in habilitadas):
-                agencia_linea = str((WHATSAPP_LINES.get(numero_asesor) or {}).get("agencia") or "").strip()
-                agencia_valida = _clave_agencia(agencia_linea) == _clave_agencia(agencia_solicitada)
-                if _clave_agencia(agencia_linea) == "vw cordoba" and _clave_agencia(agencia_solicitada) == "vw cordoba usados":
-                    agencia_valida = True
-                if _clave_agencia(agencia_linea) == "vw orizaba" and _clave_agencia(agencia_solicitada) == "vw orizaba usados":
-                    agencia_valida = True
-                if not agencia_linea or not agencia_valida:
-                    raise PermissionDenied("La agencia del prospecto no corresponde a la linea autorizada.")
+        numero_asesor = (
+            _get_numero_asesor_request(
+                self.request
+            )
+        )
 
-            # El alta puede reutilizar un expediente existente por teléfono.
-            # No permitir que ese camino alternativo cambie el estado histórico
-            if (expediente_previo is not None
-                    and expediente_previo.etapa_comercial_v3 is not None):
-                estado_enviado = serializer.validated_data.get("estado")
-                if ("estado" in serializer.validated_data
-                        and str(estado_enviado or "").strip()
-                            != str(expediente_previo.estado or "").strip()):
-                    raise PermissionDenied(
-                        "El estado de un expediente no se puede cambiar desde el alta."
-                    )
-                if ("motivo_descalificacion" in serializer.validated_data
-                        and str(serializer.validated_data.get("motivo_descalificacion") or "").strip()
-                            != str(expediente_previo.motivo_descalificacion or "").strip()):
-                    raise PermissionDenied(
-                        "El motivo histórico requiere una corrección comercial autorizada."
-                    )
-
-            expediente = serializer.save()
-            expediente = _asegurar_asignacion_salida_manual(
+        expediente = (
+            _asegurar_asignacion_salida_manual(
                 request=self.request,
                 expediente=expediente,
                 numero_asesor=numero_asesor,
             )
-            serializer.instance = expediente
+        )
 
-    @action(detail=True, methods=["post"], url_path="facturacion-v3")
-    def facturacion_v3(self, request, pk=None):
-        import hashlib
-        from rest_framework.exceptions import ValidationError
-        from .actividades_views import _autorizado, _usuario_en_piloto_o_general
-        from .actividades_service import registrar_actividad_v3, ErrorActividadComercial
-
-        if not (getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
-                and getattr(settings, "CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO", False)):
-            return Response({"codigo": "facturacion_v3_desactivada"}, status=404)
-        if not _usuario_en_piloto_o_general(request.user):
-            raise PermissionDenied("No tienes permisos para registrar facturación comercial.")
-        datos = request.data
-        if not isinstance(datos, dict) or set(datos) != {"vin_facturado", "confirmado"}:
-            raise ValidationError({"detalle": "Envía únicamente VIN y confirmación."})
-        if datos.get("confirmado") is not True:
-            raise ValidationError({"confirmado": "Confirma la captura del VIN facturado."})
-        vin = str(datos.get("vin_facturado") or "").strip().upper()
-        if not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin):
-            raise ValidationError({"vin_facturado": "Ingresa un VIN válido de 17 caracteres."})
-
-        with transaction.atomic(using="default"):
-            # La autorización y la comparación de VIN se hacen bajo el mismo bloqueo.
-            expediente = ExpedienteDigital.objects.select_for_update().select_related("cliente").filter(pk=pk).first()
-            if expediente is None:
-                raise PermissionDenied("Expediente no disponible para esta cuenta.")
-            if not _autorizado(request.user, expediente):
-                raise PermissionDenied("No tienes acceso comercial a este expediente.")
-            if expediente.etapa_comercial_v3 is None:
-                raise ValidationError({"detalle": "Primero incorpora el expediente."})
-            if expediente.etapa_comercial_v3 in {"facturado", "compra_futura", "lead_perdido"}:
-                raise ValidationError({"detalle": "Etapa terminal o suspendida; no se permite facturar desde aquí."})
-            if str(expediente.estado or "").strip().casefold() == "descalificado":
-                raise ValidationError({"detalle": "El expediente está descalificado."})
-            existente = str(expediente.vin_facturado or "").strip().upper()
-            if existente and existente != vin:
-                raise ValidationError({"vin_facturado": "Ya hay otro VIN registrado; requiere rectificación autorizada."})
-
-            # El serializador conserva el comportamiento anterior del CRM:
-            # vin_facturado, facturado_at y estado histórico, sin nuevos campos.
-            serializer = self.get_serializer(expediente, data={"vin_facturado": vin}, partial=True)
-            serializer.is_valid(raise_exception=True)
-            serializer.save()
-            firma = hashlib.sha256(vin.encode("ascii")).hexdigest()[:32]
-            try:
-                resultado = registrar_actividad_v3(
-                    expediente_id=expediente.pk,
-                    evento="vin_facturado_registrado",
-                    datos={}, actor=request.user,
-                    clave_idempotencia=f"v3.vin.{expediente.pk}.{firma}",
-                )
-            except ErrorActividadComercial as exc:
-                # Una excepción dentro de atomic revierte también el VIN y estado.
-                raise ValidationError({"codigo": exc.codigo, "detalle": str(exc)}) from exc
-
-        return Response({
-            "vin_facturado": vin,
-            "etapa_comercial_v3": resultado.etapa_resultante,
-            "actividad_id": resultado.actividad_id,
-            "duplicado": resultado.duplicado,
-        }, status=200)
+        serializer.instance = expediente
 
     def perform_update(self, serializer):
-        # El PATCH tradicional sigue calculando estado/facturado_at como antes;
-        from django.db import transaction
-        from rest_framework.exceptions import ValidationError
+        expediente = serializer.instance
 
-        from .actividades_views import _autorizado, _usuario_en_piloto_o_general
-
-        habilitado = (
-            getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False)
-            and getattr(settings, "CRM_ETAPAS_V3_FACTURADO_VIN_HABILITADO", False)
-            and _usuario_en_piloto_o_general(self.request.user)
-        )
-        with transaction.atomic(using="default"):
-            if habilitado:
-                serializer.instance = ExpedienteDigital.objects.select_for_update().get(
-                    pk=serializer.instance.pk
-                )
-            expediente = serializer.instance
-            antes = {
-                campo: getattr(expediente, campo, None)
-                for campo in self.CAMPOS_AUDITABLES
-            }
-            vin_anterior = str(expediente.vin_facturado or "").strip().upper()
-            vin_enviado = "vin_facturado" in serializer.validated_data
-            vin_nuevo = str(serializer.validated_data.get("vin_facturado") or "").strip().upper() if vin_enviado else vin_anterior
-
-            if habilitado and expediente.etapa_comercial_v3 is not None and vin_enviado and vin_nuevo != vin_anterior:
-                if not _autorizado(self.request.user, expediente):
-                    raise PermissionDenied(
-                        "No se cuenta con acceso para este expediente."
-                    )
-                if vin_nuevo and not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo):
-                    raise ValidationError({
-                        "vin_facturado": "Se requiere un VIN válido de 17 caracteres."
-                    })
-                if expediente.etapa_comercial_v3 == "facturado":
-                    raise ValidationError({
-                        "vin_facturado": "La etapa Facturado necesita aprobación."
-                    })
-                if vin_nuevo and expediente.etapa_comercial_v3 in {"compra_futura", "lead_perdido"}:
-                    raise ValidationError({
-                        "vin_facturado": "Reactiva el seguimiento antes de registrar un VIN facturado."
-                    })
-
-            expediente = serializer.save()
-
-            if habilitado and expediente.etapa_comercial_v3 is not None and vin_enviado and vin_nuevo != vin_anterior:
-                import hashlib
-                from .actividades_views import _autorizado
-                from .actividades_service import registrar_actividad_v3
-
-                if (re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo)
-                        and expediente.facturado_at
-                        and str(expediente.estado or "").strip().casefold() != "descalificado"
-                        and expediente.etapa_comercial_v3 not in {"facturado", "compra_futura", "lead_perdido"}
-                        and _autorizado(self.request.user, expediente)):
-                    # La clave depende de expediente y VIN: un reintento del mismo VIN
-                    # no genera otra venta. Nunca enviar esta acción desde React.
-                    firma = hashlib.sha256(vin_nuevo.encode("ascii")).hexdigest()[:32]
-                    registrar_actividad_v3(
-                        expediente_id=expediente.pk,
-                        evento="vin_facturado_registrado",
-                        datos={},
-                        actor=self.request.user,
-                        clave_idempotencia=f"v3.vin.{expediente.pk}.{firma}",
-                    )
-
-            registrar_cambios_expediente(
-                expediente=expediente,
-                antes=antes,
-                request=self.request,
+        antes = {
+            campo: getattr(
+                expediente,
+                campo,
+                None,
             )
+            for campo
+            in self.CAMPOS_AUDITABLES
+        }
+
+        expediente = serializer.save()
+
+        registrar_cambios_expediente(
+            expediente=expediente,
+            antes=antes,
+            request=self.request,
+        )
 
     def _auto_estado_por_evidencia(self, expediente):
         """Recalcula el estado automático después de cambiar evidencias.
@@ -1019,7 +815,6 @@ def _agregar_diagnostico_linea_vs_meta(resultado: dict, numero_asesor: str) -> d
 
     return resultado
 
-@transaction.atomic(using="default")
 def _get_or_create_cliente_y_expediente(
     *,
     tel: str,
@@ -1033,7 +828,7 @@ def _get_or_create_cliente_y_expediente(
     if not tel:
         return None, None
 
-    cliente, cliente_creado = (
+    cliente, _ = (
         ClienteComercial.objects
         .get_or_create(
             telefono=tel,
@@ -1110,16 +905,6 @@ def _get_or_create_cliente_y_expediente(
             numero_asesor,
         )
 
-    # La senal del cliente puede haber creado antes un expediente vacio.
-    # Evitar inicializar expedientes historicos en llamadas repetidas.
-    if expediente_creado or cliente_creado:
-        from .etapas_alta_v3 import iniciar_alta_v3_si_nuevo
-        iniciar_alta_v3_si_nuevo(
-            expediente=expediente,
-            creado=bool(expediente_creado or cliente_creado),
-            usuario_crm="sistema_webhook_whatsapp" if aplicar_reparto else "sistema_whatsapp",
-        )
-
     return cliente, expediente
 
 def _numero_linea_valido(numero: str) -> str:
@@ -1133,9 +918,51 @@ def _es_usuario_autenticado(request) -> bool:
 
 
 def _usuario_es_admin(user) -> bool:
-    # El rol por sí solo NO otorga permisos.
-    from .permisos_comerciales_v3 import es_administrador_comercial
-    return es_administrador_comercial(user)
+    """Reconoce administradores tanto por rol como por permisos del CRM."""
+    if not user or not getattr(user, "is_authenticated", False):
+        return False
+
+    if bool(getattr(user, "is_superuser", False)):
+        return True
+
+    try:
+        rol_obj = getattr(user, "rol", None)
+        rol = (
+            getattr(rol_obj, "nombre", "")
+            or getattr(rol_obj, "name", "")
+            or (rol_obj if isinstance(rol_obj, str) else "")
+            or ""
+        ).strip().lower()
+
+        if rol in ("administrador", "admin"):
+            return True
+    except Exception:
+        pass
+
+    permisos = getattr(user, "permisos", None)
+
+    try:
+        if hasattr(permisos, "all"):
+            permisos = permisos.all()
+
+        valores = set()
+        for permiso in permisos or []:
+            if isinstance(permiso, str):
+                valores.add(permiso.strip().upper())
+                continue
+
+            valores.add(
+                str(
+                    getattr(permiso, "codigo", "")
+                    or getattr(permiso, "nombre", "")
+                    or getattr(permiso, "name", "")
+                    or permiso
+                ).strip().upper()
+            )
+
+        return bool({"ALL", "USUARIOS_ADMIN"} & valores)
+    except Exception:
+        return False
 
 def _usuario_login(user) -> str:
     return str(
@@ -1161,104 +988,49 @@ def _rol_usuario(user) -> str:
 
 
 def _usuario_puede_ver_toda_linea(user) -> bool:
-    # No concede supervisión solo por un nombre de rol.
-    from .permisos_comerciales_v3 import puede_supervisar_comercial
-    return puede_supervisar_comercial(user)
+    if _usuario_es_admin(user):
+        return True
+
+    rol = _rol_usuario(user)
+
+    return (
+        "coordinador" in rol
+        and "digital" in rol
+    )
 
 
 def _filtrar_expedientes_por_asignacion(
-    *, request, queryset, numero_asesor: str,
+    *,
+    request,
+    queryset,
+    numero_asesor: str,
 ):
-    user = getattr(request, "user", None)
-
-    if not user or not getattr(user, "is_authenticated", False):
-        return queryset.none()
-
-    if _usuario_es_admin(user):
+    if not linea_tiene_reparto(
+        numero_asesor
+    ):
         return queryset
 
-    from .actividades_views import _agencia_clave
+    user = getattr(request, "user", None)
 
-    linea = _numero_linea_valido(numero_asesor)
-    lineas_usuario = _numeros_whatsapp_usuario(user)
+    if _usuario_puede_ver_toda_linea(user):
+        return queryset
 
-    # Nunca permitir consultar una línea ajena.
-    if linea and linea not in lineas_usuario:
-        return queryset.none()
+    usuario = _usuario_login(user)
 
-    # Usuarios sin línea: conservar acceso comercial por agencia,
-    # únicamente para los roles comerciales.
-    if not linea and not lineas_usuario:
-        if (
-            _rol_usuario(user) not in {"asesor digital", "asesor general"}
-            and not _usuario_puede_ver_toda_linea(user)
-        ):
-            return queryset.none()
-
-    agencias_perfil = {
-        parte.strip()
-        for parte in re.split(
-            r"[|,;]+",
-            str(getattr(user, "agencia", "") or "")
-        )
-        if parte.strip()
-    }
-
-    claves_agencia = {
-        _agencia_clave(agencia)
-        for agencia in agencias_perfil
-    }
-
-    nombres_agencia = set(agencias_perfil)
-
-    # Incluir las agencias de las líneas autorizadas.
-    for numero, configuracion in WHATSAPP_LINES.items():
-        agencia = str(
-            (configuracion or {}).get("agencia") or ""
-        ).strip()
-
-        if not agencia:
-            continue
-
-        if numero in lineas_usuario:
-            claves_agencia.add(_agencia_clave(agencia))
-            nombres_agencia.add(agencia)
-
-    # Resolver variantes de nombres sin depender de settings V3.
-    for configuracion in WHATSAPP_LINES.values():
-        agencia = str(
-            (configuracion or {}).get("agencia") or ""
-        ).strip()
-
-        if agencia and _agencia_clave(agencia) in claves_agencia:
-            nombres_agencia.add(agencia)
-
-    filtro = Q(pk__in=[])
-
-    for agencia in nombres_agencia:
-        filtro |= Q(agencia__iexact=agencia)
-
-    # Compartir expedientes cuando existen mensajes en una línea
-    # que el usuario tiene permitido administrar.
-    numeros_consulta = (
-        [linea] if linea else lineas_usuario
+    asesor = obtener_asesor_por_usuario(
+        numero_asesor,
+        usuario,
     )
 
-    if numeros_consulta:
-        mensajes_autorizados = MensajeWhatsApp.objects.filter(
-            cliente_id=OuterRef("cliente_id"),
-            numero_asesor__in=numeros_consulta,
+    if not asesor:
+        return queryset.none()
+
+    return queryset.filter(
+        usuario_crm_asignado__iexact=(
+            asesor["usuario"]
         )
+    )
 
-        queryset = queryset.annotate(
-            _tiene_mensaje_linea_autorizada=Exists(
-                mensajes_autorizados
-            )
-        )
-
-        filtro |= Q(_tiene_mensaje_linea_autorizada=True)
-
-    return queryset.filter(filtro)
 
 def _validar_acceso_expediente(
     *,
@@ -1273,16 +1045,17 @@ def _validar_acceso_expediente(
 
     user = getattr(request, "user", None)
 
-    # Validar la propiedad igual que en los listados; una línea individual
-    # tampoco concede por sí sola acceso a chats/acciones de otros asesores.
-    visible = _filtrar_expedientes_por_asignacion(
-        request=request,
-        queryset=ExpedienteDigital.objects.filter(pk=expediente.pk),
+    if _usuario_puede_ver_toda_linea(user):
+        return
+
+    if not usuario_puede_ver_expediente(
+        expediente=expediente,
         numero_asesor=numero_asesor,
-    ).exists()
-    if not visible:
+        usuario=_usuario_login(user),
+    ):
         raise PermissionDenied(
-            "No tienes acceso a este expediente en tu agencia y cartera."
+            "Este prospecto está asignado "
+            "a otro asesor digital."
         )
     
 def _asegurar_asignacion_salida_manual(
@@ -1295,24 +1068,10 @@ def _asegurar_asignacion_salida_manual(
         raise PermissionDenied(
             "No existe el expediente solicitado."
         )
-        # Un asesor diferente puede responder sin convertirse
-    # automáticamente en el propietario del prospecto.
-    if str(expediente.usuario_crm_asignado or "").strip():
-        _validar_acceso_expediente(
-            request=request,
-            expediente=expediente,
-            numero_asesor=numero_asesor,
-        )
-        return expediente
-    
+
     # Línea normal:
     # conserva el asesor único configurado en WHATSAPP_LINES.
     if not linea_tiene_reparto(numero_asesor):
-        # No actualizar primero el asesor de otro expediente para después
-        # comprobar permisos: la validación debe preceder toda asignación.
-        _validar_acceso_expediente(
-            request=request, expediente=expediente, numero_asesor=numero_asesor,
-        )
         return asegurar_asignacion_expediente(
             expediente,
             numero_asesor,
@@ -2708,6 +2467,8 @@ def chats_list(request):
     filtro_linea = Q(_tiene_mensaje_linea=True)
     if agencia_linea:
         filtro_manual = Q(_tiene_cualquier_mensaje=False) & Q(agencia__iexact=agencia_linea)
+        if not linea_tiene_reparto(numero_asesor) and asesor_linea:
+            filtro_manual &= Q(asesor_digital__iexact=asesor_linea)
         filtro_linea |= filtro_manual
     qs = qs.filter(filtro_linea)
 
@@ -2723,7 +2484,7 @@ def chats_list(request):
     # ---------------------------------------------------------
 
     conteos = None
-    cache_key = f"digitales:conteos:chats:v5:{getattr(request.user, 'pk', '')}:{numero_asesor}"
+    cache_key = f"digitales:conteos:chats:v3:{getattr(request.user, 'pk', '')}:{numero_asesor}"
     if incluir_conteos:
         if solo_conteos:
             conteos = cache.get(cache_key)
@@ -2747,15 +2508,6 @@ def chats_list(request):
                         )
                     ),
             
-                ),
-                en_seguimiento=Count(
-                    "id", filter=Q(etapa_comercial_v3="en_seguimiento"),
-                ),
-                cita_asistida=Count(
-                    "id", filter=Q(etapa_comercial_v3="cita_asistida"),
-                ),
-                autorizado_no_formalizado=Count(
-                    "id", filter=Q(etapa_comercial_v3="autorizado_no_formalizado"),
                 ),
                 seguimiento=Count(
                     "id",
@@ -2843,9 +2595,6 @@ def chats_list(request):
                 "no_leidos": total_no_leidos or 0,
                 "pendiente_cotizacion":
                     conteo_estados["pendiente_cotizacion"] or 0,
-                "etapa:en_seguimiento": conteo_estados["en_seguimiento"] or 0,
-                "etapa:cita_asistida": conteo_estados["cita_asistida"] or 0,
-                "etapa:autorizado_no_formalizado": conteo_estados["autorizado_no_formalizado"] or 0,
                 "seguimiento":
                     conteo_estados["seguimiento"] or 0,
                 "calificado":
@@ -2886,27 +2635,6 @@ def chats_list(request):
                 estado__icontains="descalificado"
             )
         )
-
-    elif filtro_chat.startswith("etapa:"):
-        etapa = filtro_chat.split("etapa:", 1)[1].strip().lower()
-        etapas_permitidas = {
-            "nuevo_prospecto",
-            "en_seguimiento",
-            "cotizacion_enviada",
-            "cita_agendada",
-            "cita_asistida",
-            "documentos_enviados",
-            "autorizado_no_formalizado",
-            "compra_futura",
-            "facturado",
-            "lead_perdido",
-        }
-        if etapa == "pendiente_clasificacion":
-            qs = qs.filter(Q(etapa_comercial_v3__isnull=True) | Q(etapa_comercial_v3=""))
-        elif etapa in etapas_permitidas:
-            qs = qs.filter(etapa_comercial_v3=etapa)
-        else:
-            qs = qs.none()
 
     elif filtro_chat.startswith("estado:"):
         clave_estado = filtro_chat.split("estado:", 1)[1].strip().lower()
@@ -3248,7 +2976,6 @@ def chats_list(request):
             "agencia": exp.agencia or "",
             "linea": exp.business or "",
             "estado": exp.estado or "",
-            "etapa_comercial_v3": exp.etapa_comercial_v3,
             "unread": int(
                 no_leidos.get(
                     telefono,
