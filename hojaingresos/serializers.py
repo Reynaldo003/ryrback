@@ -6,7 +6,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from citas.models import ClienteComercial, normaliza_tel_mx
-from .models import HojaIngresos, HojaIngresoEvidencia, TallerActividad
+from .models import HojaIngresos, HojaIngresoEvidencia, HojaIngresoAnalisisIA, TallerActividad
 
 CAMPOS_TALLER = (
     "tecnico",
@@ -97,6 +97,30 @@ class HojaIngresoEvidenciaSerializer(serializers.ModelSerializer):
 
         return request.build_absolute_uri(url) if request else url
     
+class HojaIngresoAnalisisIASerializer(serializers.ModelSerializer):
+    evidencia_id = serializers.IntegerField(read_only=True)
+    imagen_url = serializers.SerializerMethodField()
+
+    class Meta:
+        model = HojaIngresoAnalisisIA
+        fields = (
+            "id",
+            "evidencia_id",
+            "imagen_url",
+            "reporte",
+            "creado_en",
+        )
+
+    def get_imagen_url(self, obj):
+        if not obj.imagen_resultado:
+            return ""
+
+        url = obj.imagen_resultado.url
+        request = self.context.get("request")
+
+        return request.build_absolute_uri(url) if request else url
+
+
 class HojaIngresosSerializer(serializers.ModelSerializer):
     # Alias compatibles con Taller.jsx.
     cliente = serializers.CharField(required=False, allow_blank=True)
@@ -144,7 +168,7 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
     horasAgenda = serializers.SerializerMethodField()
     horasTotales = serializers.SerializerMethodField()
     isManual = serializers.SerializerMethodField()
-
+    analisis_ia = HojaIngresoAnalisisIASerializer(many=True, read_only=True)
     class Meta:
         model = HojaIngresos
         fields = (
@@ -187,6 +211,7 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             "creado_en",
             "actualizado_en",
             "evidencias",
+            "analisis_ia",
             # TallerActividad
             "tecnico",
             "etapa",

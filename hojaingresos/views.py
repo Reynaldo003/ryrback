@@ -6,13 +6,21 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.viewsets import ModelViewSet
 from CrmConformidad.jwt_authentication import CRMJWTAuthentication
-from .models import HojaIngresos, HojaIngresoEvidencia
-from .serializers import HojaIngresosSerializer, HojaIngresoEvidenciaSerializer
+from .models import HojaIngresos, HojaIngresoEvidencia, HojaIngresoAnalisisIA
+from .serializers import HojaIngresosSerializer, HojaIngresoEvidenciaSerializer, HojaIngresoAnalisisIASerializer
 import os
 from rest_framework import status
 from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
+from django.core.files.base import ContentFile
+from openai import OpenAIError
+from inspector_ai.servicios_hoja_ingresos import analizar_evidencia_vehiculo
+from inspector_ai.views import (
+    ImagenInvalidaError,
+    ConfiguracionIAError,
+    RespuestaIAInvalidaError,
+)
 
 ADMIN_PERMISSIONS = {
     "ALL",
@@ -371,3 +379,88 @@ class HojaIngresosViewSet(ModelViewSet):
         return Response(
             status=status.HTTP_204_NO_CONTENT,
         )
+    
+    @action(detail=True, methods=["post"], url_path="analizar-ia")
+    def analizar_ia(self, request, pk=None):
+        ingreso = self.get_object()
+        self._validar_agencia(ingreso.agencia)
+
+        try:
+            evidencia_id = int(request.data.get("evidencia_id", 0))
+        except (TypeError, ValueError):
+            evidencia_id = 0
+
+        evidencia = ingreso.evidencias.filter(pk=evidencia_id).first()
+
+        if not evidencia:
+            return Response(
+                {"detail": "La evidencia no pertenece a esta cita."},
+                status=404,
+            )
+
+        extension = os.path.splitext(
+            evidencia.nombre_original or evidencia.archivo.name
+        )[1].lower()
+
+        if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
+            return Response(
+                {"detail": "Solo se pueden analizar fotografías JPG, PNG o WEBP."},
+                status=400,
+            )
+
+        anterior = HojaIngresoAnalisisIA.objects.filter(
+            evidencia=evidencia
+        ).first()
+
+        if anterior:
+            serializer = HojaIngresoAnalisisIASerializer(
+                anterior,
+                context={"request": request},
+            )
+            return Response(serializer.data)
+
+        try:
+            with evidencia.archivo.open("rb") as archivo:
+                reporte, imagen_png = analizar_evidencia_vehiculo(archivo)
+
+            analisis = HojaIngresoAnalisisIA(
+                ingreso=ingreso,
+                evidencia=evidencia,
+                reporte=reporte,
+            )
+
+            analisis.imagen_resultado.save(
+                f"inspeccion_evidencia_{evidencia.pk}.png",
+                ContentFile(imagen_png),
+                save=True,
+            )
+
+            serializer = HojaIngresoAnalisisIASerializer(
+                analisis,
+                context={"request": request},
+            )
+
+            return Response(
+                serializer.data,
+                status=status.HTTP_201_CREATED,
+            )
+
+        except ImagenInvalidaError as exc:
+            return Response({"detail": str(exc)}, status=400)
+
+        except ConfiguracionIAError:
+            return Response(
+                {"detail": "OPENAI_API_KEY no está configurada."},
+                status=503,
+            )
+
+        except (OpenAIError, RespuestaIAInvalidaError,
+                ValueError, OSError, KeyError):
+            import logging
+            logging.getLogger(__name__).exception(
+                "Error analizando evidencia %s", evidencia.pk
+            )
+            return Response(
+                {"detail": "No se pudo completar el análisis IA."},
+                status=502,
+            )
