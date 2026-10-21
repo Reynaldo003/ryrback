@@ -458,33 +458,80 @@ def _autorizado_legacy_por_linea(usuario, expediente, agencia):
     )
 
 
+
 def _autorizado(usuario, expediente):
+    """
+    Autoriza actividades comerciales sin exigir titularidad.
+
+    Permite:
+    - Administradores y coordinadores en sus agencias.
+    - Asesores comerciales de la misma agencia.
+    - Asesores de otra agencia si el cliente escribió
+      a una línea WhatsApp autorizada para su cuenta.
+    """
     if not _usuario_en_piloto_o_general(usuario):
         return False
+
     rol = _rol_clave_usuario(usuario)
+
     if rol in _ROLES_EXCLUIDOS_DIGITALES:
         return False
 
-    habilitadas = {
-        _agencia_clave(a) for a in (
-            getattr(settings, "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS", ()) or ()
-        ) if str(a).strip()
-    }
-    agencia = _agencia_clave(expediente.agencia)
-    # Sin agencias habilitadas: denegar todo (fail closed).
-    if not habilitadas or not agencia or agencia not in habilitadas or agencia not in _agencias_usuario(usuario):
+    if expediente is None or not expediente.cliente_id:
         return False
 
-    es_supervisor = _es_admin_o_coordinador_digital(usuario)
-    asignado = str(expediente.usuario_crm_asignado or "").strip().casefold()
-    identificador = str(getattr(usuario, "usuario", "") or getattr(usuario, "username", "") or "").strip().casefold()
-    if es_supervisor:
+    agencia = _agencia_clave(expediente.agencia)
+
+    habilitadas = {
+        _agencia_clave(valor)
+        for valor in (
+            getattr(
+                settings,
+                "CRM_ETAPAS_V3_AGENCIAS_HABILITADAS",
+                (),
+            ) or ()
+        )
+        if str(valor).strip()
+    }
+
+    if not agencia or agencia not in habilitadas:
+        return False
+
+    # El administrador conserva acceso general a las
+    # agencias comercialmente habilitadas.
+    if _rol_clave_usuario(usuario) in {
+        "admin", "administrador"
+    } and "ALL" in _permisos_efectivos_v3(usuario):
         return True
-    if asignado:
-        return asignado == identificador
-    return (_autorizado_historico_sin_whatsapp(usuario, expediente, agencia)
-            or _autorizado_legacy_por_linea(usuario, expediente, agencia)
-            or _autorizado_alias_legacy_v3(usuario, expediente, agencia))
+
+    # Compartir los expedientes de la misma agencia.
+    if agencia in _agencias_usuario(usuario):
+        return True
+
+    # Si corresponde a otra agencia, exigir evidencia
+    # real de una conversación en una línea autorizada.
+    numeros_usuario = {
+        normaliza_tel_mx(numero)
+        for numero in re.split(
+            r"[|,;\n]+",
+            str(getattr(usuario, "telefono", "") or ""),
+        )
+        if numero.strip()
+    }
+
+    numeros_autorizados = {
+        numero
+        for numero in numeros_usuario
+        if numero in WHATSAPP_LINES
+    }
+
+    if not numeros_autorizados:
+        return False
+
+    return MensajeWhatsApp.objects.filter(
+        cliente_id=expediente.cliente_id,
+        numero_asesor__in=numeros_autorizados,
+    ).exists()
 
 
 def _error(codigo, mensaje, http_status):

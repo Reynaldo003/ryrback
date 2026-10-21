@@ -1,3 +1,4 @@
+#Digitales/asignacion_asesores.py
 from __future__ import annotations
 
 from django.conf import settings
@@ -209,6 +210,11 @@ def asegurar_asignacion_expediente(
         .select_for_update()
         .get(pk=expediente.pk)
     )
+
+    # Un expediente con responsable no debe reasignarse
+    # porque el cliente escriba a otra línea de WhatsApp.
+    if str(expediente.usuario_crm_asignado or "").strip():
+        return expediente
 
     configuracion = WHATSAPP_LINES.get(
         numero_asesor,
