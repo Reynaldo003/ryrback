@@ -52,7 +52,7 @@ WHATSAPP_WABA_ID_DEFAULT = "TU_WHATSAPP_BUSINESS_ACCOUNT_ID"
 whatsapp_url = 'https://graph.facebook.com/v26.0/836147029587691/messages'
 whatsapp_url_liz = 'https://graph.facebook.com/v26.0/1002516582953413/messages'
 whatsapp_url_eren = 'https://graph.facebook.com/v26.0/970758852797236/messages'
-whatsapp_url_bianca = 'https://graph.facebook.com/v26.0/1118159131375259/messages'
+whatsapp_url_angel = 'https://graph.facebook.com/v26.0/1118159131375259/messages'
 whatsapp_url_denisse = 'https://graph.facebook.com/v26.0/1134322799754327/messages'
 whatsapp_url_marelly = 'https://graph.facebook.com/v26.0/1113085168553604/messages'
 whatsapp_url_edgar = 'https://graph.facebook.com/v26.0/1208561865665780/messages'
@@ -64,7 +64,7 @@ whatsapp_url_servicio_oba = 'https://graph.facebook.com/v26.0/1231519683384951/m
 whatsapp_numero_default = "522712638803"
 whatsapp_numero_liz = "522721111244"
 whatsapp_numero_eren = "522713133332"
-whatsapp_numero_bianca = "522712837999"
+whatsapp_numero_angel = "522712837999"
 whatsapp_numero_denisse = "522721986539"
 whatsapp_numero_tuxtepec = "522871232641"
 whatsapp_numero_edgar = "527831263814"
@@ -118,13 +118,13 @@ WHATSAPP_LINES = {
         "template_names": ["saludo_seguimiento", "informacion_seguimiento", "confirmar_cita", "seguimiento_dos", "recontacto", "requisitos_vw", "presentacion", "seguimiento_salesforce", "ultimo_seguimiento_force"],
         **meta_ads_linea(META_ADS_CORDOBA),
     },
-    whatsapp_numero_bianca: {
-        "key": "bianca",
+    whatsapp_numero_angel: {
+        "key": "angel",
         "phone_number_id": "1118159131375259",
         "waba_id": "1674154250377394",
         "access_token": whatsapp_token,
-        "asesor_digital": "Bianca Isabel Chavez Alarcon",
-        "messages_url": whatsapp_url_bianca,
+        "asesor_digital": "Luis Angel Bonilla Quezada",
+        "messages_url": whatsapp_url_angel,
         "agencia": "VW Cordoba Usados",
         "business": "Usados",
         "responder_ia": False,
