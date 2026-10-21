@@ -541,9 +541,8 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         # que exista un MensajeWhatsApp asociado a esa línea específica.
         # _get_numero_asesor_request siempre valida la línea del usuario JWT.
         if accion in {"retrieve", "update", "partial_update"}:
-            # CRM V3: una cuenta comercial sin linea WhatsApp puede abrir su
+            # Una cuenta comercial sin linea WhatsApp puede abrir su
             # propia ficha. La regla normal de agencia y propietario se conserva.
-            # No alterar el comportamiento anterior con V3 desactivado.
             linea_solicitada = str(self.request.query_params.get("numero_asesor", "") or "").strip()
             if not linea_solicitada and self.request.method in {"PUT", "PATCH"}:
                 datos = self.request.data
@@ -588,7 +587,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         # numero_asesor específico, aplicamos aislamiento por su agencia y asignación.
         # Si solicitó una línea ajena o inválida, _get_numero_asesor_request rechaza con 403.
         if user and not es_admin and not param_linea and not numeros_usr:
-            # CRM V3: usar la misma politica de propiedad que la ficha, y
+            # Usar la misma politica de propiedad que la ficha, y
             # reconocer las variantes de agencia autorizadas (p. ej. Usados).
             if getattr(settings, "CRM_ETAPAS_V3_API_HABILITADA", False):
                 queryset = _filtrar_expedientes_por_asignacion(
@@ -673,7 +672,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                     "Este prospecto ya existe en una linea o asignacion diferente."
                 )
 
-            # Para V3 no confiar en una agencia arbitraria enviada por React:
             # debe coincidir con la sucursal configurada para la linea.
             from .etapas_alta_v3 import _clave_agencia
             agencia_solicitada = str(serializer.validated_data.get("agencia") or "").strip()
@@ -699,7 +697,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
 
             # El alta puede reutilizar un expediente existente por teléfono.
             # No permitir que ese camino alternativo cambie el estado histórico
-            # de un expediente ya incorporado a V3.
             if (expediente_previo is not None
                     and expediente_previo.etapa_comercial_v3 is not None):
                 estado_enviado = serializer.validated_data.get("estado")
@@ -707,7 +704,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
                         and str(estado_enviado or "").strip()
                             != str(expediente_previo.estado or "").strip()):
                     raise PermissionDenied(
-                        "El estado de un expediente V3 no se puede cambiar desde el alta."
+                        "El estado de un expediente no se puede cambiar desde el alta."
                     )
                 if ("motivo_descalificacion" in serializer.validated_data
                         and str(serializer.validated_data.get("motivo_descalificacion") or "").strip()
@@ -726,10 +723,6 @@ class ProspectosViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=["post"], url_path="facturacion-v3")
     def facturacion_v3(self, request, pk=None):
-        """Captura operativa del VIN y actividad V3 en una sola transacción.
-
-        No equivale a validar un CFDI. No toca los endpoints de WhatsApp.
-        """
         import hashlib
         from rest_framework.exceptions import ValidationError
         from .actividades_views import _autorizado, _usuario_en_piloto_o_general
@@ -757,7 +750,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             if not _autorizado(request.user, expediente):
                 raise PermissionDenied("No tienes acceso comercial a este expediente.")
             if expediente.etapa_comercial_v3 is None:
-                raise ValidationError({"detalle": "Primero incorpora el expediente a CRM V3."})
+                raise ValidationError({"detalle": "Primero incorpora el expediente."})
             if expediente.etapa_comercial_v3 in {"facturado", "compra_futura", "lead_perdido"}:
                 raise ValidationError({"detalle": "Etapa terminal o suspendida; no se permite facturar desde aquí."})
             if str(expediente.estado or "").strip().casefold() == "descalificado":
@@ -791,9 +784,7 @@ class ProspectosViewSet(viewsets.ModelViewSet):
         }, status=200)
 
     def perform_update(self, serializer):
-        # Pilotaje V3 independiente de la lógica histórica del serializador.
         # El PATCH tradicional sigue calculando estado/facturado_at como antes;
-        # V3 solo añade una actividad y modifica etapa_comercial_v3.
         from django.db import transaction
         from rest_framework.exceptions import ValidationError
 
@@ -821,19 +812,19 @@ class ProspectosViewSet(viewsets.ModelViewSet):
             if habilitado and expediente.etapa_comercial_v3 is not None and vin_enviado and vin_nuevo != vin_anterior:
                 if not _autorizado(self.request.user, expediente):
                     raise PermissionDenied(
-                        "No tienes permiso comercial sobre este expediente para registrar o modificar su VIN facturado."
+                        "No se cuenta con acceso para este expediente."
                     )
                 if vin_nuevo and not re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", vin_nuevo):
                     raise ValidationError({
-                        "vin_facturado": "Para V3 se requiere un VIN válido de 17 caracteres."
+                        "vin_facturado": "Se requiere un VIN válido de 17 caracteres."
                     })
                 if expediente.etapa_comercial_v3 == "facturado":
                     raise ValidationError({
-                        "vin_facturado": "La etapa Facturado V3 es terminal. Una rectificación del VIN requiere un proceso autorizado."
+                        "vin_facturado": "La etapa Facturado necesita aprobación."
                     })
                 if vin_nuevo and expediente.etapa_comercial_v3 in {"compra_futura", "lead_perdido"}:
                     raise ValidationError({
-                        "vin_facturado": "Reactiva el seguimiento V3 antes de registrar un VIN facturado."
+                        "vin_facturado": "Reactiva el seguimiento antes de registrar un VIN facturado."
                     })
 
             expediente = serializer.save()
@@ -1172,7 +1163,7 @@ def _es_usuario_autenticado(request) -> bool:
 
 
 def _usuario_es_admin(user) -> bool:
-    # Misma política efectiva de V3; el rol por sí solo NO otorga permisos.
+    # El rol por sí solo NO otorga permisos.
     from .permisos_comerciales_v3 import es_administrador_comercial
     return es_administrador_comercial(user)
 
@@ -1200,7 +1191,7 @@ def _rol_usuario(user) -> str:
 
 
 def _usuario_puede_ver_toda_linea(user) -> bool:
-    # No concede supervisión solo por un nombre de rol. Reutiliza V3.
+    # No concede supervisión solo por un nombre de rol.
     from .permisos_comerciales_v3 import puede_supervisar_comercial
     return puede_supervisar_comercial(user)
 
@@ -2797,7 +2788,7 @@ def chats_list(request):
     # ---------------------------------------------------------
 
     conteos = None
-    cache_key = f"digitales:conteos:chats:v3:{getattr(request.user, 'pk', '')}:{numero_asesor}"
+    cache_key = f"digitales:conteos:chats:v5:{getattr(request.user, 'pk', '')}:{numero_asesor}"
     if incluir_conteos:
         if solo_conteos:
             conteos = cache.get(cache_key)
@@ -2821,6 +2812,15 @@ def chats_list(request):
                         )
                     ),
             
+                ),
+                en_seguimiento=Count(
+                    "id", filter=Q(etapa_comercial_v3="en_seguimiento"),
+                ),
+                cita_asistida=Count(
+                    "id", filter=Q(etapa_comercial_v3="cita_asistida"),
+                ),
+                autorizado_no_formalizado=Count(
+                    "id", filter=Q(etapa_comercial_v3="autorizado_no_formalizado"),
                 ),
                 seguimiento=Count(
                     "id",
@@ -2908,6 +2908,9 @@ def chats_list(request):
                 "no_leidos": total_no_leidos or 0,
                 "pendiente_cotizacion":
                     conteo_estados["pendiente_cotizacion"] or 0,
+                "etapa:en_seguimiento": conteo_estados["en_seguimiento"] or 0,
+                "etapa:cita_asistida": conteo_estados["cita_asistida"] or 0,
+                "etapa:autorizado_no_formalizado": conteo_estados["autorizado_no_formalizado"] or 0,
                 "seguimiento":
                     conteo_estados["seguimiento"] or 0,
                 "calificado":
@@ -2948,6 +2951,27 @@ def chats_list(request):
                 estado__icontains="descalificado"
             )
         )
+
+    elif filtro_chat.startswith("etapa:"):
+        etapa = filtro_chat.split("etapa:", 1)[1].strip().lower()
+        etapas_permitidas = {
+            "nuevo_prospecto",
+            "en_seguimiento",
+            "cotizacion_enviada",
+            "cita_agendada",
+            "cita_asistida",
+            "documentos_enviados",
+            "autorizado_no_formalizado",
+            "compra_futura",
+            "facturado",
+            "lead_perdido",
+        }
+        if etapa == "pendiente_clasificacion":
+            qs = qs.filter(Q(etapa_comercial_v3__isnull=True) | Q(etapa_comercial_v3=""))
+        elif etapa in etapas_permitidas:
+            qs = qs.filter(etapa_comercial_v3=etapa)
+        else:
+            qs = qs.none()
 
     elif filtro_chat.startswith("estado:"):
         clave_estado = filtro_chat.split("estado:", 1)[1].strip().lower()
