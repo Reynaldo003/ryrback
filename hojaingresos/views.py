@@ -14,6 +14,8 @@ from rest_framework.decorators import action
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.response import Response
 from django.core.files.base import ContentFile
+from django.http import FileResponse
+from django.http.response import Http404
 from openai import OpenAIError
 from inspector_ai.servicios_hoja_ingresos import analizar_evidencia_vehiculo
 from inspector_ai.views import (
@@ -379,7 +381,65 @@ class HojaIngresosViewSet(ModelViewSet):
         return Response(
             status=status.HTTP_204_NO_CONTENT,
         )
-    
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"descargar-evidencia/(?P<evidencia_id>\d+)",
+    )
+    def descargar_evidencia(self, request, pk=None, evidencia_id=None):
+        ingreso = self.get_object()
+        self._validar_agencia(ingreso.agencia)
+
+        evidencia = ingreso.evidencias.filter(
+            pk=evidencia_id
+        ).first()
+
+        if evidencia is None or not evidencia.archivo:
+            raise Http404("Evidencia no encontrada.")
+
+        try:
+            archivo = evidencia.archivo.open("rb")
+        except (OSError, FileNotFoundError):
+            raise Http404("Archivo no disponible.")
+
+        nombre = os.path.basename(
+            evidencia.nombre_original or evidencia.archivo.name
+        )
+
+        return FileResponse(
+            archivo,
+            as_attachment=True,
+            filename=nombre,
+        )
+
+    @action(
+        detail=True,
+        methods=["get"],
+        url_path=r"descargar-analisis/(?P<analisis_id>\d+)",
+    )
+    def descargar_analisis(self, request, pk=None, analisis_id=None):
+        ingreso = self.get_object()
+        self._validar_agencia(ingreso.agencia)
+
+        analisis = HojaIngresoAnalisisIA.objects.filter(
+            ingreso=ingreso,
+            pk=analisis_id
+        ).first()
+
+        if analisis is None or not analisis.imagen_resultado:
+            raise Http404("Análisis no encontrado.")
+
+        try:
+            archivo = analisis.imagen_resultado.open("rb")
+        except (OSError, FileNotFoundError):
+            raise Http404("Imagen no disponible.")
+
+        return FileResponse(
+            archivo,
+            as_attachment=True,
+            filename=f"inspeccion_{analisis.id}.png",
+            content_type="image/png",
+        )
     @action(detail=True, methods=["post"], url_path="analizar-ia")
     def analizar_ia(self, request, pk=None):
         ingreso = self.get_object()
