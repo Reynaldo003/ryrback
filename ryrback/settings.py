@@ -293,11 +293,7 @@ DATABASES = {
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
         "HOST": "127.0.0.1",
-<<<<<<< HEAD
        # "HOST": "45.82.73.31",
-=======
-        #"HOST": "45.82.73.31",
->>>>>>> 14c788ad635bb6040f92ed95f1fb90811c84923e
         "PORT": "5432",
     },
     "tdsql": {
@@ -305,13 +301,8 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-<<<<<<< HEAD
-       "HOST": "127.0.0.1",
-     #  "HOST": "45.82.73.31",
-=======
         "HOST": "127.0.0.1",
-        #"HOST": "45.82.73.31",
->>>>>>> 14c788ad635bb6040f92ed95f1fb90811c84923e
+     #  "HOST": "45.82.73.31",
         "PORT": "5432",
     },
     'sqlserver': {

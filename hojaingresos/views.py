@@ -23,6 +23,7 @@ from inspector_ai.views import (
     ConfiguracionIAError,
     RespuestaIAInvalidaError,
 )
+from rest_framework.throttling import AnonRateThrottle
 
 ADMIN_PERMISSIONS = {
     "ALL",
@@ -96,6 +97,9 @@ def es_administrador_taller(user):
     return bool(obtener_permisos_usuario(user) & ADMIN_PERMISSIONS)
 
 
+class InspectorPublicoThrottle(AnonRateThrottle):
+    rate = "30/hour"
+
 class HojaIngresosViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
@@ -104,9 +108,15 @@ class HojaIngresosViewSet(ModelViewSet):
     # Taller.jsx espera un arreglo directo, no {count, results}.
     pagination_class = None
 
+    
     def get_permissions(self):
-       
-        if self.action in ("list", "retrieve", "update", "partial_update"):
+        acciones_publicas = {
+            "list",
+            "retrieve",
+            "subir_evidencias",
+            "analizar_ia",
+        }
+        if self.action in acciones_publicas:
             return [AllowAny()]
         return [IsAuthenticated()]
 
@@ -121,25 +131,28 @@ class HojaIngresosViewSet(ModelViewSet):
 
         user = self.request.user
 
+        
         if not getattr(user, "is_authenticated", False):
-            agencia_solicitada = normalizar_texto(
-                self.request.query_params.get("agencia") or ""
-            )
             agencias_publicas_norm = {
                 normalizar_texto(item) for item in AGENCIAS_PUBLICAS
             }
 
-            if agencia_solicitada not in agencias_publicas_norm:
-                return queryset.none()
-
             filtro_publico = Q()
-
             for agencia_publica in AGENCIAS_PUBLICAS:
-                if normalizar_texto(agencia_publica) == agencia_solicitada:
-                    filtro_publico |= Q(agencia__iexact=agencia_publica)
+                filtro_publico |= Q(agencia__iexact=agencia_publica)
 
-            queryset = queryset.filter(filtro_publico)
+            if self.action in ("subir_evidencias", "analizar_ia"):
+                queryset = queryset.filter(filtro_publico)
+            else:
+                agencia_solicitada = normalizar_texto(
+                    self.request.query_params.get("agencia") or ""
+                )
 
+                if agencia_solicitada not in agencias_publicas_norm:
+                    return queryset.none()
+
+                queryset = queryset.filter(filtro_publico)
+    
         elif not es_administrador_taller(user):
             agencias_usuario = obtener_agencias_usuario(user)
 
@@ -284,11 +297,13 @@ class HojaIngresosViewSet(ModelViewSet):
         self._validar_agencia(agencia)
         serializer.save()
 
+    
     @action(
         detail=True,
         methods=["post"],
         url_path="evidencias",
         parser_classes=[MultiPartParser, FormParser],
+        throttle_classes=[InspectorPublicoThrottle],
     )
     def subir_evidencias(self, request, pk=None):
         ingreso = self.get_object()
@@ -440,7 +455,12 @@ class HojaIngresosViewSet(ModelViewSet):
             filename=f"inspeccion_{analisis.id}.png",
             content_type="image/png",
         )
-    @action(detail=True, methods=["post"], url_path="analizar-ia")
+    @action(
+        detail=True,
+        methods=["post"],
+        url_path="analizar-ia",
+        throttle_classes=[InspectorPublicoThrottle],
+    )
     def analizar_ia(self, request, pk=None):
         ingreso = self.get_object()
         self._validar_agencia(ingreso.agencia)
