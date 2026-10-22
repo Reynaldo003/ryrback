@@ -17,180 +17,36 @@ class HojaIngresos(models.Model):
         blank=True,
     )
 
-    agencia = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    no_orden = models.CharField(
-        max_length=255,
-        blank=True,
-        default="",
-    )
-
-    fecha_ingreso = models.DateTimeField(
-        null=True,
-        blank=True,
-    )
-
-    # null: todavía no se registra la asistencia.
-    # true: asistió.
-    # false: no asistió.
-    asistencia = models.BooleanField(
-        null=True,
-        blank=True,
-        default=None,
-    )
-
-    diss = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    pauta = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    indicador_resultados = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    alcance = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    # null: todavía no se define.
-    # true: fue citado.
-    # false: no fue citado.
-    citado = models.BooleanField(
-        null=True,
-        blank=True,
-        default=None,
-    )
-
-    torre = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    asesor = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    agendado_por = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    nombre_cliente = models.CharField(
-        max_length=200,
-        blank=True,
-        default="",
-    )
-
-    tipo_cita = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    declaracion_textual_cliente = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    comentarios = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    vin = models.CharField(
-        max_length=80,
-        blank=True,
-        default="",
-    )
-
-    anio_vehiculo = models.CharField(
-        max_length=10,
-        blank=True,
-        default="",
-    )
-
-    modelo = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    medio_concertacion = models.CharField(
-        max_length=120,
-        blank=True,
-        default="",
-    )
-
-    pauta_origen = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    venta_mano_obra = models.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        default=0,
-    )
-
-    # null: todavía no se define.
-    # true: tiene Long Drive.
-    # false: no tiene Long Drive.
-    long_drive = models.BooleanField(
-        null=True,
-        blank=True,
-        default=None,
-    )
-
-    hora_promesa = models.DateTimeField(
-        null=True,
-        blank=True,
-    )
-
-    pre_picking_hecho = models.BooleanField(
-        default=False,
-    )
-
-    pre_picking_notas = models.TextField(
-        blank=True,
-        default="",
-    )
-
-    asesor_digital = models.CharField(
-        max_length=200,
-        blank=True,
-        default="",
-    )
-
-    asesor_piso = models.CharField(
-        max_length=200,
-        blank=True,
-        default="",
-    )
-
-    creado_en = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    actualizado_en = models.DateTimeField(
-        auto_now=True,
-    )
+    agencia = models.CharField(max_length=120,blank=True,default="",)
+    no_orden = models.CharField(max_length=255,blank=True,default="",)
+    fecha_ingreso = models.DateTimeField(null=True,blank=True,)
+    asistencia = models.BooleanField(null=True,blank=True,default=None,)
+    diss = models.CharField(max_length=120,blank=True,default="",)
+    pauta = models.TextField(blank=True,default="",)
+    indicador_resultados = models.CharField(max_length=120,blank=True,default="",)
+    alcance = models.CharField(max_length=120,blank=True,default="",)
+    citado = models.BooleanField(null=True,blank=True,default=None,)
+    torre = models.CharField(max_length=120,blank=True,default="",)
+    asesor = models.CharField(max_length=120,blank=True,default="",)
+    agendado_por = models.CharField(max_length=120,blank=True,default="",)
+    nombre_cliente = models.CharField(max_length=200,blank=True,default="",)
+    tipo_cita = models.TextField(blank=True,default="",)
+    declaracion_textual_cliente = models.TextField(blank=True,default="",)
+    comentarios = models.TextField(blank=True,default="",)
+    vin = models.CharField(max_length=80,blank=True,default="",)
+    anio_vehiculo = models.CharField(max_length=10,blank=True,default="",)
+    modelo = models.CharField(max_length=120,blank=True,default="",)
+    medio_concertacion = models.CharField(max_length=120,blank=True,default="",)
+    pauta_origen = models.TextField(blank=True,default="",)
+    venta_mano_obra = models.DecimalField(max_digits=12,decimal_places=2,default=0,)
+    long_drive = models.BooleanField(null=True,blank=True,default=None,)
+    hora_promesa = models.DateTimeField(null=True,blank=True,)
+    pre_picking_hecho = models.BooleanField(default=False,)
+    pre_picking_notas = models.TextField(blank=True,default="",)
+    asesor_digital = models.CharField(max_length=200,blank=True,default="",)
+    asesor_piso = models.CharField(max_length=200,blank=True,default="",)
+    creado_en = models.DateTimeField(auto_now_add=True,)
+    actualizado_en = models.DateTimeField(auto_now=True,)
 
     class Meta:
         db_table = "hoja_ingresos"
@@ -263,6 +119,21 @@ class HojaIngresoEvidencia(models.Model):
     def __str__(self):
         return self.nombre_original or self.archivo.name
 
+class HojaIngresoAnalisisIA(models.Model):
+    ingreso = models.ForeignKey(HojaIngresos,on_delete=models.CASCADE,related_name="analisis_ia",)
+    evidencia = models.OneToOneField(HojaIngresoEvidencia,on_delete=models.CASCADE,related_name="analisis_ia",)
+    imagen_resultado = models.ImageField(upload_to="hoja_ingresos/analisis_ia/%Y/%m/",)
+    reporte = models.JSONField(default=dict)
+    creado_en = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        db_table = "hoja_ingresos_analisis_ia"
+        ordering = ["-creado_en", "-id"]
+
+@receiver(post_delete, sender=HojaIngresoAnalisisIA)
+def eliminar_imagen_analisis_ia(sender, instance, **kwargs):
+    if instance.imagen_resultado:
+        instance.imagen_resultado.delete(save=False)
 
 @receiver(post_delete, sender=HojaIngresoEvidencia)
 def eliminar_archivo_evidencia(sender, instance, **kwargs):
