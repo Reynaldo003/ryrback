@@ -293,7 +293,11 @@ DATABASES = {
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
         "HOST": "127.0.0.1",
+<<<<<<< HEAD
        # "HOST": "45.82.73.31",
+=======
+        #"HOST": "45.82.73.31",
+>>>>>>> 14c788ad635bb6040f92ed95f1fb90811c84923e
         "PORT": "5432",
     },
     "tdsql": {
@@ -301,8 +305,13 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
+<<<<<<< HEAD
        "HOST": "127.0.0.1",
      #  "HOST": "45.82.73.31",
+=======
+        "HOST": "127.0.0.1",
+        #"HOST": "45.82.73.31",
+>>>>>>> 14c788ad635bb6040f92ed95f1fb90811c84923e
         "PORT": "5432",
     },
     'sqlserver': {
@@ -418,21 +427,3 @@ REST_FRAMEWORK = {
         "CrmConformidad.jwt_authentication.CRMJWTAuthentication",
     ),
 }
-
-# ==========================================
-# ETAPAS COMERCIALES V3
-# ==========================================
-
-CRM_ETAPAS_V3_API_HABILITADA = True
-
-CRM_ETAPAS_V3_AGENCIAS_HABILITADAS = (
-    "VW Cordoba",
-    "VW Cordoba Usados",
-    "VW Cordoba Usados",
-    "VW Orizaba",
-    "VW Orizaba Usados",
-    "VW Poza Rica",
-    "VW Tuxpan",
-    "VW Tuxtepec",
-    "Automotriz R&R",
-)
