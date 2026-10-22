@@ -6,6 +6,9 @@ Modos:
   python manage.py drainlogs                 # drena todo y termina
   python manage.py drainlogs --watch         # loop infinito (intervalo configurable)
   python manage.py drainlogs --watch --interval 3
+
+En --watch también ejecuta cada hora la purga de documentos vencidos
+(papelera de documentación, retención de 15 días).
 """
 import json
 import time
@@ -18,6 +21,8 @@ from logs.models import LogActividad
 
 TIPO_Y_USUARIO = {"LOGIN_FALLIDO": 0}
 
+PURGA_DOCUMENTOS_INTERVALO = 3600  # segundos (1 hora)
+
 
 class Command(BaseCommand):
     help = "Procesa la cola de logs de actividad por usuario (Redis -> PostgreSQL)."
@@ -27,6 +32,8 @@ class Command(BaseCommand):
         parser.add_argument("--interval", type=float, default=2.0, help="Segundos entre ciclos en --watch.")
 
     def handle(self, *args, **options):
+        ultima_purga = 0.0
+
         while True:
             procesados = self._drenar()
             if procesados:
@@ -35,7 +42,22 @@ class Command(BaseCommand):
             if not options["watch"]:
                 break
 
+            ahora = time.monotonic()
+            if ahora - ultima_purga >= PURGA_DOCUMENTOS_INTERVALO:
+                ultima_purga = ahora
+                self._purgar_documentos()
+
             time.sleep(options["interval"])
+
+    def _purgar_documentos(self):
+        try:
+            from documentacion.tasks import purgar_documentos_expirados
+
+            eliminados, _ = purgar_documentos_expirados()
+            if eliminados:
+                self.stdout.write(f"Purgados {eliminados} documento(s) vencidos de la papelera.")
+        except Exception:
+            pass
 
     def _drenar(self):
         try:
@@ -68,6 +90,7 @@ class Command(BaseCommand):
                             modulo=payload.get("modulo") or "otros",
                             entidad=payload.get("entidad") or "",
                             cambio=payload.get("cambio") or "",
+                            datos=payload.get("datos"),
                             ip=payload.get("ip"),
                         )
                     )

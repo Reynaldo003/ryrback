@@ -446,6 +446,42 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
             for item in conceptos
         ])
 
+    def _eliminar_evidencias_log(self, avaluo, delete_ids):
+        """Borra evidencias del avaluo registrando cada una en el log."""
+        qs = list(avaluo.evidencias.filter(id__in=delete_ids))
+        if not qs:
+            return
+
+        try:
+            from logs.helpers import registrar_eliminacion
+            from logs.snapshots import snapshot_instancia
+
+            request = self.context.get("request")
+            usuario = getattr(request, "user", None)
+            nombre = (getattr(avaluo, "marca_auto", "") or "").strip()
+            modelo = (getattr(avaluo, "modelo", "") or "").strip()
+            desc_avaluo = " ".join(p for p in [nombre, modelo] if p) or f"avaluo #{avaluo.id}"
+
+            for evidencia in qs:
+                registrar_eliminacion(
+                    usuario=usuario,
+                    modulo="usados",
+                    entidad=(
+                        f"Evidencia #{evidencia.id} · Avaluo #{avaluo.id} · "
+                        f"{desc_avaluo} · {getattr(evidencia, 'nombre', '')}"
+                    ),
+                    cambio=(
+                        f"Eliminó evidencia #{evidencia.id} "
+                        f"({getattr(evidencia, 'nombre', '')}) del avaluo #{avaluo.id} · {desc_avaluo}"
+                    ),
+                    datos=snapshot_instancia(evidencia),
+                )
+        except Exception:
+            pass
+
+        for evidencia in qs:
+            evidencia.delete()
+
     @transaction.atomic
     def create(self, validated_data):
         evidencias_nuevas = validated_data.pop("_evidencias_nuevas", [])
@@ -523,7 +559,7 @@ class AvaluoUsadoSerializer(BaseClienteComercialSerializer):
         instance.save()
 
         if delete_ids:
-            instance.evidencias.filter(id__in=delete_ids).delete()
+            self._eliminar_evidencias_log(instance, delete_ids)
 
         if conceptos_recibidos:
             self._guardar_conceptos(instance, conceptos)

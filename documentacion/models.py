@@ -115,6 +115,10 @@ class DocumentoExpediente(models.Model):
     tipo_mime = models.CharField(max_length=150, default="application/pdf")
     tamano_bytes = models.PositiveBigIntegerField(default=0)
     creado = models.DateTimeField(auto_now_add=True)
+    # Soft delete: al eliminar un documento se marca esta fecha en vez de
+    # borrar el registro/archivo. Se recupera desde Logs y se purga
+    # definitivamente (retención de 15 días) con `purgardocumentos`.
+    eliminado = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "documentacion_expedientes_documentos"
@@ -123,12 +127,13 @@ class DocumentoExpediente(models.Model):
         constraints = [
             models.UniqueConstraint(
                 fields=["expediente", "requisito_id"],
-                condition=~models.Q(requisito_id="otros"),
+                condition=~models.Q(requisito_id="otros") & models.Q(eliminado__isnull=True),
                 name="doc_unico_por_requisito",
             ),
         ]
         indexes = [
             models.Index(fields=["expediente", "requisito_id"], name="doc_exp_req_idx"),
+            models.Index(fields=["eliminado"], name="doc_eliminado_idx"),
         ]
 
     def __str__(self): return self.nombre_original or f"Documento {self.id_documento}"

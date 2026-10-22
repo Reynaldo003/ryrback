@@ -19,9 +19,11 @@ from .helpers import (
     etiqueta_modulo,
     modulos_disponibles,
     esperar_cola,
+    registrar_log,
 )
 from .models import LogActividad
 from .serializers import LogActividadSerializer
+from .snapshots import restaurar_snapshot
 
 RESUMEN_CACHE_KEY = "logs:resumen:7d:v1"
 RESUMEN_DIAS = 7
@@ -198,3 +200,52 @@ def _calcular_resumen():
         ],
         "por_usuario": sorted(por_usuario.values(), key=lambda x: -x["total"])[:20],
     }
+
+
+class LogRestaurarView(APIView):
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated, IsAdminRole]
+
+    def post(self, request, log_id):
+        try:
+            log = LogActividad.objects.get(pk=log_id)
+        except LogActividad.DoesNotExist:
+            return Response(
+                {"detail": f"No existe el log #{log_id}."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        if log.tipo != "ELIMINAR":
+            return Response(
+                {"detail": f"El log #{log_id} es tipo {log.tipo}, no ELIMINAR."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        if not (isinstance(log.datos, dict) and log.datos.get("modelo")):
+            return Response(
+                {"detail": "Este log no tiene snapshot restaurable."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ip = request.META.get("REMOTE_ADDR")
+        ok, mensajes = restaurar_snapshot(log.datos)
+
+        # Auditoría de la restauración: deja constancia de quién la hizo y
+        # desde qué log, para poder rastrear el origen de cada restauración.
+        registrar_log(
+            usuario=request.user,
+            tipo="EDITAR",
+            modulo=log.modulo,
+            entidad=log.entidad,
+            cambio=(
+                f"Restauró lo eliminado en el log #{log.id} "
+                f"({'; '.join(mensajes) if mensajes else 'sin detalle'})"
+            ),
+            ip=ip,
+            datos={"log_origen": log.id, "resultado": ok},
+        )
+
+        return Response(
+            {"ok": ok, "mensajes": mensajes},
+            status=status.HTTP_200_OK if ok else status.HTTP_400_BAD_REQUEST,
+        )

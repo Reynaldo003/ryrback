@@ -945,10 +945,41 @@ class ProspectoSerializer(serializers.ModelSerializer):
         qs = expediente.evidencias.filter(id__in=evidencia_ids)
 
         for evidencia in qs:
+            self._log_eliminacion_evidencia(expediente, evidencia)
             if evidencia.archivo:
                 evidencia.archivo.delete(save=False)
 
             evidencia.delete()
+
+    def _log_eliminacion_evidencia(self, expediente, evidencia):
+        """Log ELIMINAR con snapshot de la evidencia borrada en el update."""
+        try:
+            from logs.helpers import registrar_eliminacion
+            from logs.snapshots import snapshot_instancia
+
+            cliente = getattr(expediente, "cliente", None)
+            nombre = (getattr(cliente, "nombre", "") or "").strip() or "sin nombre"
+
+            registrar_eliminacion(
+                usuario=self._usuario_request(),
+                modulo="digitales",
+                entidad=f"Evidencia #{evidencia.id} · Lead #{expediente.id} · "
+                        f"{nombre} · {getattr(evidencia, 'nombre_original', '')}",
+                cambio=(
+                    f"Eliminó evidencia #{evidencia.id} "
+                    f"({getattr(evidencia, 'nombre_original', '')}) del lead #{expediente.id} · {nombre}"
+                ),
+                datos=snapshot_instancia(evidencia),
+            )
+        except Exception:
+            pass
+
+    def _usuario_request(self):
+        request = self.context.get("request")
+        user = getattr(request, "user", None)
+        if user is not None and getattr(user, "is_authenticated", True):
+            return user
+        return None
 
     def get_tiempo_respuesta_asesor_label(self, obj):
         minutes = self.get_tiempo_respuesta_asesor_min(obj)

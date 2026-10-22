@@ -201,7 +201,7 @@ class ExpedienteDownloadZipView(APIView):
 
     def get(self, request, expediente_id):
         expediente = get_object_or_404(queryset_expedientes_usuario(request.user), pk=expediente_id)
-        documentos = list(expediente.documentos.all())
+        documentos = list(expediente.documentos.filter(eliminado__isnull=True))
         tiene_solicitud = bool(expediente.solicitud_pdf)
 
         if not documentos and not tiene_solicitud:
@@ -549,7 +549,7 @@ class DocumentoUploadView(APIView):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        if requisito_id != "otros" and expediente.documentos.filter(requisito_id=requisito_id).exists():
+        if requisito_id != "otros" and expediente.documentos.filter(requisito_id=requisito_id, eliminado__isnull=True).exists():
             return Response(
                 {
                     "archivo": [
@@ -613,14 +613,12 @@ class DocumentoDeleteView(APIView):
         if not puede_editar_expediente(request.user, expediente):
             raise PermissionDenied("No tienes permisos para eliminar documentos de este expediente.")
 
-        # Eliminación del archivo físico para prevenir archivos huérfanos
-        if documento.archivo:
-            try:
-                documento.archivo.delete(save=False)
-            except Exception:
-                pass
-
-        documento.delete()
+        # Soft delete: se marca el documento como eliminado pero el registro y
+        # el archivo físico se conservan para poder recuperarlo desde Logs.
+        # La purga definitiva (retención de 15 días) la hace `purgardocumentos`.
+        if documento.eliminado is None:
+            documento.eliminado = timezone.now()
+            documento.save(update_fields=["eliminado"])
 
         return Response(
             {"message": "Documento eliminado correctamente."},

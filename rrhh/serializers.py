@@ -200,9 +200,43 @@ class VacanteReclutamientoSerializer(serializers.ModelSerializer):
 
                 ids_recibidos.append(candidato.id_candidato)
 
+        candidatos_por_borrar = list(
+            vacante.candidatos.exclude(id_candidato__in=ids_recibidos)
+        )
+        self._log_eliminacion_candidatos(vacante, candidatos_por_borrar)
+
         vacante.candidatos.exclude(
             id_candidato__in=ids_recibidos
         ).delete()
+
+    def _log_eliminacion_candidatos(self, vacante, candidatos):
+        """Log ELIMINAR con snapshot de los candidatos quitados de la vacante."""
+        if not candidatos:
+            return
+        try:
+            from logs.helpers import registrar_eliminacion
+            from logs.snapshots import snapshot_instancia
+
+            request = self.context.get("request")
+            usuario = getattr(request, "user", None)
+            nombre_vacante = (getattr(vacante, "nombre", "") or "").strip() or f"vacante #{vacante.id_vacante}"
+
+            for candidato in candidatos:
+                registrar_eliminacion(
+                    usuario=usuario,
+                    modulo="rrhh",
+                    entidad=(
+                        f"Candidato #{candidato.id_candidato} · "
+                        f"{getattr(candidato, 'nombre', '')} · Vacante {nombre_vacante}"
+                    ),
+                    cambio=(
+                        f"Eliminó candidato #{candidato.id_candidato} "
+                        f"({getattr(candidato, 'nombre', '')}) de la vacante {nombre_vacante}"
+                    ),
+                    datos=snapshot_instancia(candidato),
+                )
+        except Exception:
+            pass
 
 class PuestoSerializer(serializers.ModelSerializer):
     class Meta:

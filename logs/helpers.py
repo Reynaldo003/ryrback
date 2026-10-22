@@ -15,7 +15,7 @@ from .models import LogActividad
 
 QUEUE_KEY = "crm_ryr:logs:queue"
 REDIS_HOST = "127.0.0.1"
-REDIS_PORT = 6380
+REDIS_PORT = 6379
 REDIS_DB = 1
 REDIS_TIMEOUT = 0.4
 
@@ -163,6 +163,7 @@ def _escribir_directo(payload, usuario_id, ip):
             modulo=payload["modulo"],
             entidad=payload["entidad"],
             cambio=payload["cambio"],
+            datos=payload.get("datos"),
             ip=ip,
         )
     except Exception:
@@ -194,10 +195,13 @@ def modo_entrega():
     return "cola"
 
 
-def registrar_log(*, usuario, tipo, modulo="otros", entidad="", cambio="", ip=None):
+def registrar_log(*, usuario, tipo, modulo="otros", entidad="", cambio="", ip=None,
+                  datos=None):
     """Registra un evento de log por usuario.
 
     `usuario` puede ser una instancia, un id (int) o None.
+    `datos` es un snapshot JSON (ver logs/snapshots.py) opcional, usado para
+    poder restaurar lo eliminado.
     Según `LOGS_MODO` encola en Redis (con fallback directo) o escribe directo
     a la BD. Nunca rompe la petición ni pierde el evento.
     """
@@ -212,6 +216,7 @@ def registrar_log(*, usuario, tipo, modulo="otros", entidad="", cambio="", ip=No
         "modulo": modulo,
         "entidad": str(entidad or "")[:250],
         "cambio": str(cambio or ""),
+        "datos": datos,
         "ip": ip,
         "fecha": int(time.time()),
     }
@@ -226,6 +231,23 @@ def registrar_log(*, usuario, tipo, modulo="otros", entidad="", cambio="", ip=No
             pass
 
     return _escribir_directo(payload, usuario_id, ip)
+
+
+def registrar_eliminacion(*, usuario, modulo, entidad, cambio, datos=None, ip=None):
+    """Registra una ELIMINACIÓN hecha dentro de un serializer (PATCH/PUT).
+
+    El middleware solo ve la petición HTTP (EDITAR), así que los borrados
+    destructivos ocultos en updates se loguean explícitamente con este helper.
+    """
+    return registrar_log(
+        usuario=usuario,
+        tipo="ELIMINAR",
+        modulo=modulo,
+        entidad=entidad,
+        cambio=cambio,
+        ip=ip,
+        datos=datos,
+    )
 
 
 def esperar_cola():

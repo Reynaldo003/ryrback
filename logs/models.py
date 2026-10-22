@@ -22,6 +22,7 @@ class LogActividad(models.Model):
     tipo = models.CharField(max_length=30, db_index=True)
     entidad = models.CharField(max_length=250, blank=True, default="")
     cambio = models.TextField(blank=True, default="")
+    datos = models.JSONField(null=True, blank=True)
     ip = models.GenericIPAddressField(null=True, blank=True)
     fecha = models.DateTimeField(auto_now_add=True, db_index=True)
 

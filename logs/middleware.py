@@ -17,6 +17,7 @@ from .helpers import (
     etiqueta_modulo,
     registrar_log,
 )
+from .snapshots import capturar_snapshot
 
 _METODOS_MODIFICACION = {"POST", "PUT", "PATCH", "DELETE"}
 _METODO_A_TIPO = {
@@ -42,6 +43,8 @@ _EXCLUIR_PREFIJOS = (
 _PATRON_ENTIDAD = re.compile(r"/(\d+)/?$")
 
 _BODY_MAX_BYTES = 64 * 1024
+
+_DATOS_MAX_BYTES = 200 * 1024
 
 _FORM_MAX_CLAVES = 12
 _FORM_MAX_VALOR = 120
@@ -194,6 +197,22 @@ def _extraer_entidad(path, response):
     return ""
 
 
+def _limitar_datos(datos):
+    """Snapshot JSON-safe; si excede el tamaño máximo se recortan los hijos
+    y, en el peor caso, se descarta para no inflar la cola de logs."""
+    if not datos:
+        return None
+    try:
+        if len(json.dumps(datos, ensure_ascii=False).encode("utf-8")) <= _DATOS_MAX_BYTES:
+            return datos
+        recortado = {k: v for k, v in datos.items() if k != "hijos"}
+        if len(json.dumps(recortado, ensure_ascii=False).encode("utf-8")) <= _DATOS_MAX_BYTES:
+            return recortado
+    except Exception:
+        pass
+    return None
+
+
 def _construir_cambio(tipo, modulo, entidad, resumen="", entidad_enrich="", accion=""):
     verbo = _VERBO.get(tipo, "Modificó")
     target = entidad_enrich or entidad or "registro"
@@ -219,13 +238,18 @@ class LogActividadMiddleware:
 
     def process_view(self, request, view_func, view_args, view_kwargs):
         # Foto pre-borrado: en un DELETE el objeto ya no existe cuando se
-        # procesa la respuesta, así que se captura la descripción antes de
-        # que la vista lo elimine. Barato: solo DELETE con patrón conocido.
+        # procesa la respuesta, así que se captura la descripción y el
+        # snapshot completo antes de que la vista lo elimine. Barato: solo
+        # DELETE con patrón conocido.
         try:
             if getattr(request, "method", "") == "DELETE":
-                request._logs_snapshot_entidad = snapshot_entidad(
-                    getattr(request, "path", "") or ""
-                )
+                path = getattr(request, "path", "") or ""
+                datos = capturar_snapshot(path)
+                if datos:
+                    request._logs_snapshot_datos = datos
+                    request._logs_snapshot_entidad = datos.get("descripcion") or ""
+                else:
+                    request._logs_snapshot_entidad = snapshot_entidad(path)
         except Exception:
             pass
         return None
@@ -291,6 +315,12 @@ class LogActividadMiddleware:
 
             ip = request.META.get("REMOTE_ADDR")
 
+            datos = None
+            if tipo == "ELIMINAR":
+                datos = _limitar_datos(
+                    getattr(request, "_logs_snapshot_datos", None)
+                )
+
             registrar_log(
                 usuario=usuario,
                 tipo=tipo,
@@ -298,6 +328,7 @@ class LogActividadMiddleware:
                 entidad=entidad,
                 cambio=cambio,
                 ip=ip,
+                datos=datos,
             )
         except Exception:
             # Un fallo en el log jamás debe romper la respuesta.

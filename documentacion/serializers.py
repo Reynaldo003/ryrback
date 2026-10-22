@@ -114,11 +114,12 @@ class ExpedienteSerializer(serializers.ModelSerializer):
     def get_requisitos(self, obj): return obtener_requisitos(obj.tipo_persona, obj.financiamiento) or []
 
     def get_documentos(self, obj):
-        serializer = DocumentoExpedienteSerializer(obj.documentos.all(), many=True, context=self.context)
+        activos = obj.documentos.filter(eliminado__isnull=True)
+        serializer = DocumentoExpedienteSerializer(activos, many=True, context=self.context)
         return {str(documento["requisito_id"]): documento for documento in serializer.data}
 
     def get_documentos_otros(self, obj):
-        otros = obj.documentos.filter(requisito_id="otros").order_by("id_documento")
+        otros = obj.documentos.filter(requisito_id="otros", eliminado__isnull=True).order_by("id_documento")
         return DocumentoExpedienteSerializer(otros, many=True, context=self.context).data
 
     def get_solicitud_pdf_url(self, obj):
@@ -137,7 +138,7 @@ class ExpedienteSerializer(serializers.ModelSerializer):
     def get_avance(self, obj):
         requisitos = obtener_requisitos(obj.tipo_persona, obj.financiamiento) or []
         obligatorios = [item for item in requisitos if item.get("obligatorio")]
-        cargados = set(obj.documentos.values_list("requisito_id", flat=True))
+        cargados = set(obj.documentos.filter(eliminado__isnull=True).values_list("requisito_id", flat=True))
         completados = sum(1 for item in obligatorios if item["id"] in cargados)
         total = len(obligatorios)
 
