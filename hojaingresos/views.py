@@ -296,12 +296,13 @@ class HojaIngresosViewSet(ModelViewSet):
         )
         self._validar_agencia(agencia)
         serializer.save()
-
     
     @action(
         detail=True,
         methods=["post"],
         url_path="evidencias",
+        authentication_classes=[],
+        permission_classes=[AllowAny],
         parser_classes=[MultiPartParser, FormParser],
         throttle_classes=[InspectorPublicoThrottle],
     )
