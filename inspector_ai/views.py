@@ -231,6 +231,93 @@ def analizar_imagenes(imagenes):
     return resultado
 
 
+class InspectorCitasView(APIView):
+    """Citas registradas en la hoja de ingresos de postventa."""
+
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    AGENCIAS_PUBLICAS = ("VW Cordoba", "VW Orizaba")
+    LIMITE_DEFAULT = 40
+    LIMITE_MAXIMO = 200
+
+    def get(self, request):
+        from django.db.models import F, Q
+
+        from hojaingresos.models import HojaIngresos
+
+        params = request.query_params
+        busqueda = (params.get("q") or "").strip()
+        agencia = (params.get("agencia") or "").strip()
+
+        try:
+            limite = int(params.get("limite") or self.LIMITE_DEFAULT)
+        except (TypeError, ValueError):
+            limite = self.LIMITE_DEFAULT
+        limite = max(1, min(self.LIMITE_MAXIMO, limite))
+
+        agencias = self.AGENCIAS_PUBLICAS
+        if agencia:
+            coincidencias = [
+                nombre
+                for nombre in self.AGENCIAS_PUBLICAS
+                if nombre.casefold() == agencia.casefold()
+            ]
+            if not coincidencias:
+                return Response([])
+            agencias = tuple(coincidencias)
+
+        filtro_agencia = Q()
+        for nombre in agencias:
+            filtro_agencia |= Q(agencia__iexact=nombre)
+
+        queryset = (
+            HojaIngresos.objects.select_related("cliente")
+            .filter(filtro_agencia)
+            .order_by(F("fecha_ingreso").desc(nulls_last=True), "-id")
+        )
+
+        if busqueda:
+            queryset = queryset.filter(
+                Q(cliente__nombre__icontains=busqueda)
+                | Q(cliente__telefono__icontains=busqueda)
+                | Q(nombre_cliente__icontains=busqueda)
+                | Q(vin__icontains=busqueda)
+                | Q(no_orden__icontains=busqueda)
+                | Q(modelo__icontains=busqueda)
+                | Q(diss__icontains=busqueda)
+                | Q(asesor__icontains=busqueda)
+                | Q(asesor_piso__icontains=busqueda)
+            )
+
+        citas = [
+            {
+                "id": ingreso.id,
+                "folio": ingreso.no_orden or f"Ingreso {ingreso.id}",
+                "no_orden": ingreso.no_orden,
+                "fecha": ingreso.fecha_ingreso.isoformat() if ingreso.fecha_ingreso else None,
+                "cliente": (
+                    getattr(ingreso.cliente, "nombre", "")
+                    or ingreso.nombre_cliente
+                    or ""
+                ),
+                "telefono": getattr(ingreso.cliente, "telefono", "") or "",
+                "agencia": ingreso.agencia,
+                "asesor": ingreso.asesor or ingreso.asesor_piso or "",
+                "modelo": ingreso.modelo,
+                "anio": ingreso.anio_vehiculo,
+                "unidad": " ".join(
+                    parte for parte in (ingreso.modelo, ingreso.anio_vehiculo) if parte
+                ),
+                "vin": ingreso.vin,
+                "tipo_cita": ingreso.tipo_cita,
+            }
+            for ingreso in queryset[:limite]
+        ]
+
+        return Response(citas)
+
+
 class InspectorAnalizarView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
