@@ -195,7 +195,7 @@ CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [("127.0.0.1", 6380)],
+            "hosts": [("127.0.0.1", 6379)],
         }
     },
 }
@@ -206,7 +206,7 @@ CHANNEL_LAYERS = {
 CACHES = {
     "default": {
         "BACKEND": "django.core.cache.backends.redis.RedisCache",
-        "LOCATION": "redis://127.0.0.1:6380/1",
+        "LOCATION": "redis://127.0.0.1:6379/1",
         "TIMEOUT": 60,
         "KEY_PREFIX": "crm_ryr",
     }
@@ -218,10 +218,10 @@ CACHES = {
 # Comportamiento:
 #   - CHANNEL_LAYER_BACKEND=memory : fuerza memoria.
 #   - CHANNEL_LAYER_BACKEND=redis  : fuerza Redis.
-#   - sin variable                  : detecta si Redis responde en 6380.
+#   - sin variable                  : detecta si Redis responde en 6379.
 def _redis_disponible():
     try:
-        with socket.create_connection(("127.0.0.1", 6380), timeout=0.4):
+        with socket.create_connection(("127.0.0.1", 6379), timeout=0.4):
             return True
     except OSError:
         return False
@@ -292,8 +292,8 @@ DATABASES = {
         "NAME": "crm_ryr",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-       # "HOST": "127.0.0.1",
-        "HOST": "45.82.73.31",
+        "HOST": "127.0.0.1",
+        #"HOST": "45.82.73.31",
         "PORT": "5432",
     },
     "tdsql": {
@@ -301,8 +301,8 @@ DATABASES = {
         "NAME": "tdsql_vw",
         "USER": "israel",
         "PASSWORD": "KVMR&R2026@",
-      #  "HOST": "127.0.0.1",
-       "HOST": "45.82.73.31",
+        "HOST": "127.0.0.1",
+        #"HOST": "45.82.73.31",
         "PORT": "5432",
     },
     'sqlserver': {
@@ -418,21 +418,3 @@ REST_FRAMEWORK = {
         "CrmConformidad.jwt_authentication.CRMJWTAuthentication",
     ),
 }
-
-# ==========================================
-# ETAPAS COMERCIALES V3
-# ==========================================
-
-CRM_ETAPAS_V3_API_HABILITADA = True
-
-CRM_ETAPAS_V3_AGENCIAS_HABILITADAS = (
-    "VW Cordoba",
-    "VW Cordoba Usados",
-    "VW Cordoba Usados",
-    "VW Orizaba",
-    "VW Orizaba Usados",
-    "VW Poza Rica",
-    "VW Tuxpan",
-    "VW Tuxtepec",
-    "Automotriz R&R",
-)
