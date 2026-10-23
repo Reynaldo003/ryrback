@@ -38,7 +38,6 @@ ESQUEMA_INCIDENCIAS = objeto({
             "ubicacion": campo_texto(),
             "descripcion": campo_texto(),
             "certeza": campo_texto(),
-            "severidad": campo_texto(),
         }),
     },
     "limitaciones": campo_lista_texto(),
@@ -47,128 +46,148 @@ ESQUEMA_INCIDENCIAS = objeto({
 # Mantenemos íntegra la estructura y los criterios del prompt que se probó
 # directamente con images.edit(), sin condicionarlo a otro modelo.
 PROMPT_ANOTACION = """
-Actúa como un inspector visual automotriz especializado
-en detectar daños y objetos ajenos a un vehículo.
+    Actúa como un inspector visual automotriz especializado en detectar daños y objetos ajenos a un vehículo.
 
-Tu tarea es analizar y anotar la fotografía original,
-generando un reporte visual profesional.
+    Tu tarea es analizar la fotografía ORIGINAL del vehículo y devolver una versión anotada visualmente, conservando la misma imagen, perspectiva, colores y elementos reales.
 
-OBJETIVO PRINCIPAL:
-Identificar cualquier objeto extraño que no forme parte
-de los componentes originales o funcionales del automóvil,
-así como cualquier daño exterior visible.
+    OBJETIVO PRINCIPAL:
+    1. Detectar daños exteriores visibles del vehículo.
+    2. Detectar objetos ajenos al vehículo que estén dentro, sobre o en contacto directo con él.
+    3. Anotar cada hallazgo con rectángulos y etiquetas claras en español.
+    4. Clasificar visualmente la gravedad de cada daño como ALTO, MEDIO o BAJO.
 
-CATEGORÍA 1: OBJETOS AJENOS AL VEHÍCULO
+    REGLAS GENERALES:
+    - Sé conservador: si un supuesto daño no es claro, NO lo marques.
+    - No inventes daños ni objetos.
+    - No confundas reflejos, sombras, brillo solar, suciedad, agua, polvo o sobreexposición con daños reales.
+    - No marques zonas intactas.
+    - Si una pieza cercana está dañada pero otra pieza se ve íntegra, marca solo la pieza realmente dañada.
+    - Prioriza precisión sobre cantidad de anotaciones.
 
-Inspecciona cuidadosamente:
-- Interior visible del automóvil.
-- Asientos delanteros y traseros.
-- Tablero y consola central.
-- Área de carga y cajuela, cuando sean visibles.
-- Cofre, techo y superficies exteriores.
-- Objetos apoyados, colocados o atrapados
-  sobre la carrocería.
-- Objetos sueltos o colgantes que no sean
-  componentes del vehículo.
+    OBJETOS AJENOS:
+    Detecta únicamente objetos visibles que no formen parte del vehículo y que estén dentro, sobre o en contacto directo con él.
+    Ejemplos: balón, mochila, bolsa, botella, herramienta, ropa, juguete, cartera, celular.
+    No señales árboles, calles, edificios, otros vehículos ni objetos del fondo.
 
-Detecta cualquier objeto independiente del automóvil,
-incluyendo, pero sin limitarte a:
-- Balones de fútbol u otros deportes.
-- Bolsos, mochilas, maletas y carteras.
-- Cajas, paquetes y bolsas.
-- Botellas, vasos y recipientes.
-- Herramientas y objetos personales.
-- Juguetes y accesorios sueltos.
-- Ropa, zapatos y artículos olvidados.
-- Cualquier otro objeto extraño visible.
+    DAÑOS A DETECTAR:
+    Detecta únicamente daños exteriores visibles como:
+    - abolladuras
+    - deformaciones
+    - defensas o fascias rotas o desprendidas
+    - salpicaderas dañadas
+    - rayones visibles
+    - grietas o fracturas
+    - molduras desprendidas
+    - piezas faltantes
+    - desalineaciones claras entre componentes
+    - cristales o faros dañados SOLO si el daño es evidente
 
-No te limites a los ejemplos anteriores.
-Identifica también objetos de categorías no mencionadas.
+    REGLAS ESPECIALES PARA FAROS Y CRISTALES:
+    - NO marques un faro solo por estar junto a una zona golpeada.
+    - NO marques un faro por brillo intenso, reflejos, destellos, transparencia del lente o sobreexposición.
+    - NO marques un faro si el lente parece completo, íntegro y sin fracturas visibles.
+    - SOLO marca un faro si existe evidencia visual directa de daño, por ejemplo:
+    - lente roto
+    - grieta visible
+    - fragmento faltante
+    - carcasa quebrada
+    - desprendimiento evidente
+    - desalineación clara respecto a la carrocería
+    - Si la fascia, parrilla, cofre o salpicadera están dañados alrededor del faro, pero el faro se ve intacto, marca solo esas piezas y NO el faro.
+    - Aplica la misma regla a parabrisas, ventanas y otros cristales.
 
-REGLAS DE OBJETOS AJENOS:
-1. El objeto debe ser realmente visible.
-2. Debe estar dentro, sobre o en contacto directo
-   con el vehículo.
-3. No señales árboles, calles, edificios, otros
-   vehículos ni objetos aislados del fondo.
-4. No confundas componentes originales del automóvil
-   con objetos extraños.
-5. No marques espejos, ruedas, faros, emblemas,
-   cinturones, controles ni molduras intactas.
-6. Si una pieza del vehículo está desprendida,
-   clasifícala como daño, no como objeto ajeno.
-7. No inventes objetos ocultos ni infieras contenido
-   que no pueda verse.
+    CLASIFICACIÓN DE GRAVEDAD:
+    Clasifica cada daño visible en uno de estos tres niveles:
 
-CATEGORÍA 2: DAÑOS DEL VEHÍCULO
+    DAÑO ALTO:
+    - deformación severa
+    - pieza rota o desprendida
+    - pieza faltante
+    - fractura evidente
+    - hundimiento fuerte
+    - componentes internos expuestos
+    - daño amplio o estructuralmente notorio
 
-Identifica únicamente daños exteriores visibles:
-- Abolladuras y deformaciones.
-- Defensas y fascias rotas o desprendidas.
-- Salpicaderas dañadas.
-- Rayones, grietas y fracturas.
-- Molduras desprendidas.
-- Faros y cristales dañados.
-- Desalineaciones entre componentes.
-- Piezas faltantes con evidencia visual clara.
+    DAÑO MEDIO:
+    - deformación moderada
+    - abolladura visible
+    - desalineación notoria
+    - grieta parcial
+    - daño localizado pero claro
 
-No confundas daños con reflejos, sombras,
-suciedad o características normales del diseño.
+    DAÑO BAJO:
+    - rayón superficial
+    - raspón
+    - abolladura leve
+    - daño pequeño y limitado
+    - detalle menor sin deformación importante
 
-ANOTACIONES VISUALES:
+    REGLAS DE GRAVEDAD:
+    - Evalúa la gravedad solo por lo visible en la imagen.
+    - No infieras daños mecánicos internos.
+    - No clasifiques como ALTO un daño menor por contexto.
+    - Si la gravedad no es razonablemente clara, elige la opción más conservadora.
 
-Para cada OBJETO AJENO:
-- Dibuja un rectángulo NARANJA alrededor del objeto.
-- Agrega una etiqueta naranja con letras blancas.
-- Identifica qué objeto es.
-- Indica dónde se encuentra.
-- Ejemplo: "OBJETO AJENO: Balón de fútbol
-  sobre el asiento trasero".
+    ANOTACIONES VISUALES:
 
-Para cada DAÑO:
-- Dibuja un rectángulo ROJO sobre el área afectada.
-- Agrega una etiqueta roja con letras blancas.
-- Identifica la pieza afectada.
-- Describe brevemente el daño observado.
-- Ejemplo: "DAÑO: Salpicadera delantera deformada".
+    PARA CADA OBJETO AJENO:
+    - Dibuja un rectángulo NARANJA alrededor del objeto.
+    - Agrega una etiqueta naranja con letras blancas.
+    - Usa texto breve y claro.
+    - Formato sugerido:
+    "OBJETO AJENO: mochila"
+    "OBJETO AJENO: botella"
+    - De preferencia agrega una flecha naranja desde la etiqueta hacia el rectángulo correspondiente.
 
-PRECISIÓN DE LAS ANOTACIONES:
-- Cada rectángulo debe rodear exclusivamente
-  el objeto o la región dañada.
-- Evita incluir objetos o superficies cercanas.
-- No dibujes rectángulos sobre zonas intactas.
-- Utiliza flechas cuando ayuden a identificar
-  elementos pequeños.
-- Evita superponer etiquetas.
-- Utiliza textos cortos, claros y en español.
-- Si no puedes identificar un elemento con
-  claridad, no lo marques.
-- No dupliques las anotaciones.
+    PARA CADA DAÑO:
+    - Dibuja un rectángulo ROJO alrededor del área afectada.
+    - Agrega una etiqueta roja con letras blancas.
+    - La etiqueta debe incluir explícitamente la gravedad al inicio, usando una de estas tres formas exactas:
+    - "DAÑO ALTO: ..."
+    - "DAÑO MEDIO: ..."
+    - "DAÑO BAJO: ..."
+    - Después de la gravedad, indica la pieza y el tipo de daño en forma breve.
+    - Ejemplos correctos:
+    - "DAÑO ALTO: fascia desprendida"
+    - "DAÑO MEDIO: cofre abollado"
+    - "DAÑO BAJO: rayón en puerta"
+    - NO uses el formato con paréntesis, por ejemplo NO escribir:
+    - "DAÑO: cofre abollado (MEDIO)"
+    - Debe ser obligatorio que cada etiqueta de daño tenga una flecha ROJA apuntando claramente al rectángulo correspondiente, como en un reporte técnico.
 
-CONSERVACIÓN DE LA FOTOGRAFÍA:
-- Mantén el mismo vehículo.
-- Conserva la perspectiva original.
-- Conserva colores y componentes.
-- No alteres daños existentes.
-- No elimines ni agregues objetos.
-- No inventes elementos.
-- No cambies el fondo ni la iluminación.
-- No repares ni reconstruyas piezas.
-- Agrega solamente anotaciones visuales.
+    PRECISIÓN:
+    - Cada rectángulo debe rodear solo la región afectada.
+    - Evita incluir superficies sanas cercanas.
+    - No dupliques anotaciones para el mismo daño.
+    - Usa una sola etiqueta por daño identificado.
+    - Las flechas deben conectar visualmente la etiqueta con su recuadro.
+    - Evita saturar la imagen con demasiadas etiquetas.
+    - Si hay duda razonable, omite la anotación.
 
-IMPORTANTE:
-Si no existen objetos ajenos, no inventes ninguno.
-Si no existen daños visibles, no inventes daños.
-Si no se identifica ninguna incidencia,
-no agregues rectángulos ni etiquetas.
+    CONSERVACIÓN DE LA FOTOGRAFÍA:
+    - Mantén el mismo vehículo.
+    - Conserva la perspectiva original.
+    - Conserva colores, iluminación y fondo.
+    - No alteres daños existentes.
+    - No elimines ni agregues objetos.
+    - No repares ni reconstruyas piezas.
+    - Agrega solamente las anotaciones visuales.
 
-ESTILO DE RESULTADO:
-Reporte técnico de inspección automotriz.
-Rectángulos definidos y bien posicionados.
-Rojo para daños.
-Naranja para objetos ajenos.
-Etiquetas legibles, sin saturar la fotografía.
-""".strip()
+    IMPORTANTE:
+    - Si no existen objetos ajenos, no inventes ninguno.
+    - Si no existen daños visibles, no inventes daños.
+    - Si no se identifica ninguna incidencia, no agregues rectángulos ni etiquetas.
+
+    ESTILO DE RESULTADO:
+    - Reporte técnico automotriz.
+    - Rectángulos definidos y bien posicionados.
+    - Rojo para daños.
+    - Naranja para objetos ajenos.
+    - Etiquetas legibles, breves y en español.
+    - Todas las etiquetas de daño deben incluir la gravedad al inicio:
+    DAÑO ALTO, DAÑO MEDIO o DAÑO BAJO.
+    - Las etiquetas de daño deben estar unidas a su recuadro mediante flechas claras.
+    """.strip()
 
 INSTRUCCIONES_REPORTE = """
 Actúa como inspector visual automotriz. Devuelve únicamente el JSON
@@ -193,9 +212,6 @@ fracturas, deformaciones, piezas rotas, faltantes, desalineadas o desprendidas.
 No confundas reflejos, sombras, suciedad ni rasgos normales del diseño con daños.
 
 Describe cada hallazgo con su ubicación y su certeza: Alta, Media o Baja.
-Para cada daño asigna severidad: Leve, Moderado o Grave, según el impacto
-funcional y estético observable (Leve: cosmético menor; Moderado: afecta
-uso o apariencia; Grave: afecta estructura, seguridad o funcionalidad).
 No inventes elementos ocultos. No afirmes causas o daños estructurales no visibles.
 Si no hay hallazgos confirmados, devuelve listas vacías.
 
@@ -242,7 +258,11 @@ def analizar_evidencia_vehiculo(archivo):
     archivo_edicion = io.BytesIO(png_original)
     archivo_edicion.name = "vehiculo_original.png"
     respuesta_imagen = cliente.with_options(timeout=180.0).images.edit(
-        model=getattr(settings, "OPENAI_IMAGE_MODEL", "gpt-image-2"),
+        model=getattr(
+            settings,
+            "OPENAI_IMAGE_MODEL",
+            "gpt-image-2.5-sunburst",
+        ),
         image=archivo_edicion,
         prompt=PROMPT_ANOTACION,
         quality="high",
