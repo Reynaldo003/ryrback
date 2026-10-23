@@ -38,6 +38,7 @@ ESQUEMA_INCIDENCIAS = objeto({
             "ubicacion": campo_texto(),
             "descripcion": campo_texto(),
             "certeza": campo_texto(),
+            "severidad": campo_texto(),
         }),
     },
     "limitaciones": campo_lista_texto(),
@@ -192,6 +193,9 @@ fracturas, deformaciones, piezas rotas, faltantes, desalineadas o desprendidas.
 No confundas reflejos, sombras, suciedad ni rasgos normales del diseño con daños.
 
 Describe cada hallazgo con su ubicación y su certeza: Alta, Media o Baja.
+Para cada daño asigna severidad: Leve, Moderado o Grave, según el impacto
+funcional y estético observable (Leve: cosmético menor; Moderado: afecta
+uso o apariencia; Grave: afecta estructura, seguridad o funcionalidad).
 No inventes elementos ocultos. No afirmes causas o daños estructurales no visibles.
 Si no hay hallazgos confirmados, devuelve listas vacías.
 

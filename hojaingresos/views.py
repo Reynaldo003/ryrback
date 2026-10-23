@@ -1,4 +1,5 @@
 # hojaingresos/views.py
+import logging
 import re
 import unicodedata
 from django.db.models import Q
@@ -97,8 +98,21 @@ def es_administrador_taller(user):
     return bool(obtener_permisos_usuario(user) & ADMIN_PERMISSIONS)
 
 
+logger = logging.getLogger(__name__)
+
+
 class InspectorPublicoThrottle(AnonRateThrottle):
     rate = "30/hour"
+
+    def allow_request(self, request, view):
+        try:
+            return super().allow_request(request, view)
+        except Exception:
+            logger.warning(
+                "Caché no disponible para el throttle; se permite la petición.",
+                exc_info=True,
+            )
+            return True
 
 class HojaIngresosViewSet(ModelViewSet):
     authentication_classes = [CRMJWTAuthentication]
@@ -460,6 +474,8 @@ class HojaIngresosViewSet(ModelViewSet):
         detail=True,
         methods=["post"],
         url_path="analizar-ia",
+        authentication_classes=[],
+        permission_classes=[AllowAny],
         throttle_classes=[InspectorPublicoThrottle],
     )
     def analizar_ia(self, request, pk=None):
@@ -489,16 +505,23 @@ class HojaIngresosViewSet(ModelViewSet):
                 status=400,
             )
 
+        forzar = str(
+            request.data.get("forzar", "")
+        ).strip().lower() in {"1", "true", "si", "sí"}
+
         anterior = HojaIngresoAnalisisIA.objects.filter(
             evidencia=evidencia
         ).first()
 
-        if anterior:
+        if anterior and not forzar:
             serializer = HojaIngresoAnalisisIASerializer(
                 anterior,
                 context={"request": request},
             )
             return Response(serializer.data)
+
+        if anterior and forzar:
+            anterior.delete()
 
         try:
             with evidencia.archivo.open("rb") as archivo:
