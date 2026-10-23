@@ -168,6 +168,49 @@ Rectángulos definidos y bien posicionados.
 Rojo para daños.
 Naranja para objetos ajenos.
 Etiquetas legibles, sin saturar la fotografía.
+
+
+CRITERIOS ADICIONALES DE PRECISIÓN Y GRAVEDAD (SE APLICAN A TODAS LAS CATEGORÍAS):
+- Analiza exclusivamente la fotografía ORIGINAL y conserva su perspectiva, colores, iluminación, fondo y elementos reales.
+- Sé conservador: si un supuesto daño no es claro, NO lo marques. Prioriza precisión sobre cantidad.
+- No confundas brillo solar, agua, polvo, sobreexposición, transparencia de lentes, reflejos ni sombras con daños.
+- Si una pieza cercana está dañada y otra está íntegra, marca únicamente la dañada.
+- Inspecciona daños exteriores visibles: abolladuras, deformaciones, defensas o fascias rotas o desprendidas,
+  salpicaderas dañadas, rayones visibles, grietas o fracturas, molduras desprendidas, piezas faltantes,
+  desalineaciones claras entre componentes, y faros o cristales dañados SOLO con evidencia directa.
+
+REGLAS ESPECIALES PARA FAROS Y CRISTALES:
+- NO marques un faro solo por estar junto a una zona golpeada, ni por reflejos, destellos, transparencia o sobreexposición.
+- NO marques un faro si el lente parece completo, íntegro y sin fracturas visibles.
+- SOLO marca faros cuando exista lente roto, grieta visible, fragmento faltante, carcasa quebrada,
+  desprendimiento evidente o desalineación clara respecto a la carrocería.
+- Si fascia, parrilla, cofre o salpicadera están dañados alrededor de un faro intacto,
+  marca esas piezas, pero NO el faro. Aplica el mismo criterio a parabrisas, ventanas y demás cristales.
+
+CLASIFICACIÓN DE GRAVEDAD EN ETIQUETAS:
+- DAÑO ALTO: deformación severa, pieza rota, desprendida o faltante, fractura evidente,
+  hundimiento fuerte, componentes internos expuestos o daño amplio y notorio.
+- DAÑO MEDIO: deformación moderada, abolladura visible, desalineación notoria,
+  grieta parcial o daño localizado claro.
+- DAÑO BAJO: rayón superficial, raspón, abolladura leve, daño pequeño o detalle menor.
+- Evalúa únicamente lo visible; no infieras daños mecánicos internos ni clasifiques un daño menor
+  como ALTO por contexto. Si hay duda, elige el nivel más conservador.
+
+FORMATO OBLIGATORIO DE ANOTACIONES:
+- Cada OBJETO AJENO debe tener rectángulo NARANJA y etiqueta naranja con letras blancas,
+  indicando objeto y ubicación, por ejemplo: "OBJETO AJENO: mochila sobre asiento trasero".
+  De preferencia, une la etiqueta y el rectángulo mediante una flecha naranja.
+- Cada DAÑO debe tener rectángulo ROJO y etiqueta roja con letras blancas.
+  La etiqueta debe comenzar EXACTAMENTE por "DAÑO ALTO:", "DAÑO MEDIO:" o "DAÑO BAJO:",
+  seguido de la pieza y el daño, por ejemplo: "DAÑO ALTO: fascia desprendida",
+  "DAÑO MEDIO: cofre abollado" o "DAÑO BAJO: rayón en puerta".
+- No utilices el formato "DAÑO: cofre abollado (MEDIO)" ni la etiqueta genérica "DAÑO:".
+- Es OBLIGATORIO unir cada etiqueta de daño con su rectángulo mediante una flecha ROJA clara.
+- Dibuja los rectángulos solo sobre la región afectada; no incluyas superficies sanas,
+  no dupliques hallazgos, usa una sola etiqueta por daño y evita saturar la imagen.
+- Si no hay daños ni objetos ajenos confirmados, no añadas ninguna anotación.
+- No repares, reconstruyas, agregues, elimines ni modifiques piezas u objetos: solo superpón anotaciones.
+
 """.strip()
 
 INSTRUCCIONES_REPORTE = """
@@ -196,6 +239,11 @@ Describe cada hallazgo con su ubicación y su certeza: Alta, Media o Baja.
 Para cada daño asigna severidad: Leve, Moderado o Grave, según el impacto
 funcional y estético observable (Leve: cosmético menor; Moderado: afecta
 uso o apariencia; Grave: afecta estructura, seguridad o funcionalidad).
+Correspondencia con las etiquetas de la imagen: DAÑO BAJO = Leve,
+DAÑO MEDIO = Moderado y DAÑO ALTO = Grave. Determina ambas clasificaciones
+solo a partir de evidencia visual; no infieras daño estructural o mecánico oculto.
+Si la etiqueta de la imagen anotada discrepa de la foto ORIGINAL, prevalece
+la fotografía ORIGINAL y explica la discrepancia en limitaciones.
 No inventes elementos ocultos. No afirmes causas o daños estructurales no visibles.
 Si no hay hallazgos confirmados, devuelve listas vacías.
 
@@ -242,7 +290,7 @@ def analizar_evidencia_vehiculo(archivo):
     archivo_edicion = io.BytesIO(png_original)
     archivo_edicion.name = "vehiculo_original.png"
     respuesta_imagen = cliente.with_options(timeout=180.0).images.edit(
-        model=getattr(settings, "OPENAI_IMAGE_MODEL", "gpt-image-2"),
+        model=getattr(settings, "OPENAI_IMAGE_MODEL", "gpt-image-2.5-sunburst"),
         image=archivo_edicion,
         prompt=PROMPT_ANOTACION,
         quality="high",
