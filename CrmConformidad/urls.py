@@ -1,7 +1,6 @@
 # crmConformidad/urls.py
-
 from django.urls import path
-from .jwt_authentication import CRMTokenRefreshView
+from .jwt_refresh import CRMTokenRefreshView
 from .views import (
     CasoListCreateView,
     PerfilUsuarioView,
@@ -24,13 +23,13 @@ urlpatterns = [
     path("api/docs/<int:pk>/", DocDeleteView.as_view(), name="docs-delete"),
     path("api/perfil/", PerfilUsuarioView.as_view(), name="perfil-usuario"),
 
-    # AUTH
+    # Autenticación
     path("api/auth/login/", AuthLoginView.as_view(), name="auth-login"),
     path("api/auth/register/", AuthRegisterView.as_view(), name="auth-register"),
     path("api/auth/me/", AuthMeView.as_view(), name="auth-me"),
     path("api/auth/token/refresh/", CRMTokenRefreshView.as_view(), name="token-refresh"),
 
-    # ADMIN
+    # Administración
     path("api/admin/roles/", AdminRolesView.as_view(), name="admin-roles"),
     path("api/admin/permisos/", AdminPermisosCatalogView.as_view(), name="admin-permisos"),
     path("api/admin/usuarios/", AdminUsuariosCreateView.as_view(), name="admin-usuarios"),
