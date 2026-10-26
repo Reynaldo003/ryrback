@@ -34,7 +34,7 @@ ADMIN_PERMISSIONS = {
 }
 
 # Agencias que se pueden consultar/editar SIN sesión (visualizadores públicos).
-AGENCIAS_PUBLICAS = {"VW Cordoba", "VW Orizaba"}
+AGENCIAS_PUBLICAS = {"VW Cordoba", "VW Orizaba", "VW Tuxtepec"}
 
 def normalizar_texto(value):
     texto = str(value or "").strip()
