@@ -1,3 +1,4 @@
+#Digitales/asesores_catalogo.py
 import hashlib
 import json
 import logging
@@ -40,7 +41,7 @@ def _invalidar_cache_asesores():
 class AsesorSerializer(serializers.ModelSerializer):
     class Meta:
         model = Asesor
-        fields = ["id", "nombre", "telefono", "tipo_asesor", "area", "agencia", "activo", "creado", "actualizado"]
+        fields = ["id", "nombre", "nombre_salesforce", "telefono", "tipo_asesor", "area", "agencia", "activo", "creado", "actualizado"]
         read_only_fields = ["id", "creado", "actualizado"]
 
     def validate_nombre(self, value):
@@ -48,6 +49,10 @@ class AsesorSerializer(serializers.ModelSerializer):
         if not nombre:
             raise serializers.ValidationError("El nombre del asesor es obligatorio.")
         return nombre
+
+    def validate_nombre_salesforce(self, value):
+        return str(value or "").strip()
+
 
     def validate_telefono(self, value):
         return str(value or "").strip()

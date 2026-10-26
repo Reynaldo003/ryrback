@@ -559,51 +559,15 @@ class RespuestaRapidaAsesor(models.Model):
         return f"{self.usuario_id} | {self.titulo or self.texto[:40]}"
 
 class Asesor(models.Model):
-    nombre = models.CharField(
-        max_length=200,
-        db_index=True,
-    )
-
-    telefono = models.CharField(
-        max_length=25,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    tipo_asesor = models.CharField(
-        max_length=80,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    area = models.CharField(
-        max_length=100,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    agencia = models.CharField(
-        max_length=150,
-        blank=True,
-        default="",
-        db_index=True,
-    )
-
-    activo = models.BooleanField(
-        default=True,
-        db_index=True,
-    )
-
-    creado = models.DateTimeField(
-        auto_now_add=True,
-    )
-
-    actualizado = models.DateTimeField(
-        auto_now=True,
-    )
+    nombre = models.CharField(max_length=200,db_index=True,)
+    nombre_salesforce = models.CharField(max_length=200, blank=True, default="")
+    telefono = models.CharField(max_length=25,blank=True,default="",db_index=True,)
+    tipo_asesor = models.CharField(max_length=80,blank=True,default="",db_index=True,)
+    area = models.CharField(max_length=100,blank=True,default="",db_index=True,)
+    agencia = models.CharField(max_length=150,blank=True,default="",db_index=True,)
+    activo = models.BooleanField(default=True,db_index=True,)
+    creado = models.DateTimeField(auto_now_add=True,)
+    actualizado = models.DateTimeField(auto_now=True,)
 
     class Meta:
         db_table = "digitales_catalogo_asesor"
