@@ -13,18 +13,25 @@ class Rol(models.Model):
     def __str__(self):
         return self.nombre
 
+
 class Usuario(models.Model):
+    ESTADOS = [
+        ("Activo", "Activo"),
+        ("Inactivo", "Inactivo"),
+    ]
+
     id_usuario = models.AutoField(primary_key=True)
     nombre = models.CharField(max_length=50)
     apellidos = models.CharField(max_length=70, blank=True, null=True)
     usuario = models.CharField(max_length=10)
     correo = models.EmailField(max_length=255)
     contrasena = models.CharField(max_length=255)
-    rol = models.ForeignKey(Rol,db_column="rol",on_delete=models.PROTECT)
+    rol = models.ForeignKey(Rol, db_column="rol", on_delete=models.PROTECT)
     agencia = models.CharField(max_length=255)
     telefono = models.CharField(max_length=100, null=True)
     interfaces = models.JSONField(null=True, blank=True)
-    foto = models.ImageField(upload_to="usuarios/perfiles/%Y/%m/",null=True,blank=True)
+    foto = models.ImageField(upload_to="usuarios/perfiles/%Y/%m/", null=True, blank=True)
+    estado = models.CharField(max_length=10, choices=ESTADOS, default="Activo")
 
     class Meta:
         db_table = "usuarios"
@@ -32,6 +39,7 @@ class Usuario(models.Model):
 
     def __str__(self):
         return f"{self.nombre} {self.apellidos or ''}".strip()
+
     @property
     def is_authenticated(self):
         return True

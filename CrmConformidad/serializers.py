@@ -340,33 +340,23 @@ class UsuarioLoginSerializer(serializers.Serializer):
         attrs["user"] = user
         return attrs
 
+
 class AdminUsuarioCreateSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=50)
-    apellidos = serializers.CharField(
-        max_length=70,
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
+    apellidos = serializers.CharField(max_length=70, required=False, allow_blank=True, allow_null=True)
     usuario = serializers.CharField(max_length=10)
     correo = serializers.EmailField(max_length=255)
-    telefono = serializers.CharField(
-        max_length=100,
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
+    telefono = serializers.CharField(max_length=100, required=False, allow_blank=True, allow_null=True)
     contrasena = serializers.CharField(write_only=True)
     agencia = serializers.CharField(max_length=255)
     id_rol = serializers.IntegerField()
     interfaces = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
+    estado = serializers.ChoiceField(choices=Usuario.ESTADOS, required=False, default="Activo")
 
     def validate_nombre(self, value):
         value = value.strip()
-
         if not value:
             raise serializers.ValidationError("El nombre es requerido.")
-
         return value
 
     def validate_usuario(self, value):
@@ -384,30 +374,17 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
     def validate_id_rol(self, value):
         if not Rol.objects.filter(id_rol=value).exists():
             raise serializers.ValidationError("Rol inválido.")
-
         return value
 
     def validate_contrasena(self, value):
         if len(value) < 8:
-            raise serializers.ValidationError(
-                "La contraseña debe tener al menos 8 caracteres."
-            )
-
+            raise serializers.ValidationError("La contraseña debe tener al menos 8 caracteres.")
         if not re.search(r"[A-Z]", value):
-            raise serializers.ValidationError(
-                "La contraseña debe contener al menos una mayúscula."
-            )
-
+            raise serializers.ValidationError("La contraseña debe contener al menos una mayúscula.")
         if not re.search(r"[0-9]", value):
-            raise serializers.ValidationError(
-                "La contraseña debe contener al menos un número."
-            )
-
+            raise serializers.ValidationError("La contraseña debe contener al menos un número.")
         if not re.search(r"[^A-Za-z0-9]", value):
-            raise serializers.ValidationError(
-                "La contraseña debe contener al menos un símbolo."
-            )
-
+            raise serializers.ValidationError("La contraseña debe contener al menos un símbolo.")
         return value
 
     def validate_interfaces(self, value):
@@ -415,7 +392,6 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
 
     def create(self, validated_data):
         rol = Rol.objects.get(id_rol=validated_data["id_rol"])
-
         return Usuario.objects.create(
             nombre=validated_data["nombre"],
             apellidos=validated_data.get("apellidos") or "",
@@ -426,7 +402,9 @@ class AdminUsuarioCreateSerializer(serializers.Serializer):
             rol=rol,
             agencia=validated_data["agencia"],
             interfaces=validated_data.get("interfaces"),
+            estado=validated_data.get("estado", "Activo"),
         )
+
 
 class AdminUsuarioUpdateSerializer(serializers.Serializer):
     nombre = serializers.CharField(max_length=50, required=False)
@@ -438,15 +416,15 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
     agencia = serializers.CharField(max_length=255, required=False)
     id_rol = serializers.IntegerField(required=False)
     interfaces = serializers.CharField(required=False, allow_blank=True, allow_null=True, write_only=True)
+    estado = serializers.ChoiceField(choices=Usuario.ESTADOS, required=False)
 
     def validate_nombre(self, value):
         value = value.strip()
-        if not value: raise serializers.ValidationError("El nombre no puede quedar vacío.")
+        if not value:
+            raise serializers.ValidationError("El nombre no puede quedar vacío.")
         return value
 
     def validate_usuario(self, value):
-        # Usuarios ya existentes pueden conservar caracteres especiales
-        # (ej. "NanciR&R"); la restricción de caracteres solo aplica al crear.
         return validar_nombre_usuario(
             value,
             excluir_id=self.instance.id_usuario,
@@ -461,36 +439,54 @@ class AdminUsuarioUpdateSerializer(serializers.Serializer):
 
     def validate_agencia(self, value):
         value = limpiar_agencias(value)
-        if not value: raise serializers.ValidationError("Selecciona al menos una agencia.")
+        if not value:
+            raise serializers.ValidationError("Selecciona al menos una agencia.")
         return value
 
     def validate_id_rol(self, value):
-        if not Rol.objects.filter(id_rol=value).exists(): raise serializers.ValidationError("Rol inválido.")
+        if not Rol.objects.filter(id_rol=value).exists():
+            raise serializers.ValidationError("Rol inválido.")
         return value
 
     def validate_interfaces(self, value):
         return validar_interfaces(value)
 
     def validate_contrasena(self, value):
-        if not value: return ""
-        if len(value) < 8: raise serializers.ValidationError("La contraseña debe tener al menos 8 caracteres.")
-        if not re.search(r"[A-Z]", value): raise serializers.ValidationError("La contraseña debe contener al menos una mayúscula.")
-        if not re.search(r"[0-9]", value): raise serializers.ValidationError("La contraseña debe contener al menos un número.")
-        if not re.search(r"[^A-Za-z0-9]", value): raise serializers.ValidationError("La contraseña debe contener al menos un símbolo.")
+        if not value:
+            return ""
+        if len(value) < 8:
+            raise serializers.ValidationError("La contraseña debe tener al menos 8 caracteres.")
+        if not re.search(r"[A-Z]", value):
+            raise serializers.ValidationError("La contraseña debe contener al menos una mayúscula.")
+        if not re.search(r"[0-9]", value):
+            raise serializers.ValidationError("La contraseña debe contener al menos un número.")
+        if not re.search(r"[^A-Za-z0-9]", value):
+            raise serializers.ValidationError("La contraseña debe contener al menos un símbolo.")
         return value
 
     def update(self, instance, validated_data):
-        if "nombre" in validated_data: instance.nombre = validated_data["nombre"].strip()
-        if "apellidos" in validated_data: instance.apellidos = (validated_data.get("apellidos") or "").strip()
-        if "usuario" in validated_data: instance.usuario = validated_data["usuario"].strip()
-        if "correo" in validated_data: instance.correo = validated_data["correo"].strip().lower()
-        if "telefono" in validated_data: instance.telefono = validated_data.get("telefono") or ""
-        if "agencia" in validated_data: instance.agencia = validated_data["agencia"]
-        if "id_rol" in validated_data: instance.rol = Rol.objects.get(id_rol=validated_data["id_rol"])
-        if "interfaces" in validated_data: instance.interfaces = validated_data["interfaces"]
+        if "nombre" in validated_data:
+            instance.nombre = validated_data["nombre"].strip()
+        if "apellidos" in validated_data:
+            instance.apellidos = (validated_data["apellidos"] or "").strip()
+        if "usuario" in validated_data:
+            instance.usuario = validated_data["usuario"].strip()
+        if "correo" in validated_data:
+            instance.correo = validated_data["correo"].strip().lower()
+        if "telefono" in validated_data:
+            instance.telefono = validated_data["telefono"] or ""
+        if "agencia" in validated_data:
+            instance.agencia = validated_data["agencia"]
+        if "id_rol" in validated_data:
+            instance.rol = Rol.objects.get(id_rol=validated_data["id_rol"])
+        if "interfaces" in validated_data:
+            instance.interfaces = validated_data["interfaces"]
+        if "estado" in validated_data:
+            instance.estado = validated_data["estado"]
 
         contrasena = validated_data.get("contrasena")
-        if contrasena: instance.contrasena = make_password(contrasena)
+        if contrasena:
+            instance.contrasena = make_password(contrasena)
 
         instance.save()
         return instance

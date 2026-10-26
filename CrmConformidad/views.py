@@ -120,10 +120,7 @@ def obtener_foto_url(user, request=None):
 
     return url
 
-
-
 def serialize_usuario(user, request=None):
-    """Datos públicos del usuario para login y /auth/me/."""
     rol_nombre = user.rol.nombre if user.rol else ""
     nombre_completo = f"{user.nombre or ''} {user.apellidos or ''}".strip()
 
@@ -138,11 +135,11 @@ def serialize_usuario(user, request=None):
         "rol": rol_nombre,
         "agencia": user.agencia,
         "telefono": user.telefono,
+        "estado": user.estado,
         "foto_url": obtener_foto_url(user, request),
         "interfaces": getattr(user, "interfaces", None),
         "permisos": permisos_por_usuario(user),
     }
-
 
 def generar_jwt_usuario(user):
     """
@@ -301,6 +298,21 @@ class AuthLoginView(APIView):
             )
 
         user = ser.validated_data["user"]
+
+        if user.estado != "Activo":
+            registrar_log(
+                usuario=user,
+                tipo="LOGIN_FALLIDO",
+                modulo="auth",
+                entidad=f"Usuario {user.usuario}",
+                cambio="Intento de acceso a una cuenta desactivada",
+                ip=request.META.get("REMOTE_ADDR"),
+            )
+            return Response(
+                {"detail": "Tu cuenta está desactivada. Contacta al administrador."},
+                status=status.HTTP_403_FORBIDDEN,
+            )
+
         jwt = generar_jwt_usuario(user)
         user_data = serialize_usuario(user, request)
 
@@ -315,19 +327,13 @@ class AuthLoginView(APIView):
 
         return Response(
             {
-                # Compatibilidad con frontend viejo:
-                # token ahora también es JWT access.
                 "token": jwt["access"],
-
-                # JWT real:
                 "access": jwt["access"],
                 "refresh": jwt["refresh"],
-
                 "user": user_data,
             },
             status=status.HTTP_200_OK,
         )
-
 
 class AuthMeView(APIView):
     authentication_classes = [CRMJWTAuthentication]
@@ -451,6 +457,7 @@ class AdminPermisosCatalogView(APIView):
 
         return Response(data)
 
+
 def serializar_usuario_admin(u):
     return {
         "id": u.id_usuario,
@@ -459,7 +466,7 @@ def serializar_usuario_admin(u):
         "apellidos": u.apellidos,
         "usuario": u.usuario,
         "correo": u.correo,
-        "estado": "Activo",
+        "estado": u.estado,
         "agencia": u.agencia,
         "telefono": u.telefono or "",
         "id_rol": u.rol.id_rol if u.rol else None,
@@ -467,6 +474,7 @@ def serializar_usuario_admin(u):
         "interfaces": getattr(u, "interfaces", None),
         "permisos": permisos_por_usuario(u),
     }
+
 
 class AdminUsuariosCreateView(APIView):
     authentication_classes = [CRMJWTAuthentication]
@@ -484,13 +492,17 @@ class AdminUsuariosCreateView(APIView):
         usuario = ser.save()
         return Response(serializar_usuario_admin(usuario), status=status.HTTP_201_CREATED)
 
+
 class AdminUsuarioDetailView(APIView):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated, IsAdminRole]
     parser_classes = [MultiPartParser, FormParser]
 
     def get_object(self, pk):
-        return get_object_or_404(Usuario.objects.select_related("rol"), id_usuario=pk)
+        return get_object_or_404(
+            Usuario.objects.select_related("rol"),
+            id_usuario=pk
+        )
 
     def get(self, request, pk):
         return Response(serializar_usuario_admin(self.get_object(pk)))
@@ -498,16 +510,29 @@ class AdminUsuarioDetailView(APIView):
     @transaction.atomic
     def patch(self, request, pk):
         usuario = self.get_object(pk)
-        ser = AdminUsuarioUpdateSerializer(usuario, data=request.data, partial=True)
 
-        if not ser.is_valid(): return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
+        if usuario.id_usuario == request.user.id_usuario and request.data.get("estado") == "Inactivo":
+            return Response(
+                {"detail": "No puedes desactivar tu propia cuenta."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        ser = AdminUsuarioUpdateSerializer(
+            usuario,
+            data=request.data,
+            partial=True
+        )
+
+        if not ser.is_valid():
+            return Response(ser.errors, status=status.HTTP_400_BAD_REQUEST)
 
         usuario = ser.save()
         usuario.refresh_from_db()
-        usuario = Usuario.objects.select_related("rol").get(id_usuario=usuario.id_usuario)
 
-        return Response(serializar_usuario_admin(usuario), status=status.HTTP_200_OK)
-    
+        return Response(
+            serializar_usuario_admin(usuario),
+            status=status.HTTP_200_OK
+        )    
 class PerfilUsuarioView(APIView):
     authentication_classes = [CRMJWTAuthentication]
     permission_classes = [IsAuthenticated]
