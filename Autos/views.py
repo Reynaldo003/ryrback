@@ -1,4 +1,5 @@
 # Autos/views.py
+import re
 from django.core.cache import cache
 from django.db import connections
 from django.db.models import F
@@ -48,6 +49,16 @@ def normalizar_vin(valor):
     return str(valor or "").strip().upper()
 
 
+def normalizar_busqueda_vin(valor):
+    """Normaliza un VIN pegado con espacios o guiones."""
+    return re.sub(r"[^A-Z0-9]", "", str(valor or "").upper())
+
+
+def es_vin_completo(valor):
+    """Reconoce VIN completos de 17 caracteres (sin I, O ni Q)."""
+    return bool(re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", normalizar_busqueda_vin(valor)))
+
+
 def obtener_vins_digitales():
     """Lee los VIN de CRM. Caché corta para evitar repetir el cruce por cada filtro."""
     clave = "vw_vn_vins_digitales"
@@ -93,14 +104,19 @@ def leer_filtros(request, fecha_desde=None, fecha_hasta=None):
 
 
 def construir_where(filtros, vins_digitales=None):
-    """SQL parametrizado; las únicas expresiones dinámicas proceden de constantes internas."""
+    """Construye el WHERE; un VIN completo puede encontrarse sin limitar por fecha."""
     # N y U se validan en leer_filtros. El literal permite utilizar índices parciales.
     condiciones = [f'"CondUso" = {filtros["cond_uso"]!r}']
     parametros = []
-    if filtros["fecha_desde"]:
+
+    texto_busqueda = str(filtros.get("q") or "").strip()
+    buscar_vin = es_vin_completo(texto_busqueda)
+
+    # El rango de fechas solo se omite al buscar un VIN completo.
+    if not buscar_vin and filtros["fecha_desde"]:
         condiciones.append('"DtEmissao" >= %s')
         parametros.append(filtros["fecha_desde"])
-    if filtros["fecha_hasta"]:
+    if not buscar_vin and filtros["fecha_hasta"]:
         condiciones.append('"DtEmissao" <= %s')
         parametros.append(filtros["fecha_hasta"])
 
@@ -121,10 +137,12 @@ def construir_where(filtros, vins_digitales=None):
             condiciones.append(f"{columna} = %s")
             parametros.append(filtros[clave])
 
-    if filtros["q"]:
+    if texto_busqueda:
+        # Si es VIN completo, normaliza espacios/guiones antes de buscarlo.
+        termino = normalizar_busqueda_vin(texto_busqueda) if buscar_vin else texto_busqueda
         columnas = ('"Serie"', '"RazaoSocial"', '"Asesor"', '"AGENCIA"', '"NmFamilia"', '"ProdOuServ"')
         condiciones.append("(" + " OR ".join(f"{campo} ILIKE %s" for campo in columnas) + ")")
-        parametros.extend([f'%{filtros["q"]}%'] * len(columnas))
+        parametros.extend([f'%{termino}%'] * len(columnas))
 
     if filtros["venta_digital"] in ("1", "true", "si", "sí"):
         if vins_digitales:
