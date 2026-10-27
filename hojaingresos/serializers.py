@@ -1,6 +1,6 @@
 # hojaingresos/serializers.py
 import re
-from datetime import datetime
+from datetime import datetime, time
 from decimal import Decimal, InvalidOperation
 from inspector_ai.campos_tarjeta_viajera import MAPA_CAMPOS_TARJETA
 
