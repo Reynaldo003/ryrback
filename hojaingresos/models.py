@@ -301,3 +301,12 @@ class TallerActividad(models.Model):
         ).strip()
 
         super().save(*args, **kwargs)
+
+class TarjetaViajeraDetalle(models.Model):
+    ingreso = models.OneToOneField(
+        HojaIngresos,
+        on_delete=models.CASCADE,
+        related_name="tarjeta_viajera_detalle"
+    )
+    datos = models.JSONField(default=dict, blank=True)
+    actualizado_en = models.DateTimeField(auto_now=True)
