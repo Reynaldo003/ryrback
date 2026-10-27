@@ -15,6 +15,12 @@ from rest_framework.response import Response
 from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
+from django.db.models import Q
+from django.http import HttpResponse
+from django.shortcuts import get_object_or_404
+from hojaingresos.models import HojaIngresos
+from .tarjeta_viajera import generar_tarjeta_viajera
+
 logger = logging.getLogger(__name__)
 
 MAX_IMAGENES = 12
@@ -237,7 +243,7 @@ class InspectorCitasView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
 
-    AGENCIAS_PUBLICAS = ("VW Cordoba", "VW Orizaba")
+    AGENCIAS_PUBLICAS = ("VW Cordoba", "VW Orizaba", "VW Tuxtepec")
     LIMITE_DEFAULT = 40
     LIMITE_MAXIMO = 200
 
@@ -354,3 +360,38 @@ class InspectorAnalizarView(APIView):
         except Exception:
             logger.exception("Inspector IA: error inesperado")
             return Response({"error": "Error interno al analizar las fotografías."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+class TarjetaViajeraThrottle(AnonRateThrottle):
+    rate = "30/hour"
+
+
+class TarjetaViajeraPDFView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+    throttle_classes = [TarjetaViajeraThrottle]
+
+    def get(self, request, cita_id):
+        filtro_agencias = Q()
+
+        for agencia in InspectorCitasView.AGENCIAS_PUBLICAS:
+            filtro_agencias |= Q(agencia__iexact=agencia)
+
+        cita = get_object_or_404(
+            HojaIngresos.objects.select_related("cliente", "taller"),
+            filtro_agencias,
+            pk=cita_id
+        )
+
+        contenido_pdf = generar_tarjeta_viajera(cita)
+
+        respuesta = HttpResponse(
+            contenido_pdf,
+            content_type="application/pdf"
+        )
+
+        respuesta["Content-Disposition"] = (
+            f'attachment; filename="tarjeta_viajera_{cita.id}.pdf"'
+        )
+        respuesta["Cache-Control"] = "no-store"
+
+        return respuesta
