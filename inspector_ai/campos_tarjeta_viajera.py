@@ -31,15 +31,15 @@ def construir_campos():
 
     # PÁGINA 1 — Preparación de cita: conservar los datos CRM ya rellenados por el generador.
     opcion("campana_elsapro", "Campaña en ElsaPro", 1,
-           [("si", "Sí", 233, 105), ("no", "No", 266, 105)], "Preparación de la cita")
-    texto("numero_campana", "Número de campaña", 1, 222, 126, 58, 10, "Preparación de la cita")
+           [("si", "Sí", 233.4, 103.8), ("no", "No", 268.2, 104.4)], "Preparación de la cita")
+    texto("numero_campana", "Número de campaña", 1, 220, 117, 60, 12, "Preparación de la cita")
     opcion("movilidad", "¿Requiere movilidad?", 1,
-           [("si", "Sí", 502, 88), ("no", "No", 548, 88)], "Preparación de la cita")
-    casilla("auto_movilidad", "Auto de movilidad", 1, 548, 105, "Preparación de la cita")
-    casilla("taxi_transporte", "Taxi/transporte", 1, 548, 117, "Preparación de la cita")
-    texto("otro_transporte", "Otro transporte", 1, 499, 126, 70, 10, "Preparación de la cita")
-    casilla("tabla_mantenimiento_fisica", "Tabla de mantenimiento física", 1, 575, 183, "Preparación de la cita")
-    casilla("tabla_mantenimiento_digital", "Tabla de mantenimiento digital", 1, 575, 192, "Preparación de la cita")
+           [("si", "Sí", 503, 87), ("no", "No", 547.5, 87.7)], "Preparación de la cita")
+    casilla("auto_movilidad", "Auto de movilidad", 1, 548.4, 101.4, "Preparación de la cita")
+    casilla("taxi_transporte", "Taxi/transporte", 1, 548.4, 112.3, "Preparación de la cita")
+    texto("otro_transporte", "Otro transporte", 1, 511, 113, 60, 12, "Preparación de la cita")
+    casilla("tabla_mantenimiento_fisica", "Tabla de mantenimiento física", 1, 574.5, 178.5, "Preparación de la cita")
+    casilla("tabla_mantenimiento_digital", "Tabla de mantenimiento digital", 1, 574.5, 187.5, "Preparación de la cita")
 
     # Inventario de auto: cada ítem se guarda de forma independiente.
     inventario_izquierda = [
