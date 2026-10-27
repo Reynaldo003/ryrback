@@ -1,6 +1,8 @@
 # hojaingresos/serializers.py
 import re
-from datetime import time
+from datetime import datetime
+from decimal import Decimal, InvalidOperation
+from inspector_ai.campos_tarjeta_viajera import MAPA_CAMPOS_TARJETA
 
 from django.db import transaction
 from rest_framework import serializers
@@ -716,29 +718,57 @@ class TarjetaViajeraDetalleSerializer(serializers.ModelSerializer):
         read_only_fields = ("actualizado_en",)
 
     def validate_datos(self, datos):
-        campos_permitidos = {
-            "observaciones_taller",
-            "km_inicial_prueba_1",
-            "km_final_prueba_1",
-        }
-
         if not isinstance(datos, dict):
             raise serializers.ValidationError("Los datos deben ser un objeto JSON.")
 
-        desconocidos = set(datos) - campos_permitidos
+        desconocidos = set(datos) - set(MAPA_CAMPOS_TARJETA)
         if desconocidos:
             raise serializers.ValidationError(
-                f"Campos no permitidos: {', '.join(sorted(desconocidos))}."
+                f"Campos no permitidos: {', '.join(sorted(desconocidos))}"
             )
 
-        for campo, valor in datos.items():
-            if not isinstance(valor, str):
-                raise serializers.ValidationError(f"{campo} debe ser un texto.")
+        for nombre, valor in datos.items():
+            campo = MAPA_CAMPOS_TARJETA[nombre]
+            tipo = campo["tipo"]
 
-            if campo == "observaciones_taller":
-                if len(valor) > 500:
-                    raise serializers.ValidationError("Máximo 500 caracteres en observaciones.")
-            elif valor and (not valor.isascii() or not valor.isdigit() or len(valor) > 8):
-                raise serializers.ValidationError(f"{campo} debe tener máximo 8 dígitos.")
+            if tipo == "casilla":
+                if not isinstance(valor, bool):
+                    raise serializers.ValidationError(f"{nombre} debe ser verdadero o falso.")
+                continue
+
+            if not isinstance(valor, str):
+                raise serializers.ValidationError(f"{nombre} debe ser texto.")
+
+            if tipo == "opcion":
+                permitidas = {op["valor"] for op in campo["opciones"]}
+                if valor and valor not in permitidas:
+                    raise serializers.ValidationError(f"Opción inválida en {nombre}.")
+
+            elif tipo == "numero" and valor:
+                try:
+                    numero = Decimal(valor)
+                    if not numero.is_finite() or numero < 0:
+                        raise ValueError()
+                except (InvalidOperation, ValueError):
+                    raise serializers.ValidationError(f"Número inválido en {nombre}.")
+
+            elif tipo == "fecha" and valor:
+                try:
+                    datetime.strptime(valor, "%Y-%m-%d")
+                except ValueError:
+                    raise serializers.ValidationError(f"Fecha inválida en {nombre}.")
+
+            elif tipo == "hora" and valor:
+                try:
+                    datetime.strptime(valor, "%H:%M")
+                except ValueError:
+                    raise serializers.ValidationError(f"Hora inválida en {nombre}.")
+
+            limite = 180 if nombre == "observaciones_taller" else 120
+            if len(valor) > limite:
+                raise serializers.ValidationError(
+                    f"{nombre} supera el máximo de {limite} caracteres."
+                )
 
         return datos
+    

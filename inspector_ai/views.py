@@ -21,6 +21,7 @@ from django.http import HttpResponse
 from hojaingresos.models import HojaIngresos, TarjetaViajeraDetalle
 from hojaingresos.serializers import TarjetaViajeraDetalleSerializer
 from .tarjeta_viajera import generar_tarjeta_viajera
+from .campos_tarjeta_viajera import CAMPOS_TARJETA_VIAJERA
 
 logger = logging.getLogger(__name__)
 
@@ -387,10 +388,12 @@ class TarjetaViajeraDatosView(APIView):
         detalle = getattr(cita, "tarjeta_viajera_detalle", None)
 
         if detalle is None:
-            return Response({"datos": {}, "actualizado_en": None})
+            resultado = {"datos": {}, "actualizado_en": None}
+        else:
+            resultado = dict(TarjetaViajeraDetalleSerializer(detalle).data)
 
-        serializer = TarjetaViajeraDetalleSerializer(detalle)
-        return Response(serializer.data)
+        resultado["campos"] = CAMPOS_TARJETA_VIAJERA
+        return Response(resultado)
 
     def patch(self, request, cita_id):
         cita = obtener_cita_tarjeta(cita_id)

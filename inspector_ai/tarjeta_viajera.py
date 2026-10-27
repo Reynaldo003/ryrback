@@ -1,15 +1,12 @@
-
 from datetime import datetime
 from pathlib import Path
 import unicodedata
 from zoneinfo import ZoneInfo
-
+from .campos_tarjeta_viajera import CAMPOS_TARJETA_VIAJERA
 import fitz
-
 
 RUTA_PLANTILLA = Path(__file__).resolve().parent / "plantillas" / "tarjeta_viajera.pdf"
 COLOR_TEXTO = (0.02, 0.20, 0.38)
-
 
 def preparar_texto(valor):
     texto = str(valor or "").strip().replace("\n", " ")
@@ -100,6 +97,45 @@ def escribir_caja(pagina, rectangulo, valor):
         if resultado >= 0:
             return
 
+def dibujar_campos_editables(documento, cita):
+    detalle = getattr(cita, "tarjeta_viajera_detalle", None)
+    datos = detalle.datos if detalle else {}
+
+    for campo in CAMPOS_TARJETA_VIAJERA:
+        valor = datos.get(campo["nombre"])
+        if valor is None or valor == "":
+            continue
+
+        pagina = documento[campo["pagina"] - 1]
+        tipo = campo["tipo"]
+
+        if tipo == "casilla":
+            if valor is True:
+                marcar(pagina, campo["x"], campo["y"])
+            continue
+
+        if tipo == "opcion":
+            for opcion in campo["opciones"]:
+                if opcion["valor"] == valor:
+                    marcar(pagina, opcion["x"], opcion["y"])
+                    break
+            continue
+
+        if tipo == "fecha":
+            try:
+                valor = datetime.strptime(valor, "%Y-%m-%d").strftime("%d/%m/%Y")
+            except ValueError:
+                continue
+
+        rectangulo = fitz.Rect(
+            campo["x"],
+            campo["y"],
+            campo["x"] + campo["ancho"],
+            campo["y"] + campo["alto"]
+        )
+
+        escribir_caja(pagina, rectangulo, valor)
+
 def generar_tarjeta_viajera(cita):
     cliente = cita.cliente
 
@@ -164,12 +200,6 @@ def generar_tarjeta_viajera(cita):
         if cita.no_orden:
             escribir(documento[2], 46, 92, cita.no_orden, 85, 8)
 
-        detalle = getattr(cita, "tarjeta_viajera_detalle", None)
-        datos = detalle.datos if detalle else {}
-
-        if datos:
-            escribir_caja(pagina,fitz.Rect(80, 730, 450, 755),datos.get("observaciones_taller", ""))
-            escribir(documento[1],69,119,datos.get("km_inicial_prueba_1"),75,8)
-            escribir(documento[1],166,119,datos.get("km_final_prueba_1"),75,8)
+        dibujar_campos_editables(documento, cita)
 
         return documento.tobytes(garbage=4, deflate=True)
