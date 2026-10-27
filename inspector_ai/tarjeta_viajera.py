@@ -81,6 +81,24 @@ def fecha_local(valor):
 
     return valor
 
+def escribir_caja(pagina, rectangulo, valor):
+    texto = preparar_texto(valor)
+
+    if not texto:
+        return
+
+    for tamano in (8, 7, 6, 5):
+        resultado = pagina.insert_textbox(
+            rectangulo,
+            texto,
+            fontname="helv",
+            fontsize=tamano,
+            color=COLOR_TEXTO,
+            lineheight=1.1
+        )
+
+        if resultado >= 0:
+            return
 
 def generar_tarjeta_viajera(cita):
     cliente = cita.cliente
@@ -145,5 +163,13 @@ def generar_tarjeta_viajera(cita):
 
         if cita.no_orden:
             escribir(documento[2], 46, 92, cita.no_orden, 85, 8)
+
+        detalle = getattr(cita, "tarjeta_viajera_detalle", None)
+        datos = detalle.datos if detalle else {}
+
+        if datos:
+            escribir_caja(pagina,fitz.Rect(80, 730, 450, 755),datos.get("observaciones_taller", ""))
+            escribir(documento[1],69,119,datos.get("km_inicial_prueba_1"),75,8)
+            escribir(documento[1],166,119,datos.get("km_final_prueba_1"),75,8)
 
         return documento.tobytes(garbage=4, deflate=True)

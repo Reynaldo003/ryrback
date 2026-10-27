@@ -310,3 +310,8 @@ class TarjetaViajeraDetalle(models.Model):
     )
     datos = models.JSONField(default=dict, blank=True)
     actualizado_en = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        db_table = "tarjeta_viajera_detalle"
+    def __str__(self):
+        return f"Tarjeta Viajera - ingreso {self.ingreso_id}"

@@ -6,7 +6,7 @@ from django.db import transaction
 from rest_framework import serializers
 
 from citas.models import ClienteComercial, normaliza_tel_mx
-from .models import HojaIngresos, HojaIngresoEvidencia, HojaIngresoAnalisisIA, TallerActividad
+from .models import HojaIngresos, HojaIngresoEvidencia, HojaIngresoAnalisisIA, TallerActividad, TarjetaViajeraDetalle
 
 CAMPOS_TALLER = (
     "tecnico",
@@ -709,3 +709,36 @@ class HojaIngresosSerializer(serializers.ModelSerializer):
             .select_related("cliente", "taller")
             .get(pk=instance.pk)
         )
+class TarjetaViajeraDetalleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = TarjetaViajeraDetalle
+        fields = ("datos", "actualizado_en")
+        read_only_fields = ("actualizado_en",)
+
+    def validate_datos(self, datos):
+        campos_permitidos = {
+            "observaciones_taller",
+            "km_inicial_prueba_1",
+            "km_final_prueba_1",
+        }
+
+        if not isinstance(datos, dict):
+            raise serializers.ValidationError("Los datos deben ser un objeto JSON.")
+
+        desconocidos = set(datos) - campos_permitidos
+        if desconocidos:
+            raise serializers.ValidationError(
+                f"Campos no permitidos: {', '.join(sorted(desconocidos))}."
+            )
+
+        for campo, valor in datos.items():
+            if not isinstance(valor, str):
+                raise serializers.ValidationError(f"{campo} debe ser un texto.")
+
+            if campo == "observaciones_taller":
+                if len(valor) > 500:
+                    raise serializers.ValidationError("Máximo 500 caracteres en observaciones.")
+            elif valor and (not valor.isascii() or not valor.isdigit() or len(valor) > 8):
+                raise serializers.ValidationError(f"{campo} debe tener máximo 8 dígitos.")
+
+        return datos

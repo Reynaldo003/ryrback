@@ -16,9 +16,10 @@ from rest_framework.throttling import AnonRateThrottle
 from rest_framework.views import APIView
 
 from django.db.models import Q
-from django.http import HttpResponse
 from django.shortcuts import get_object_or_404
-from hojaingresos.models import HojaIngresos
+from django.http import HttpResponse
+from hojaingresos.models import HojaIngresos, TarjetaViajeraDetalle
+from hojaingresos.serializers import TarjetaViajeraDetalleSerializer
 from .tarjeta_viajera import generar_tarjeta_viajera
 
 logger = logging.getLogger(__name__)
@@ -364,31 +365,59 @@ class InspectorAnalizarView(APIView):
 class TarjetaViajeraThrottle(AnonRateThrottle):
     rate = "30/hour"
 
+def obtener_cita_tarjeta(cita_id):
+    filtro = Q()
+
+    for agencia in InspectorCitasView.AGENCIAS_PUBLICAS:
+        filtro |= Q(agencia__iexact=agencia)
+
+    return get_object_or_404(
+        HojaIngresos.objects.select_related(
+            "cliente", "taller", "tarjeta_viajera_detalle"
+        ).filter(filtro),
+        pk=cita_id
+    )
+
+class TarjetaViajeraDatosView(APIView):
+    authentication_classes = []
+    permission_classes = [AllowAny]
+
+    def get(self, request, cita_id):
+        cita = obtener_cita_tarjeta(cita_id)
+        detalle = getattr(cita, "tarjeta_viajera_detalle", None)
+
+        if detalle is None:
+            return Response({"datos": {}, "actualizado_en": None})
+
+        serializer = TarjetaViajeraDetalleSerializer(detalle)
+        return Response(serializer.data)
+
+    def patch(self, request, cita_id):
+        cita = obtener_cita_tarjeta(cita_id)
+
+        serializer = TarjetaViajeraDetalleSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        detalle, creado = TarjetaViajeraDetalle.objects.update_or_create(
+            ingreso=cita,
+            defaults={"datos": serializer.validated_data["datos"]}
+        )
+
+        resultado = TarjetaViajeraDetalleSerializer(detalle)
+        return Response(resultado.data)
 
 class TarjetaViajeraPDFView(APIView):
     authentication_classes = []
     permission_classes = [AllowAny]
-    throttle_classes = [TarjetaViajeraThrottle]
 
     def get(self, request, cita_id):
-        filtro_agencias = Q()
-
-        for agencia in InspectorCitasView.AGENCIAS_PUBLICAS:
-            filtro_agencias |= Q(agencia__iexact=agencia)
-
-        cita = get_object_or_404(
-            HojaIngresos.objects.select_related("cliente", "taller"),
-            filtro_agencias,
-            pk=cita_id
-        )
-
+        cita = obtener_cita_tarjeta(cita_id)
         contenido_pdf = generar_tarjeta_viajera(cita)
 
         respuesta = HttpResponse(
             contenido_pdf,
             content_type="application/pdf"
         )
-
         respuesta["Content-Disposition"] = (
             f'attachment; filename="tarjeta_viajera_{cita.id}.pdf"'
         )
