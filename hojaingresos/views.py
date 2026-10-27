@@ -18,7 +18,7 @@ from django.core.files.base import ContentFile
 from django.http import FileResponse
 from django.http.response import Http404
 from openai import OpenAIError
-from inspector_ai.servicios_hoja_ingresos import analizar_evidencia_vehiculo
+from inspector_ai.servicios_hoja_ingresos import generar_reporte_vehiculo, generar_imagen_vehiculo
 from inspector_ai.views import (
     ImagenInvalidaError,
     ConfiguracionIAError,
@@ -479,6 +479,10 @@ class HojaIngresosViewSet(ModelViewSet):
         throttle_classes=[InspectorPublicoThrottle],
     )
     def analizar_ia(self, request, pk=None):
+        """POST fase=texto devuelve el JSON; fase=imagen añade después la imagen.
+
+        La fase omitida mantiene compatibilidad con el frontend previo.
+        """
         ingreso = self.get_object()
         self._validar_agencia(ingreso.agencia)
 
@@ -488,83 +492,75 @@ class HojaIngresosViewSet(ModelViewSet):
             evidencia_id = 0
 
         evidencia = ingreso.evidencias.filter(pk=evidencia_id).first()
-
         if not evidencia:
             return Response(
                 {"detail": "La evidencia no pertenece a esta cita."},
-                status=404,
+                status=status.HTTP_404_NOT_FOUND,
             )
-
         extension = os.path.splitext(
             evidencia.nombre_original or evidencia.archivo.name
         )[1].lower()
-
         if extension not in {".jpg", ".jpeg", ".png", ".webp"}:
             return Response(
                 {"detail": "Solo se pueden analizar fotografías JPG, PNG o WEBP."},
-                status=400,
+                status=status.HTTP_400_BAD_REQUEST,
             )
 
-        forzar = str(
-            request.data.get("forzar", "")
-        ).strip().lower() in {"1", "true", "si", "sí"}
-
-        anterior = HojaIngresoAnalisisIA.objects.filter(
-            evidencia=evidencia
-        ).first()
-
-        if anterior and not forzar:
-            serializer = HojaIngresoAnalisisIASerializer(
-                anterior,
-                context={"request": request},
-            )
-            return Response(serializer.data)
-
-        if anterior and forzar:
-            anterior.delete()
-
+        fase = str(request.data.get("fase") or "completo").strip().lower()
+        if fase not in {"texto", "imagen", "completo"}:
+            return Response({"detail": "Fase no válida."}, status=400)
+        forzar = str(request.data.get("forzar", "")).strip().lower() in {
+            "1", "true", "si", "sí"
+        }
+        anterior = HojaIngresoAnalisisIA.objects.filter(evidencia=evidencia).first()
         try:
-            with evidencia.archivo.open("rb") as archivo:
-                reporte, imagen_png = analizar_evidencia_vehiculo(archivo)
+            # Fase 1. Conservamos resultados anteriores si el usuario no pidió reanalizar.
+            if fase != "imagen" and (anterior is None or forzar):
+                with evidencia.archivo.open("rb") as archivo:
+                    reporte = generar_reporte_vehiculo(archivo)
+                if anterior is None:
+                    anterior = HojaIngresoAnalisisIA.objects.create(
+                        ingreso=ingreso,
+                        evidencia=evidencia,
+                        reporte=reporte,
+                        imagen_resultado="",  # Se completa en la fase 2.
+                    )
+                else:
+                    # Nunca se elimina el reporte anterior ANTES de generar el nuevo.
+                    # Conservamos físicamente la imagen anterior por seguridad.
+                    # La desvinculamos del reporte nuevo hasta generar su reemplazo.
+                    anterior.imagen_resultado = ""
+                    anterior.reporte = reporte
+                    anterior.save(update_fields=["reporte", "imagen_resultado"])
 
-            analisis = HojaIngresoAnalisisIA(
-                ingreso=ingreso,
-                evidencia=evidencia,
-                reporte=reporte,
-            )
+            if fase == "imagen" and anterior is None:
+                return Response(
+                    {"detail": "Primero debes generar el reporte de texto."},
+                    status=status.HTTP_409_CONFLICT,
+                )
 
-            analisis.imagen_resultado.save(
-                f"inspeccion_evidencia_{evidencia.pk}.png",
-                ContentFile(imagen_png),
-                save=True,
-            )
+            # Fase 2. Si se solicitó solo texto, respondemos YA; no bloquea images.edit().
+            if fase != "texto" and not anterior.imagen_resultado:
+                with evidencia.archivo.open("rb") as archivo:
+                    imagen_png = generar_imagen_vehiculo(archivo, anterior.reporte)
+                anterior.imagen_resultado.save(
+                    f"inspeccion_evidencia_{evidencia.pk}.png",
+                    ContentFile(imagen_png),
+                    save=True,
+                )
 
             serializer = HojaIngresoAnalisisIASerializer(
-                analisis,
-                context={"request": request},
+                anterior, context={"request": request}
             )
-
-            return Response(
-                serializer.data,
-                status=status.HTTP_201_CREATED,
-            )
+            return Response(serializer.data, status=status.HTTP_200_OK)
 
         except ImagenInvalidaError as exc:
             return Response({"detail": str(exc)}, status=400)
-
         except ConfiguracionIAError:
-            return Response(
-                {"detail": "OPENAI_API_KEY no está configurada."},
-                status=503,
-            )
-
-        except (OpenAIError, RespuestaIAInvalidaError,
-                ValueError, OSError, KeyError):
-            import logging
-            logging.getLogger(__name__).exception(
-                "Error analizando evidencia %s", evidencia.pk
-            )
+            return Response({"detail": "OPENAI_API_KEY no está configurada."}, status=503)
+        except (OpenAIError, RespuestaIAInvalidaError, ValueError, OSError, KeyError):
+            logger.exception("Error analizando evidencia %s (fase %s)", evidencia.pk, fase)
             return Response(
                 {"detail": "No se pudo completar el análisis IA."},
-                status=502,
+                status=status.HTTP_502_BAD_GATEWAY,
             )
