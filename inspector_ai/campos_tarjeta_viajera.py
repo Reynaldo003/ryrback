@@ -71,17 +71,19 @@ def construir_campos():
             ("1/2", "1/2", 247, 310), ("1/4", "1/4", 247, 334),
             ("reserva", "Reserva", 247, 374)], "Inventario de auto")
     opcion("limpiaparabrisas", "Limpiaparabrisas", 1,
-           [("bien", "Bien", 476, 344), ("mal", "Mal", 509, 344)], "Recepción ideal")
+           [("bien", "Bien", 474.2, 342.2), ("mal", "Mal", 509, 344)], "Recepción ideal")
     posiciones_ruedas = [
         ("delantera_derecha", "Delantera derecha", 371),
         ("delantera_izquierda", "Delantera izquierda", 388),
         ("trasera_izquierda", "Trasera izquierda", 404),
         ("trasera_derecha", "Trasera derecha", 421)
     ]
-    for clave, nombre, y in posiciones_ruedas:
+    centros_circulos = (371.8, 386.8, 403.8, 420.2)
+    for indice, (clave, nombre, y) in enumerate(posiciones_ruedas):
+        centro_y = centros_circulos[indice]
         casilla(f"pastillas_{clave}", f"Pastillas de freno - {nombre}", 1, 412, y, "Recepción ideal")
-        casilla(f"disco_{clave}", f"Disco de freno - {nombre}", 1, 460, y, "Recepción ideal")
-        casilla(f"llanta_{clave}", f"Llanta - {nombre}", 1, 544, y, "Recepción ideal")
+        casilla(f"disco_{clave}", f"Disco de freno - {nombre}", 1, 461.4, centro_y, "Recepción ideal")
+        casilla(f"llanta_{clave}", f"Llanta - {nombre}", 1, 547.0, centro_y, "Recepción ideal")
         texto(f"profundidad_{clave}", f"Profundidad en mm - {nombre}", 1, 488, y - 5, 33, 9, "Recepción ideal", "numero")
     # Firmas se registran como nombres; para firmas manuscritas se requiere un pad de firma separado.
     texto("nombre_recepcion", "Nombre de quien recibe el vehículo", 1, 67, 402, 85, 10, "Recepción ideal")

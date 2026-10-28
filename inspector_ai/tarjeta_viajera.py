@@ -36,7 +36,7 @@ def marcar(pagina, x, y):
 
 
 def dibujar_nivel_gasolina(pagina, valor):
-    """Pinta bloques rojos uniformes, del tamaño de la reserva de la plantilla.
+    """Pinta bloques azules uniformes, del tamaño de la reserva de la plantilla.
 
     Cada cuarto enciende dos bloques pequeños; no se pinta ninguna X.
     """
@@ -51,11 +51,17 @@ def dibujar_nivel_gasolina(pagina, valor):
     alto = 11.6
     paso = 12.8
     base = 369.7
+    # El bloque inferior de reserva ya viene impreso en rojo en el PDF.
+    # Se cubre por dentro en azul cuando hay un valor seleccionado.
+    pagina.draw_rect(
+        fitz.Rect(231.7, 371.6, 259.3, 381.1),
+        color=None, fill=(0.0, 0.40, 0.72), overlay=True,
+    )
     for indice in range(cantidad):
         y_inferior = base - indice * paso
         pagina.draw_rect(
             fitz.Rect(x0, y_inferior - alto, x1, y_inferior),
-            color=None, fill=(0.91, 0.09, 0.36), overlay=True,
+            color=None, fill=(0.0, 0.40, 0.72), overlay=True,
         )
 
 
