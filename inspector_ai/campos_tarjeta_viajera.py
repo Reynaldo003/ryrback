@@ -89,7 +89,7 @@ def construir_campos():
 
     # Presupuesto de mano de obra: ocho renglones editables.
     for fila in range(1, 9):
-        y = 482 + (fila - 1) * 12
+        y = 488 + (fila - 1) * 12.3
         for clave, titulo, x, ancho, tipo in [
             ("posicion", "Posición", 65, 70, "texto"),
             ("descripcion", "Descripción", 143, 160, "texto"),
@@ -101,7 +101,7 @@ def construir_campos():
 
     # Presupuesto de refacciones: siete renglones editables.
     for fila in range(1, 8):
-        y = 625 + (fila - 1) * 12
+        y = 625 + (fila - 1) * 12.3
         for clave, titulo, x, ancho, tipo in [
             ("numero_parte", "Número de parte", 66, 71, "texto"),
             ("descripcion", "Descripción", 143, 245, "texto"),
@@ -111,11 +111,11 @@ def construir_campos():
                   1, x, y, ancho, 11, "Presupuesto de refacciones", tipo)
 
     for clave, titulo, x, y, ancho, alto, tipo in [
-        ("numero_presupuesto", "Número de presupuesto", 480, 454, 93, 14, "texto"),
-        ("fecha_presupuesto", "Fecha de elaboración", 480, 486, 93, 14, "fecha"),
-        ("validacion_jefe_taller", "Validación del jefe de taller (nombre)", 480, 550, 93, 14, "texto"),
-        ("inicio_trabajo", "Fecha y hora de inicio del trabajo", 481, 675, 91, 17, "texto"),
-        ("fin_trabajo", "Fecha y hora de finalización del trabajo", 481, 732, 91, 16, "texto"),
+        ("numero_presupuesto", "Número de presupuesto", 480, 457, 93, 13, "texto"),
+        ("fecha_presupuesto", "Fecha de elaboración", 480, 493, 93, 13, "fecha"),
+        ("validacion_jefe_taller", "Validación del jefe de taller (nombre)", 480, 559, 93, 13, "texto"),
+        ("inicio_trabajo", "Fecha y hora de inicio del trabajo", 481, 686, 91, 16, "texto"),
+        ("fin_trabajo", "Fecha y hora de finalización del trabajo", 481, 741, 91, 14, "texto"),
         ("observaciones_taller", "Observaciones del taller", 74, 735, 389, 20, "texto"),
     ]:
         texto(clave, titulo, 1, x, y, ancho, alto, "Técnico mecánico", tipo)
