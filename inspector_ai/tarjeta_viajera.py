@@ -36,23 +36,23 @@ def marcar(pagina, x, y):
 
 
 def dibujar_nivel_gasolina(pagina, valor):
-    """Relleno vertical dentro de la columna del medidor (sin tocar la reserva roja)."""
-    niveles = {'reserva': 0.0, '1/4': 0.25, '1/2': 0.5, '3/4': 0.75, 'lleno': 1.0}
-    proporcion = niveles.get(str(valor).lower())
-    if proporcion is None or proporcion <= 0:
+    """Pinta escalones completos de abajo hacia arriba, sin invadir la reserva roja.
+
+    El medidor impreso tiene cuatro niveles discretos; cada nivel llena su
+    propia celda, dejando una separación visual y las líneas originales.
+    """
+    niveles = {'reserva': 0, '1/4': 1, '1/2': 2, '3/4': 3, 'lleno': 4}
+    cantidad = niveles.get(str(valor).strip().lower())
+    if cantidad is None:
         return
-    # Bordes verificados sobre la plantilla PDF de 609 × 794.25 pt.
-    izquierda, derecha = 231.5, 243.5
-    superior, inferior = 269.0, 368.0
-    alto = (inferior - superior) * proporcion
-    pagina.draw_rect(
-        fitz.Rect(izquierda, inferior - alto, derecha, inferior),
-        fill=(0.03, 0.40, 0.75), color=None, overlay=True,
-    )
-    # Repintar las divisiones del indicador para conservar su lectura.
-    for y in (275.5, 300.0, 325.0, 350.0):
-        if inferior - alto <= y <= inferior:
-            pagina.draw_line((izquierda, y), (derecha, y), color=COLOR_TEXTO, width=0.85, overlay=True)
+    # Segmentos medidos en la plantilla original, ordenados desde abajo.
+    segmentos = [(345.0, 367.3), (320.0, 342.7),
+                 (295.0, 317.7), (271.0, 292.7)]
+    for y0, y1 in segmentos[:cantidad]:
+        pagina.draw_rect(
+            fitz.Rect(231.5, y0, 243.4, y1),
+            color=None, fill=(0.91, 0.09, 0.36), overlay=True
+        )
 
 
 def escribir_observaciones(pagina, valor):

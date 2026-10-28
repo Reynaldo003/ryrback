@@ -91,10 +91,10 @@ def construir_campos():
     for fila in range(1, 9):
         y = 488 + (fila - 1) * 12.3
         for clave, titulo, x, ancho, tipo in [
-            ("posicion", "Posición", 65, 70, "texto"),
-            ("descripcion", "Descripción", 143, 160, "texto"),
-            ("tiempo", "Unidades de tiempo", 311, 78, "numero"),
-            ("costo", "Costo", 397, 65, "numero"),
+            ("posicion", "Posición", 67, 68, "texto"),
+            ("descripcion", "Descripción", 145, 158, "texto"),
+            ("tiempo", "Unidades de tiempo", 313, 76, "numero"),
+            ("costo", "Costo", 399, 63, "numero"),
         ]:
             texto(f"mano_obra_{fila}_{clave}", f"Mano de obra {fila}: {titulo}",
                   1, x, y, ancho, 11, "Presupuesto de mano de obra", tipo)
@@ -103,9 +103,9 @@ def construir_campos():
     for fila in range(1, 8):
         y = 625 + (fila - 1) * 12.3
         for clave, titulo, x, ancho, tipo in [
-            ("numero_parte", "Número de parte", 66, 71, "texto"),
-            ("descripcion", "Descripción", 143, 245, "texto"),
-            ("costo", "Costo", 398, 65, "numero"),
+            ("numero_parte", "Número de parte", 68, 69, "texto"),
+            ("descripcion", "Descripción", 145, 243, "texto"),
+            ("costo", "Costo", 400, 63, "numero"),
         ]:
             texto(f"refaccion_{fila}_{clave}", f"Refacción {fila}: {titulo}",
                   1, x, y, ancho, 11, "Presupuesto de refacciones", tipo)
@@ -121,19 +121,19 @@ def construir_campos():
         texto(clave, titulo, 1, x, y, ancho, alto, "Técnico mecánico", tipo)
 
     # PÁGINA 2 — Tres recorridos de prueba.
-    for prueba, y in [(1, 93), (2, 172), (3, 252)]:
+    for prueba, y in [(1, 87), (2, 166), (3, 245)]:
         for clave, titulo, x, dy, ancho, tipo in [
             ("fecha", "Fecha", 66, 0, 97, "fecha"),
             ("hora", "Hora", 167, 0, 76, "hora"),
-            ("km_inicial", "Kilometraje inicial", 68, 22, 75, "numero"),
-            ("km_final", "Kilometraje final", 165, 22, 76, "numero"),
-            ("realizada_por", "Realizada por", 67, 47, 176, "texto"),
+            ("km_inicial", "Kilometraje inicial", 68, 23, 75, "numero"),
+            ("km_final", "Kilometraje final", 165, 23, 76, "numero"),
+            ("realizada_por", "Realizada por", 67, 51, 176, "texto"),
         ]:
             nombre_campo = (f"{clave}_prueba_1"
                             if prueba == 1 and clave in ("km_inicial", "km_final")
                             else f"prueba_{prueba}_{clave}")
             texto(nombre_campo, f"Prueba {prueba}: {titulo}",
-                  2, x, y + dy, ancho, 12, "Pruebas de manejo", tipo)
+                  2, x, y + dy, ancho, 10, "Pruebas de manejo", tipo)
 
     # Verificación del manejo, cada elemento puede marcarse para cada una de las 3 pruebas.
     verificaciones = [
