@@ -93,6 +93,9 @@ def leer_filtros(request, fecha_desde=None, fecha_hasta=None):
         "asesor": str(parametros.get("asesor", "") or "").strip(),
         "familia": str(parametros.get("familia", "") or "").strip(),
         "condicion_pago": str(parametros.get("condicion_pago", "") or "").strip(),
+        "serie": str(parametros.get("serie", "") or "").strip(),
+        "nr_nota": str(parametros.get("nr_nota", "") or "").strip(),
+        "producto_servicio": str(parametros.get("producto_servicio", "") or "").strip(),
         "fecha_desde": fecha_desde if fecha_desde is not None else str(parametros.get("fecha_desde", "") or "").strip(),
         "fecha_hasta": fecha_hasta if fecha_hasta is not None else str(parametros.get("fecha_hasta", "") or "").strip(),
         "venta_digital": str(parametros.get("venta_digital", "") or "").strip().lower(),
@@ -125,24 +128,42 @@ def construir_where(filtros, vins_digitales=None):
         condiciones.append(CONDICION_COMERCIAL)
     elif agencia:
         condiciones.append('"AGENCIA" = %s')
-        condiciones.append(f'("NmFamilia" IS NULL OR NOT {CONDICION_COMERCIAL})')
+        if not buscar_vin:
+            condiciones.append(f'("NmFamilia" IS NULL OR NOT {CONDICION_COMERCIAL})')
         parametros.append(agencia)
 
     for clave, columna in (
         ("asesor", '"Asesor"'),
         ("familia", '"NmFamilia"'),
         ("condicion_pago", '"NmCondPgto"'),
+        ("serie", '"Serie"'),
+        ("nr_nota", '"NrNota"'),
+        ("producto_servicio", '"ProdOuServ"'),
     ):
         if filtros[clave]:
-            condiciones.append(f"{columna} = %s")
-            parametros.append(filtros[clave])
+            condiciones.append(f"{columna} ILIKE %s")
+            parametros.append(f'%{filtros[clave]}%')
 
     if texto_busqueda:
         # Si es VIN completo, normaliza espacios/guiones antes de buscarlo.
         termino = normalizar_busqueda_vin(texto_busqueda) if buscar_vin else texto_busqueda
-        columnas = ('"Serie"', '"RazaoSocial"', '"Asesor"', '"AGENCIA"', '"NmFamilia"', '"ProdOuServ"')
-        condiciones.append("(" + " OR ".join(f"{campo} ILIKE %s" for campo in columnas) + ")")
-        parametros.extend([f'%{termino}%'] * len(columnas))
+        if buscar_vin:
+            condiciones.append(
+                "("
+                " REGEXP_REPLACE(UPPER(COALESCE(BTRIM(\"ProdOuServ\"), '')), '[^A-Z0-9]', '', 'g') = %s"
+                " OR REGEXP_REPLACE(UPPER(COALESCE(BTRIM(\"ProdOuServ\"), '')), '[^A-Z0-9]', '', 'g') LIKE %s"
+                " OR REGEXP_REPLACE(UPPER(COALESCE(BTRIM(\"Serie\"), '')), '[^A-Z0-9]', '', 'g') = %s"
+                " OR REGEXP_REPLACE(UPPER(COALESCE(BTRIM(\"Serie\"), '')), '[^A-Z0-9]', '', 'g') LIKE %s"
+                " OR UPPER(COALESCE(BTRIM(\"ProdOuServ\"), '')) LIKE %s"
+                " OR UPPER(COALESCE(BTRIM(\"Serie\"), '')) LIKE %s"
+                ")"
+            )
+            vin_norm = termino
+            parametros.extend([vin_norm, f'%{vin_norm}%', vin_norm, f'%{vin_norm}%', f'%{vin_norm}%', f'%{vin_norm}%'])
+        else:
+            columnas = ('"Serie"', '"RazaoSocial"', '"Asesor"', '"AGENCIA"', '"NmFamilia"', '"ProdOuServ"')
+            condiciones.append("(" + " OR ".join(f"{campo} ILIKE %s" for campo in columnas) + ")")
+            parametros.extend([f'%{termino}%'] * len(columnas))
 
     if filtros["venta_digital"] in ("1", "true", "si", "sí"):
         if vins_digitales:
