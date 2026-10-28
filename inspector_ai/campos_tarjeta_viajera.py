@@ -71,17 +71,19 @@ def construir_campos():
             ("1/2", "1/2", 247, 310), ("1/4", "1/4", 247, 334),
             ("reserva", "Reserva", 247, 374)], "Inventario de auto")
     opcion("limpiaparabrisas", "Limpiaparabrisas", 1,
-           [("bien", "Bien", 476, 344), ("mal", "Mal", 509, 344)], "Recepción ideal")
+           [("bien", "Bien", 474.2, 342.2), ("mal", "Mal", 509, 344)], "Recepción ideal")
     posiciones_ruedas = [
         ("delantera_derecha", "Delantera derecha", 371),
         ("delantera_izquierda", "Delantera izquierda", 388),
         ("trasera_izquierda", "Trasera izquierda", 404),
         ("trasera_derecha", "Trasera derecha", 421)
     ]
-    for clave, nombre, y in posiciones_ruedas:
+    centros_circulos = (371.8, 386.8, 403.8, 420.2)
+    for indice, (clave, nombre, y) in enumerate(posiciones_ruedas):
+        centro_y = centros_circulos[indice]
         casilla(f"pastillas_{clave}", f"Pastillas de freno - {nombre}", 1, 412, y, "Recepción ideal")
-        casilla(f"disco_{clave}", f"Disco de freno - {nombre}", 1, 460, y, "Recepción ideal")
-        casilla(f"llanta_{clave}", f"Llanta - {nombre}", 1, 544, y, "Recepción ideal")
+        casilla(f"disco_{clave}", f"Disco de freno - {nombre}", 1, 461.4, centro_y, "Recepción ideal")
+        casilla(f"llanta_{clave}", f"Llanta - {nombre}", 1, 547.0, centro_y, "Recepción ideal")
         texto(f"profundidad_{clave}", f"Profundidad en mm - {nombre}", 1, 488, y - 5, 33, 9, "Recepción ideal", "numero")
     # Firmas se registran como nombres; para firmas manuscritas se requiere un pad de firma separado.
     texto("nombre_recepcion", "Nombre de quien recibe el vehículo", 1, 67, 402, 85, 10, "Recepción ideal")
@@ -89,51 +91,51 @@ def construir_campos():
 
     # Presupuesto de mano de obra: ocho renglones editables.
     for fila in range(1, 9):
-        y = 482 + (fila - 1) * 12
+        y = 488 + (fila - 1) * 12.3
         for clave, titulo, x, ancho, tipo in [
-            ("posicion", "Posición", 65, 70, "texto"),
-            ("descripcion", "Descripción", 143, 160, "texto"),
-            ("tiempo", "Unidades de tiempo", 311, 78, "numero"),
-            ("costo", "Costo", 397, 65, "numero"),
+            ("posicion", "Posición", 67, 68, "texto"),
+            ("descripcion", "Descripción", 145, 158, "texto"),
+            ("tiempo", "Unidades de tiempo", 313, 76, "numero"),
+            ("costo", "Costo", 399, 63, "numero"),
         ]:
             texto(f"mano_obra_{fila}_{clave}", f"Mano de obra {fila}: {titulo}",
                   1, x, y, ancho, 11, "Presupuesto de mano de obra", tipo)
 
     # Presupuesto de refacciones: siete renglones editables.
     for fila in range(1, 8):
-        y = 625 + (fila - 1) * 12
+        y = 625 + (fila - 1) * 12.3
         for clave, titulo, x, ancho, tipo in [
-            ("numero_parte", "Número de parte", 66, 71, "texto"),
-            ("descripcion", "Descripción", 143, 245, "texto"),
-            ("costo", "Costo", 398, 65, "numero"),
+            ("numero_parte", "Número de parte", 68, 69, "texto"),
+            ("descripcion", "Descripción", 145, 243, "texto"),
+            ("costo", "Costo", 400, 63, "numero"),
         ]:
             texto(f"refaccion_{fila}_{clave}", f"Refacción {fila}: {titulo}",
                   1, x, y, ancho, 11, "Presupuesto de refacciones", tipo)
 
     for clave, titulo, x, y, ancho, alto, tipo in [
-        ("numero_presupuesto", "Número de presupuesto", 480, 454, 93, 14, "texto"),
-        ("fecha_presupuesto", "Fecha de elaboración", 480, 486, 93, 14, "fecha"),
-        ("validacion_jefe_taller", "Validación del jefe de taller (nombre)", 480, 550, 93, 14, "texto"),
-        ("inicio_trabajo", "Fecha y hora de inicio del trabajo", 481, 675, 91, 17, "texto"),
-        ("fin_trabajo", "Fecha y hora de finalización del trabajo", 481, 732, 91, 16, "texto"),
+        ("numero_presupuesto", "Número de presupuesto", 480, 457, 93, 13, "texto"),
+        ("fecha_presupuesto", "Fecha de elaboración", 480, 493, 93, 13, "fecha"),
+        ("validacion_jefe_taller", "Validación del jefe de taller (nombre)", 480, 559, 93, 13, "texto"),
+        ("inicio_trabajo", "Fecha y hora de inicio del trabajo", 481, 686, 91, 16, "texto"),
+        ("fin_trabajo", "Fecha y hora de finalización del trabajo", 481, 741, 91, 14, "texto"),
         ("observaciones_taller", "Observaciones del taller", 74, 735, 389, 20, "texto"),
     ]:
         texto(clave, titulo, 1, x, y, ancho, alto, "Técnico mecánico", tipo)
 
     # PÁGINA 2 — Tres recorridos de prueba.
-    for prueba, y in [(1, 93), (2, 172), (3, 252)]:
+    for prueba, y in [(1, 89), (2, 168), (3, 248)]:
         for clave, titulo, x, dy, ancho, tipo in [
             ("fecha", "Fecha", 66, 0, 97, "fecha"),
             ("hora", "Hora", 167, 0, 76, "hora"),
-            ("km_inicial", "Kilometraje inicial", 68, 22, 75, "numero"),
-            ("km_final", "Kilometraje final", 165, 22, 76, "numero"),
+            ("km_inicial", "Kilometraje inicial", 68, 24, 75, "numero"),
+            ("km_final", "Kilometraje final", 165, 24, 76, "numero"),
             ("realizada_por", "Realizada por", 67, 47, 176, "texto"),
         ]:
             nombre_campo = (f"{clave}_prueba_1"
                             if prueba == 1 and clave in ("km_inicial", "km_final")
                             else f"prueba_{prueba}_{clave}")
             texto(nombre_campo, f"Prueba {prueba}: {titulo}",
-                  2, x, y + dy, ancho, 12, "Pruebas de manejo", tipo)
+                  2, x, y + dy, ancho, 10, "Pruebas de manejo", tipo)
 
     # Verificación del manejo, cada elemento puede marcarse para cada una de las 3 pruebas.
     verificaciones = [
