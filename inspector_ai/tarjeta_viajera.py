@@ -36,22 +36,26 @@ def marcar(pagina, x, y):
 
 
 def dibujar_nivel_gasolina(pagina, valor):
-    """Pinta escalones completos de abajo hacia arriba, sin invadir la reserva roja.
+    """Pinta bloques rojos uniformes, del tamaño de la reserva de la plantilla.
 
-    El medidor impreso tiene cuatro niveles discretos; cada nivel llena su
-    propia celda, dejando una separación visual y las líneas originales.
+    Cada cuarto enciende dos bloques pequeños; no se pinta ninguna X.
     """
-    niveles = {'reserva': 0, '1/4': 1, '1/2': 2, '3/4': 3, 'lleno': 4}
+    niveles = {"reserva": 0, "1/4": 2, "1/2": 4, "3/4": 6, "lleno": 8}
     cantidad = niveles.get(str(valor).strip().lower())
     if cantidad is None:
         return
-    # Segmentos medidos en la plantilla original, ordenados desde abajo.
-    segmentos = [(345.0, 367.3), (320.0, 342.7),
-                 (295.0, 317.7), (271.0, 292.7)]
-    for y0, y1 in segmentos[:cantidad]:
+
+    # En la plantilla original la reserva va de x=231.5 a x=259.4.
+    # Cada intervalo superior mide aprox. 12.8 pt.
+    x0, x1 = 231.5, 259.4
+    alto = 11.6
+    paso = 12.8
+    base = 369.7
+    for indice in range(cantidad):
+        y_inferior = base - indice * paso
         pagina.draw_rect(
-            fitz.Rect(231.5, y0, 243.4, y1),
-            color=None, fill=(0.91, 0.09, 0.36), overlay=True
+            fitz.Rect(x0, y_inferior - alto, x1, y_inferior),
+            color=None, fill=(0.91, 0.09, 0.36), overlay=True,
         )
 
 
@@ -80,7 +84,7 @@ def escribir_caja(pagina, rectangulo, valor, tamano_max=8):
                      rectangulo.x1 - 2.5, rectangulo.y1 - 0.7)
     if area.width <= 2 or area.height <= 3:
         return
-    for fuente in (tamano_max, 7, 6, 5):
+    for fuente in sorted(set([tamano_max, min(tamano_max, 7), min(tamano_max, 6), 5]), reverse=True):
         with fitz.open() as temporal:
             prueba = temporal.new_page(width=pagina.rect.width, height=pagina.rect.height)
             resultado = prueba.insert_textbox(area, texto, fontname='helv', fontsize=fuente,
@@ -122,7 +126,12 @@ def dibujar_campos_editables(documento, cita):
                 continue
         rectangulo = fitz.Rect(campo['x'], campo['y'],
                               campo['x'] + campo['ancho'], campo['y'] + campo['alto'])
-        escribir_caja(pagina, rectangulo, valor)
+        # Los recorridos de prueba tienen renglones muy estrechos.
+        # Mantener el texto entre etiqueta y línea, sin solaparse.
+        fuente = 8
+        if campo["pagina"] == 2 and campo["seccion"] == "Pruebas de manejo":
+            fuente = 5 if any(p in campo["nombre"] for p in ("km_inicial", "km_final", "realizada_por")) else 6
+        escribir_caja(pagina, rectangulo, valor, tamano_max=fuente)
 
 
 def generar_tarjeta_viajera(cita):

@@ -121,13 +121,13 @@ def construir_campos():
         texto(clave, titulo, 1, x, y, ancho, alto, "Técnico mecánico", tipo)
 
     # PÁGINA 2 — Tres recorridos de prueba.
-    for prueba, y in [(1, 87), (2, 166), (3, 245)]:
+    for prueba, y in [(1, 89), (2, 168), (3, 248)]:
         for clave, titulo, x, dy, ancho, tipo in [
             ("fecha", "Fecha", 66, 0, 97, "fecha"),
             ("hora", "Hora", 167, 0, 76, "hora"),
-            ("km_inicial", "Kilometraje inicial", 68, 23, 75, "numero"),
-            ("km_final", "Kilometraje final", 165, 23, 76, "numero"),
-            ("realizada_por", "Realizada por", 67, 51, 176, "texto"),
+            ("km_inicial", "Kilometraje inicial", 68, 24, 75, "numero"),
+            ("km_final", "Kilometraje final", 165, 24, 76, "numero"),
+            ("realizada_por", "Realizada por", 67, 47, 176, "texto"),
         ]:
             nombre_campo = (f"{clave}_prueba_1"
                             if prueba == 1 and clave in ("km_inicial", "km_final")
