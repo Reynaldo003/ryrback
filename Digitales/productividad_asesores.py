@@ -19,6 +19,7 @@ CANALES = [
     {"id": "vw_direct", "nombre": "VW Concesionaria/VW Direct"},
     {"id": "facebook", "nombre": "Facebook Ads"},
     {"id": "llamada", "nombre": "Llamada entrante"},
+    {"id": "base_datos", "nombre": "Base de Datos"},
 ]
 
 
@@ -28,6 +29,12 @@ def _canal_normalizado(valor):
         return "whatsapp"
     if texto == "facebook" or texto == "meta" or texto == "facebook ads":
         return "facebook"
+    if (
+        "base de datos" in texto
+        or "base_datos" in texto
+        or texto in ("bdc", "database")
+    ):
+        return "base_datos"
     if "llamada" in texto or "telefon" in texto or texto.startswith("tel"):
         return "llamada"
     return "vw_direct"

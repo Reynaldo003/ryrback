@@ -21,6 +21,7 @@ CANALES = {
     "vw_direct": "VW Concesionaria/VW",
     "facebook": "Facebook Ads",
     "llamada": "Llamada entrante",
+    "base_datos": "Base de Datos",
     "sin_clasificar": "Sin clasificar",
 }
 

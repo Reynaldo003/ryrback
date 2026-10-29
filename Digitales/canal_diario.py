@@ -22,6 +22,7 @@ CANALES = [
     {"id": "vw_direct", "nombre": "VW Concesionaria/VW"},
     {"id": "facebook", "nombre": "Facebook Ads"},
     {"id": "llamada", "nombre": "Llamada entrante"},
+    {"id": "base_datos", "nombre": "Base de Datos"},
 ]
 
 
@@ -77,6 +78,7 @@ def canal_diario_view(request):
             "vw_direct": acumulado.get((dia, "vw_direct"), 0),
             "facebook": acumulado.get((dia, "facebook"), 0),
             "llamada": acumulado.get((dia, "llamada"), 0),
+            "base_datos": acumulado.get((dia, "base_datos"), 0),
             "total": suma,
         })
 

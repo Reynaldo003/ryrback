@@ -23,6 +23,12 @@ def _canal_normalizado(canal):
         return "WhatsApp"
     if valor == "facebook" or valor == "meta" or valor == "facebook ads":
         return "Facebook Ads"
+    if (
+        "base de datos" in valor
+        or "base_datos" in valor
+        or valor in ("bdc", "database")
+    ):
+        return "Base de Datos"
     if not valor:
         return "Sin canal"
     return "VW Concesionaria/VW Direct"
