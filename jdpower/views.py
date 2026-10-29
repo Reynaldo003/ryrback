@@ -1,11 +1,19 @@
 # jdpower/views.py
+from django.core.cache import cache
+from django.db import connections
 from django.db.models import Q
+from datetime import date, datetime
+from django.db.models.functions import Trim, Upper
+import re
+import unicodedata
+
 from rest_framework import permissions, viewsets
 from rest_framework.decorators import action
 from rest_framework.pagination import PageNumberPagination
 from rest_framework.response import Response
 
 from .models import EncuestaJDPower, EncuestaJDPowerServicio
+from citas.models import Entregas
 from .serializers import EncuestaJDPowerSerializer, EncuestaJDPowerServicioSerializer
 
 from .metricas import (
@@ -18,6 +26,408 @@ from .ia_resumen import generar_resumen_ia
 
 
 DB_ALIAS = "tdsql"
+
+
+def _vin_valido(vin):
+    """VIN exacto de 17 caracteres; no inferir coincidencias parciales."""
+    valor = str(vin or "").strip().upper()
+    return valor if re.fullmatch(r"[A-HJ-NPR-Z0-9]{17}", valor) else ""
+
+
+def _nombre_key(nombre):
+    texto = unicodedata.normalize("NFKD", str(nombre or ""))
+    return " ".join("".join(c for c in texto if not unicodedata.combining(c)).casefold().split())
+
+
+def _asesores_desde_entregas_por_vin(items):
+    """Cruza en Python dos bases distintas sin JOIN SQL. Ambiguos no se atribuyen."""
+    vins = {_vin_valido(fila.get("chasis")) for fila in items}
+    vins.discard("")
+    if not vins:
+        return {}
+
+    nombres = {}
+    claves = sorted(vins)
+    for inicio in range(0, len(claves), 400):
+        lote = claves[inicio:inicio + 400]
+        entregas = (
+            Entregas.objects.using("default")
+            .annotate(vin_limpio=Upper(Trim("vin")))
+            .filter(vin_limpio__in=lote)
+            .exclude(asesor_ventas="")
+            .values_list("vin", "asesor_ventas")
+        )
+        for vin_crm, nombre in entregas.iterator(chunk_size=500):
+            vin = _vin_valido(vin_crm)
+            texto = str(nombre or "").strip()
+            if vin and texto:
+                nombres.setdefault(vin, {})[_nombre_key(texto)] = texto
+
+    resultados = {}
+    for vin in vins:
+        valores = list(nombres.get(vin, {}).values())
+        if len(valores) == 1:
+            resultados[vin] = (valores[0], "coincidencia")
+        elif len(valores) > 1:
+            resultados[vin] = ("", "ambiguo")
+        else:
+            resultados[vin] = ("", "sin_coincidencia")
+    return resultados
+
+
+
+def _id_asesor_normalizado(valor):
+    """Normaliza la terminación .0 que aparece en IDs importados de Excel."""
+    texto = str(valor or "").strip()
+    if not texto or texto.casefold() in ("sin asesor", "sin dato", "null", "none"):
+        return ""
+    coincidencia = re.fullmatch(r"(\d+)(?:\.0+)?", texto)
+    return coincidencia.group(1) if coincidencia else texto.upper()
+
+
+def _asesores_por_id_historico(filas, nombres_vin):
+    """Respaldo del cruce por VIN: IDs iguales + misma concesionaria + nombre único.
+
+    Solo realiza SELECT. No edita encuestas, entregas ni catálogos.
+    Las coincidencias ambiguas nunca se atribuyen automáticamente.
+    """
+    pendientes = set()
+    for fila in filas:
+        vin = _vin_valido(fila.get("chasis"))
+        if vin and nombres_vin.get(vin, ("", ""))[0]:
+            continue
+        clave = (_id_asesor_normalizado(fila.get("id_asesor")),
+                 str(fila.get("codigo_concesionaria") or "").strip())
+        if all(clave):
+            pendientes.add(clave)
+
+    if not pendientes:
+        return {}
+
+    # Buscar el histórico completo, incluso si el panel está filtrado a octubre.
+    # Cubrimos las representaciones habituales del identificador en Excel.
+    variantes = set()
+    for identificador, _ in pendientes:
+        variantes.update((identificador, identificador + ".0", identificador + ".00"))
+
+    concesionarias = {codigo for _, codigo in pendientes}
+    referencias = set()
+    variantes = sorted(variantes)
+    for inicio in range(0, len(variantes), 150):
+        registros = (
+            EncuestaJDPower.objects.using(DB_ALIAS)
+            .filter(
+                id_asesor__in=variantes[inicio:inicio + 150],
+                codigo_concesionaria__in=concesionarias,
+            )
+            .values_list("id_asesor", "codigo_concesionaria", "chasis")
+        )
+        for id_jd, codigo, chasis in registros.iterator(chunk_size=500):
+            clave = (_id_asesor_normalizado(id_jd), str(codigo or "").strip())
+            vin = _vin_valido(chasis)
+            if clave in pendientes and vin:
+                referencias.add((clave, vin))
+
+    if not referencias:
+        return {}
+
+    por_vin = _asesores_desde_entregas_por_vin(
+        [{"chasis": vin} for _, vin in referencias]
+    )
+    posibles = {}
+    ambiguos = set()
+    for clave, vin in referencias:
+        nombre, estado = por_vin.get(vin, ("", "sin_coincidencia"))
+        if estado == "ambiguo":
+            ambiguos.add(clave)
+        elif estado == "coincidencia" and nombre:
+            posibles.setdefault(clave, {})[_nombre_key(nombre)] = nombre
+
+    resultados = {}
+    for clave in pendientes:
+        encontrados = list(posibles.get(clave, {}).values())
+        if len(encontrados) == 1 and clave not in ambiguos:
+            resultados[clave] = (encontrados[0], "id_historico_misma_agencia")
+        elif len(encontrados) > 1 or clave in ambiguos:
+            resultados[clave] = ("", "id_historico_ambiguo")
+    return resultados
+
+
+
+def _fecha_servicio_cruce(valor):
+    """Fecha real de atención, nunca el campo periodo (mes de encuesta)."""
+    if isinstance(valor, datetime):
+        return valor.date()
+    if isinstance(valor, date):
+        return valor
+    if valor:
+        try:
+            return date.fromisoformat(str(valor)[:10])
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def _asesores_servicio_desde_hoja_ingresos(filas):
+    """Cruce conservador de Servicio: VIN exacto + fecha de ingreso ±15 días.
+
+    Fuente: default.public.hoja_ingresos(vin, asesor, fecha_ingreso).
+    No se cruza por id_asesor (está vacío en las encuestas de Servicio).
+    Los asesores distintos dentro de la ventana quedan sin identificar.
+    No se escribe en ninguna base ni se inventan nombres.
+    """
+    vins = sorted({vin for fila in filas if (vin := _vin_valido(fila.get("chasis")))})
+    if not vins:
+        return {}
+
+    ingresos_por_vin = {}
+    with connections["default"].cursor() as cursor:
+        for inicio in range(0, len(vins), 400):
+            lote = vins[inicio:inicio + 400]
+            marcadores = ",".join(["%s"] * len(lote))
+            cursor.execute(
+                "SELECT UPPER(TRIM(vin)), TRIM(asesor), fecha_ingreso "
+                "FROM public.hoja_ingresos "
+                "WHERE UPPER(TRIM(vin)) IN (" + marcadores + ") "
+                "AND NULLIF(TRIM(asesor), '') IS NOT NULL",
+                lote,
+            )
+            for vin, nombre, fecha_ingreso in cursor.fetchall():
+                fecha = _fecha_servicio_cruce(fecha_ingreso)
+                nombre = str(nombre or "").strip()
+                if fecha and nombre:
+                    ingresos_por_vin.setdefault(_vin_valido(vin), []).append((fecha, nombre))
+
+    resultados = {}
+    for fila in filas:
+        pk = fila["id"]
+        vin = _vin_valido(fila.get("chasis"))
+        fecha_servicio = _fecha_servicio_cruce(fila.get("fecha_servicio"))
+        if not vin:
+            resultados[pk] = ("", "sin_vin")
+            continue
+        if not fecha_servicio:
+            resultados[pk] = ("", "sin_fecha_servicio")
+            continue
+
+        candidatos = {}
+        for fecha_ingreso, nombre in ingresos_por_vin.get(vin, ()):
+            dias = abs((fecha_servicio - fecha_ingreso).days)
+            if dias <= 15:
+                clave = _nombre_key(nombre)
+                if clave not in candidatos or dias < candidatos[clave][0]:
+                    candidatos[clave] = (dias, nombre)
+
+        if len(candidatos) == 1:
+            nombre = next(iter(candidatos.values()))[1]
+            resultados[pk] = (nombre, "vin_fecha_15d")
+        elif len(candidatos) > 1:
+            resultados[pk] = ("", "vin_fecha_ambiguo")
+        else:
+            resultados[pk] = ("", "sin_ingreso_fecha_cercana")
+
+    return resultados
+
+
+def _codigo_funcionario(valor):
+    """Sólo códigos numéricos del DMS, sin el sufijo .0."""
+    texto = str(valor or "").strip()
+    return str(int(texto.split(".")[0])) if re.fullmatch(r"\d+(?:\.0+)?", texto) else ""
+
+
+def _mismo_nombre_abreviado(abreviado, completo):
+    """Acepta apellidos/nombres abreviados, sin confundir personas distintas."""
+    corto = _nombre_key(abreviado).split()
+    largo = _nombre_key(completo).split()
+    if len(corto) < 2 or len(largo) < 2:
+        return False
+    # Cada palabra debe existir en el nombre oficial, respetando repeticiones.
+    restantes = largo.copy()
+    for palabra in corto:
+        if palabra not in restantes:
+            return False
+        restantes.remove(palabra)
+    return True
+
+
+def _asesores_servicio_fallback_matriz(filas, cruce_hoja):
+    """Completa SOLO casos pendientes con DMS: VIN + fecha + agencia + AST.
+
+    El nombre directo de hoja_ingresos conserva prioridad. Para habilitar el
+    respaldo, un código AST debe haber coincidido con >=2 nombres de hoja en
+    la misma agencia, con >=80 % de concordancia. No usa ID asesor J.D. Power.
+    No escribe datos; ante fallo del catálogo conserva las coincidencias previas.
+    """
+    pendientes = [fila for fila in filas if not cruce_hoja.get(fila["id"], ("", ""))[0]]
+    if not pendientes:
+        return cruce_hoja
+
+    vins = sorted({v for fila in filas if (v := _vin_valido(fila.get("chasis")))})
+    if not vins:
+        return cruce_hoja
+
+    # Fuente espejo de atenciones: VIN exacto, fecha real, agencia y empleado.
+    matriz = {}
+    try:
+        with connections[DB_ALIAS].cursor() as cursor:
+            for inicio in range(0, len(vins), 300):
+                lote = vins[inicio:inicio + 300]
+                marcas = ",".join(["%s"] * len(lote))
+                cursor.execute(
+                    "SELECT UPPER(TRIM(chassi::text)), dtfechamento, "
+                    "funcionarioct, agencia "
+                    "FROM public.matriz_atendimento "
+                    "WHERE UPPER(TRIM(chassi::text)) IN (" + marcas + ")",
+                    lote,
+                )
+                for vin, cierre, funcionario, agencia in cursor.fetchall():
+                    fecha = _fecha_servicio_cruce(cierre)
+                    codigo = _codigo_funcionario(funcionario)
+                    agencia_dms = _nombre_key(agencia)
+                    if fecha and codigo and agencia_dms:
+                        matriz.setdefault(_vin_valido(vin), []).append(
+                            (fecha, codigo, agencia_dms)
+                        )
+    except Exception:
+        # Si la matriz no responde, mantener el cruce directo sin error 500.
+        return cruce_hoja
+
+    # Cada encuesta debe tener exactamente UN empleado y UNA agencia en +/-15d.
+    por_encuesta = {}
+    agencias_confirmadas = {}
+    for fila in filas:
+        pk = fila["id"]
+        vin = _vin_valido(fila.get("chasis"))
+        fecha_servicio = _fecha_servicio_cruce(fila.get("fecha_servicio"))
+        agencia_jd = str(fila.get("codigo_concesionaria") or "").strip()
+        if not vin or not fecha_servicio or not agencia_jd:
+            continue
+        opciones = {
+            (codigo, agencia_dms)
+            for cierre, codigo, agencia_dms in matriz.get(vin, ())
+            if abs((fecha_servicio - cierre).days) <= 15
+        }
+        if len(opciones) != 1:
+            continue
+        codigo, agencia_dms = next(iter(opciones))
+        por_encuesta[pk] = (agencia_jd, agencia_dms, codigo)
+        if cruce_hoja.get(pk, ("", ""))[0]:
+            agencias_confirmadas.setdefault(agencia_jd, set()).add(agencia_dms)
+
+    # La agencia del DMS debe ser la única observada para la agencia JD,
+    # usando exclusivamente casos cuyo VIN ya tenía nombre validado en hoja.
+    agencia_unica = {
+        jd: next(iter(nombres))
+        for jd, nombres in agencias_confirmadas.items()
+        if len(nombres) == 1
+    }
+
+    codigos = sorted({
+        int(codigo)
+        for jd, agencia_dms, codigo in por_encuesta.values()
+        if agencia_unica.get(jd) == agencia_dms
+    })
+    if not codigos:
+        return cruce_hoja
+
+    # Catalogo DMS SQL Server. AST/AT/REC son los cargos de servicio
+    # corroborados en los casos conocidos; MEC, SEC y demás quedan excluidos.
+    funcionarios = {}
+    try:
+        with connections["sqlserver"].cursor() as cursor:
+            for inicio in range(0, len(codigos), 200):
+                lote = codigos[inicio:inicio + 200]
+                marcas = ",".join(["%s"] * len(lote))
+                cursor.execute(
+                    "SELECT Cod_Funcionario, Nm_Funcionario, "
+                    "Cod_Cargo, Cod_Area, Cod_Setor "
+                    "FROM dbo.Funcionarios "
+                    "WHERE TRY_CONVERT(int, Cod_Funcionario) "
+                    "IN (" + marcas + ")",
+                    lote,
+                )
+                for codigo, nombre, cargo, area, sector in cursor.fetchall():
+                    clave = _codigo_funcionario(codigo)
+                    texto = str(nombre or "").strip()
+                    if (
+                        clave and texto
+                        and str(cargo or "").strip().upper() == "AST"
+                        and str(area or "").strip().upper() == "AT"
+                        and str(sector or "").strip().upper() == "REC"
+                    ):
+                        funcionarios.setdefault(clave, {})[_nombre_key(texto)] = texto
+    except Exception:
+        # Catálogo temporalmente inaccesible: no romper el reporte.
+        return cruce_hoja
+
+    # Reconciliar abreviaciones únicamente si el código pasó validación
+    # cruzada en la misma agencia. Las discrepancias reales NO se ignoran.
+    evidencia = {}
+    for fila in filas:
+        pk = fila["id"]
+        previo = cruce_hoja.get(pk, ("", ""))
+        nombre_hoja = previo[0]
+        clave = por_encuesta.get(pk)
+        if not nombre_hoja or not clave:
+            continue
+        jd, agencia_dms, codigo = clave
+        if agencia_unica.get(jd) != agencia_dms:
+            continue
+        nombres = funcionarios.get(codigo, {})
+        if len(nombres) != 1:
+            continue
+        nombre_dms = next(iter(nombres.values()))
+        marcador = evidencia.setdefault(clave, {"iguales": 0, "distintos": 0})
+        if _mismo_nombre_abreviado(nombre_hoja, nombre_dms):
+            marcador["iguales"] += 1
+        else:
+            marcador["distintos"] += 1
+
+    codigos_confiables = {
+        clave for clave, cuenta in evidencia.items()
+        if cuenta["iguales"] >= 2
+        and cuenta["iguales"] / (cuenta["iguales"] + cuenta["distintos"]) >= 0.80
+    }
+
+    resultado = cruce_hoja.copy()
+    for fila in filas:
+        pk = fila["id"]
+        clave = por_encuesta.get(pk)
+        if clave not in codigos_confiables:
+            continue
+        codigo = clave[2]
+        nombre_oficial = next(iter(funcionarios[codigo].values()))
+        nombre_anterior, estado = resultado.get(pk, ("", "sin_coincidencia"))
+        if nombre_anterior:
+            # Mismo asesor, etiqueta uniforme para evitar barras duplicadas.
+            if _mismo_nombre_abreviado(nombre_anterior, nombre_oficial):
+                resultado[pk] = (nombre_oficial, estado)
+        else:
+            resultado[pk] = (
+                nombre_oficial, "matriz_funcionario_ast_vin_fecha_15d"
+            )
+
+    return resultado
+
+
+def _asesores_servicio_cruce_estable():
+    """Cruce con evidencia global, independiente de filtros y paginación del panel."""
+    clave_cache = "jdpower:servicio:asesores_globales:v1"
+    resultado = cache.get(clave_cache)
+    if resultado is not None:
+        return resultado
+
+    # Sólo las columnas necesarias, sin límites ni filtros del panel.
+    referencia = list(
+        EncuestaJDPowerServicio.objects.using(DB_ALIAS).values(
+            "id", "chasis", "fecha_servicio", "codigo_concesionaria"
+        )
+    )
+    directo = _asesores_servicio_desde_hoja_ingresos(referencia)
+    resultado = _asesores_servicio_fallback_matriz(referencia, directo)
+    # Evita repetir cruces entre tres bases en cada cambio de filtro.
+    cache.set(clave_cache, resultado, timeout=120)
+    return resultado
 
 
 def es_filtro_vacio(valor):
@@ -307,12 +717,30 @@ class EncuestaJDPowerViewSet(viewsets.ReadOnlyModelViewSet):
         )
 
         qs = self.get_queryset().values(*campos)[:limite]
+        filas = list(qs)
+        # No publicar nombres de empleados en respuestas anonimas.
+        autenticado = bool(request.user.is_authenticated)
+        nombres = _asesores_desde_entregas_por_vin(filas) if autenticado else {}
+        nombres_historicos = _asesores_por_id_historico(filas, nombres) if autenticado else {}
 
         data = []
 
-        for item in qs:
+        for item in filas:
+            vin = _vin_valido(item.get("chasis"))
+            nombre_asesor, estado_cruce = nombres.get(
+                vin,
+                ("", "sin_autenticacion" if not autenticado else "sin_vin" if not vin else "sin_coincidencia")
+            )
+            if autenticado and not nombre_asesor and estado_cruce != "ambiguo":
+                clave = (_id_asesor_normalizado(item.get("id_asesor")),
+                         str(item.get("codigo_concesionaria") or "").strip())
+                nombre_asesor, estado_cruce = nombres_historicos.get(
+                    clave, (nombre_asesor, estado_cruce)
+                )
             data.append(
                 {
+                    "asesor_nombre": nombre_asesor,
+                    "asesor_cruce": estado_cruce,
                     "id_ventas": item.get("id_ventas"),
                     "id_muestra": item.get("id_muestra") or "",
                     "id_encuesta": item.get("id_encuesta") or "",
@@ -790,13 +1218,20 @@ class EncuestaJDPowerServicioViewSet(viewsets.ReadOnlyModelViewSet):
             "fecha_carga",
         )
 
-        qs = self.get_queryset().values(*campos)[:limite]
+        filas = list(self.get_queryset().values(*campos)[:limite])
+        # Misma protección que Ventas: no publicar nombres en respuestas anónimas.
+        autenticado = bool(request.user.is_authenticated)
+        asesores_cruzados = _asesores_servicio_cruce_estable() if autenticado else {}
 
         data = []
-
-        for item in qs:
+        for item in filas:
+            nombre_asesor, estado_cruce = asesores_cruzados.get(
+                item["id"], ("", "sin_autenticacion" if not autenticado else "sin_coincidencia")
+            )
             data.append(
                 {
+                    "asesor_nombre": nombre_asesor,
+                    "asesor_cruce": estado_cruce,
                     "id": item.get("id"),
                     "id_servicio": item.get("id_servicio") or "",
                     "id_muestra": numero_seguro(item.get("id_muestra")),
