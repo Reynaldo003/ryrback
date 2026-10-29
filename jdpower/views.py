@@ -17,7 +17,7 @@ from .metricas import (
 from .ia_resumen import generar_resumen_ia
 
 
-DB_ALIAS = "sqlserver"
+DB_ALIAS = "tdsql"
 
 
 def es_filtro_vacio(valor):

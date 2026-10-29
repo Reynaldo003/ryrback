@@ -56,181 +56,181 @@ class EncuestaJDPower(models.Model):
     )
 
     q1_satisfaccion_general = models.IntegerField(
-        db_column="Q1_satisfaccion_general",
+        db_column="q1_satisfaccion_general",
         blank=True,
         null=True,
     )
     q1_1_razones_calificacion = models.TextField(
-        db_column="Q1_1_razones_calificacion",
+        db_column="q1_1_razones_calificacion",
         blank=True,
         null=True,
     )
 
     qr_2_1_proceso_entrega = models.IntegerField(
-        db_column="QR_2_1_proceso_entrega",
+        db_column="qr_2_1_proceso_entrega",
         blank=True,
         null=True,
     )
     qr_2_1_1_efectividad_explicacion = models.IntegerField(
-        db_column="QR_2_1_1_efectividad_explicacion",
+        db_column="qr_2_1_1_efectividad_explicacion",
         blank=True,
         null=True,
     )
     qr_2_1_2_puntualidad_entrega = models.IntegerField(
-        db_column="QR_2_1_2_puntualidad_entrega",
+        db_column="qr_2_1_2_puntualidad_entrega",
         blank=True,
         null=True,
     )
     qr_2_1_3_condiciones_vehiculo = models.IntegerField(
-        db_column="QR_2_1_3_condiciones_vehiculo",
+        db_column="qr_2_1_3_condiciones_vehiculo",
         blank=True,
         null=True,
     )
     qr_2_1_4_conexion_bluetooth = models.IntegerField(
-        db_column="QR_2_1_4_conexion_bluetooth",
+        db_column="qr_2_1_4_conexion_bluetooth",
         blank=True,
         null=True,
     )
 
     qr_2_2_atencion_personal = models.IntegerField(
-        db_column="QR_2_2_atencion_personal",
+        db_column="qr_2_2_atencion_personal",
         blank=True,
         null=True,
     )
     qr_2_2_1_conocimiento_vehiculo = models.IntegerField(
-        db_column="QR_2_2_1_conocimiento_vehiculo",
+        db_column="qr_2_2_1_conocimiento_vehiculo",
         blank=True,
         null=True,
     )
     qr_2_2_2_amabilidad = models.IntegerField(
-        db_column="QR_2_2_2_amabilidad",
+        db_column="qr_2_2_2_amabilidad",
         blank=True,
         null=True,
     )
     qr_2_2_3_respuesta = models.IntegerField(
-        db_column="QR_2_2_3_respuesta",
+        db_column="qr_2_2_3_respuesta",
         blank=True,
         null=True,
     )
     qr_2_2_4_comunicacion_fuera = models.IntegerField(
-        db_column="QR_2_2_4_comunicacion_fuera",
+        db_column="qr_2_2_4_comunicacion_fuera",
         blank=True,
         null=True,
     )
     qr_2_2_5_uso_tecnologia = models.IntegerField(
-        db_column="QR_2_2_5_uso_tecnologia",
+        db_column="qr_2_2_5_uso_tecnologia",
         blank=True,
         null=True,
     )
     qr_2_2_6_info_tiempo_entrega = models.IntegerField(
-        db_column="QR_2_2_6_info_tiempo_entrega",
+        db_column="qr_2_2_6_info_tiempo_entrega",
         blank=True,
         null=True,
     )
 
     qr_2_3_instalaciones = models.IntegerField(
-        db_column="QR_2_3_instalaciones",
+        db_column="qr_2_3_instalaciones",
         blank=True,
         null=True,
     )
     qr_2_3_1_apariencia = models.IntegerField(
-        db_column="QR_2_3_1_apariencia",
+        db_column="qr_2_3_1_apariencia",
         blank=True,
         null=True,
     )
     qr_2_3_2_facilidad_inventario = models.IntegerField(
-        db_column="QR_2_3_2_facilidad_inventario",
+        db_column="qr_2_3_2_facilidad_inventario",
         blank=True,
         null=True,
     )
     qr_2_3_3_variedad_modelos = models.IntegerField(
-        db_column="QR_2_3_3_variedad_modelos",
+        db_column="qr_2_3_3_variedad_modelos",
         blank=True,
         null=True,
     )
     qr_2_3_4_calidad_amenidades = models.IntegerField(
-        db_column="QR_2_3_4_calidad_amenidades",
+        db_column="qr_2_3_4_calidad_amenidades",
         blank=True,
         null=True,
     )
     qr_2_3_5_opciones_estacionamiento = models.IntegerField(
-        db_column="QR_2_3_5_opciones_estacionamiento",
+        db_column="qr_2_3_5_opciones_estacionamiento",
         blank=True,
         null=True,
     )
 
     qr_2_4_documentacion = models.IntegerField(
-        db_column="QR_2_4_documentacion",
+        db_column="qr_2_4_documentacion",
         blank=True,
         null=True,
     )
     qr_2_4_1_claridad_documentos = models.IntegerField(
-        db_column="QR_2_4_1_claridad_documentos",
+        db_column="qr_2_4_1_claridad_documentos",
         blank=True,
         null=True,
     )
     qr_2_4_2_transparencia_papeleo = models.IntegerField(
-        db_column="QR_2_4_2_transparencia_papeleo",
+        db_column="qr_2_4_2_transparencia_papeleo",
         blank=True,
         null=True,
     )
     qr_2_4_3_prontitud_papeleo = models.IntegerField(
-        db_column="QR_2_4_3_prontitud_papeleo",
+        db_column="qr_2_4_3_prontitud_papeleo",
         blank=True,
         null=True,
     )
 
     qr_2_5_negociacion = models.IntegerField(
-        db_column="QR_2_5_negociacion",
+        db_column="qr_2_5_negociacion",
         blank=True,
         null=True,
     )
     qr_2_5_1_acuerdo_precio = models.IntegerField(
-        db_column="QR_2_5_1_acuerdo_precio",
+        db_column="qr_2_5_1_acuerdo_precio",
         blank=True,
         null=True,
     )
     qr_2_5_2_precio_justo = models.IntegerField(
-        db_column="QR_2_5_2_precio_justo",
+        db_column="qr_2_5_2_precio_justo",
         blank=True,
         null=True,
     )
     qr_2_5_3_comodidad_negociacion = models.IntegerField(
-        db_column="QR_2_5_3_comodidad_negociacion",
+        db_column="qr_2_5_3_comodidad_negociacion",
         blank=True,
         null=True,
     )
 
     q3_comentarios_adicionales = models.TextField(
-        db_column="Q3_comentarios_adicionales",
+        db_column="q3_comentarios_adicionales",
         blank=True,
         null=True,
     )
 
     p1_satisfaccion_producto = models.IntegerField(
-        db_column="P1_satisfaccion_producto",
+        db_column="p1_satisfaccion_producto",
         blank=True,
         null=True,
     )
     p1_1_comentarios_auto = models.TextField(
-        db_column="P1_1_comentarios_auto",
+        db_column="p1_1_comentarios_auto",
         blank=True,
         null=True,
     )
     p3_recomendacion_distribuidor = models.IntegerField(
-        db_column="P3_recomendacion_distribuidor",
+        db_column="p3_recomendacion_distribuidor",
         blank=True,
         null=True,
     )
 
     q8_transferencia_datos = models.CharField(
-        db_column="Q8_transferencia_datos",
+        db_column="q8_transferencia_datos",
         max_length=50,
         blank=True,
         null=True,
     )
     q10_autoriza_publicacion = models.CharField(
-        db_column="Q10_autoriza_publicacion",
+        db_column="q10_autoriza_publicacion",
         max_length=50,
         blank=True,
         null=True,
