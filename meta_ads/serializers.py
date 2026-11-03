@@ -5,6 +5,13 @@ from .models import CampanaMeta
 
 
 class CampanaMetaListSerializer(serializers.ModelSerializer):
+    resultados_indicador = serializers.IntegerField(read_only=True)
+    inversion_indicador = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+
     class Meta:
         model = CampanaMeta
         fields = (
@@ -25,6 +32,8 @@ class CampanaMetaListSerializer(serializers.ModelSerializer):
             "presupuesto_anuncio",
             "coste_resultados",
             "importe_gastado",
+            "resultados_indicador",
+            "inversion_indicador",
         )
 
 
@@ -33,6 +42,16 @@ class CampanaMetaSerializer(serializers.ModelSerializer):
     Serializer completo solo para detalle o uso administrativo.
     """
 
+    resultados_indicador = serializers.IntegerField(read_only=True)
+    inversion_indicador = serializers.DecimalField(
+        max_digits=14,
+        decimal_places=2,
+        read_only=True,
+    )
+
     class Meta:
         model = CampanaMeta
-        fields = "__all__"
+        fields = [field.name for field in CampanaMeta._meta.fields] + [
+            "resultados_indicador",
+            "inversion_indicador",
+        ]

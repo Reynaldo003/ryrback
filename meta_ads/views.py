@@ -1,7 +1,17 @@
 # meta_ads/views.py
 from datetime import date
+from decimal import Decimal
 
-from django.db.models import Count, Q, Sum
+from django.db.models import (
+    BigIntegerField,
+    Case,
+    Count,
+    DecimalField,
+    Q,
+    Sum,
+    Value,
+    When,
+)
 from django.db.models.functions import Coalesce, ExtractMonth, ExtractYear
 from django.utils.dateparse import parse_date
 
@@ -13,6 +23,49 @@ from rest_framework.response import Response
 
 from .models import CampanaMeta
 from .serializers import CampanaMetaListSerializer, CampanaMetaSerializer
+
+
+# Identificadores exactos de Meta Ads para campañas de alcance/reconocimiento.
+# REACH y BRAND_AWARENESS pertenecen a la estructura anterior; ODAX usa
+# OUTCOME_AWARENESS. No se comparan nombres ni fragmentos para evitar falsos
+# positivos con otros objetivos.
+OBJETIVOS_ALCANCE = frozenset({
+    "REACH",
+    "BRAND_AWARENESS",
+    "OUTCOME_AWARENESS",
+})
+OBJETIVO_ALCANCE_Q = (
+    Q(objetivo_campana__iexact="REACH")
+    | Q(objetivo_campana__iexact="BRAND_AWARENESS")
+    | Q(objetivo_campana__iexact="OUTCOME_AWARENESS")
+)
+
+
+def es_objetivo_alcance(objetivo):
+    """Clasifica solo identificadores oficiales completos de Meta Ads."""
+    return isinstance(objetivo, str) and objetivo.upper() in OBJETIVOS_ALCANCE
+
+
+def agregar_metricas_indicador(qs):
+    """Añade métricas elegibles sin alterar los valores originales almacenados."""
+    campo_importe = DecimalField(max_digits=14, decimal_places=2)
+    return qs.annotate(
+        resultados_indicador=Case(
+            When(OBJETIVO_ALCANCE_Q, then=Value(0)),
+            default=Coalesce("total_resultados", Value(0)),
+            output_field=BigIntegerField(),
+        ),
+        inversion_indicador=Case(
+            When(OBJETIVO_ALCANCE_Q, then=Value(Decimal("0.00"))),
+            default=Coalesce(
+                "importe_gastado",
+                Value(Decimal("0.00")),
+                output_field=campo_importe,
+            ),
+            output_field=campo_importe,
+        ),
+    )
+
 
 LIST_FIELDS = (
     "id_campana",
@@ -34,14 +87,17 @@ LIST_FIELDS = (
     "importe_gastado",
 )
 
+
 class CampanaMetaPagination(PageNumberPagination):
     page_size = 50
     page_size_query_param = "page_size"
     max_page_size = 500
 
+
 def valor_vacio(valor):
     valor = (valor or "").strip()
     return valor.lower() in {"", "todos", "todas", "null", "undefined"}
+
 
 def rango_fecha(anio, mes=None):
     """
@@ -85,7 +141,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         params = self.request.query_params
-        qs = CampanaMeta.objects.using("tdsql").all()
+        qs = agregar_metricas_indicador(CampanaMeta.objects.using("tdsql").all())
 
         q = (params.get("q") or "").strip()
         sucursal = (params.get("sucursal") or "").strip()
@@ -208,7 +264,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
 
         data = qs.aggregate(
             total_campanas=Count("id_campana"),
-            total_resultados=Sum("total_resultados"),
+            total_resultados=Sum("resultados_indicador"),
             messaging_first_reply=Sum("messaging_first_reply"),
             resultados_fb=Sum("resultados_fb"),
             resultados_ig=Sum("resultados_ig"),
@@ -223,7 +279,7 @@ class CampanaMetaViewSet(viewsets.ReadOnlyModelViewSet):
             impresiones_wsp=Sum("impresiones_wsp"),
             presupuesto_anuncio=Sum("presupuesto_anuncio"),
             coste_resultados=Sum("coste_resultados"),
-            importe_gastado=Sum("importe_gastado"),
+            importe_gastado=Sum("inversion_indicador"),
             importe_gastado_fb=Sum("importe_gastado_fb"),
             importe_gastado_ig=Sum("importe_gastado_ig"),
             importe_gastado_wsp=Sum("importe_gastado_wsp"),
