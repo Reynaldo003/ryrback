@@ -638,9 +638,146 @@ def _asesores_servicio_normalizar_nombres(filas, cruces):
     return resultado
 
 
+def _asesores_servicio_fallback_ash_provisional(filas, cruces_existentes):
+    """Último recurso ASH (NO es confirmación del asesor real).
+
+    Sólo completa encuestas no identificadas y no ambiguas en hoja_ingresos.
+    Requiere VIN exacto, agencia conocida, UNA atención DMS/orden/empleado
+    en cierre +/-15d O apertura/llegada +/-3d, y catálogo ASH/AT/REC único.
+    Conserva los demás cruces, sin escribir en las bases de datos.
+    """
+    pendientes = [
+        fila for fila in filas
+        if not cruces_existentes.get(fila["id"], ("", ""))[0]
+        and cruces_existentes.get(fila["id"], ("", ""))[1] != "vin_fecha_ambiguo"
+    ]
+    if not pendientes:
+        return cruces_existentes
+
+    agencias_jd_dms = {
+        "1905": _nombre_key("Vw Tuxtepec"),
+        "2923": _nombre_key("Vw Cordoba"),
+        "2924": _nombre_key("Vw Orizaba"),
+        "2927": _nombre_key("Vw Poza Rica"),
+        "2929": _nombre_key("Vw Tuxpan"),
+    }
+    vins = sorted({v for fila in pendientes if (v := _vin_valido(fila.get("chasis")))})
+    if not vins:
+        return cruces_existentes
+
+    # Verificamos TODAS las atenciones cercanas, también de otras agencias
+    # y cargos. Una segunda orden/persona bloquea la atribución provisional.
+    matriz = {}
+    try:
+        with connections[DB_ALIAS].cursor() as cursor:
+            for inicio in range(0, len(vins), 250):
+                lote = vins[inicio:inicio + 250]
+                marcas = ",".join(["%s"] * len(lote))
+                cursor.execute(
+                    "SELECT UPPER(TRIM(chassi::text)), agencia, nratendimento, "
+                    "funcionarioct, dtfechamento, dtabertura, dtchegada, dt_llegada_real "
+                    "FROM public.matriz_atendimento "
+                    "WHERE UPPER(TRIM(chassi::text)) IN (" + marcas + ")",
+                    lote,
+                )
+                for vin, agencia, orden, funcionario, cierre, apertura, llegada, llegada_real in cursor.fetchall():
+                    vin = _vin_valido(vin)
+                    if not vin:
+                        continue
+                    fechas_recepcion = {
+                        f for dato in (apertura, llegada, llegada_real)
+                        if (f := _fecha_servicio_cruce(dato)) is not None
+                    }
+                    matriz.setdefault(vin, []).append((
+                        _nombre_key(agencia),
+                        str(orden).strip() if orden is not None else "",
+                        _codigo_funcionario(funcionario),
+                        _fecha_servicio_cruce(cierre),
+                        fechas_recepcion,
+                    ))
+    except Exception:
+        # No eliminar los resultados verificados ante una falla en DMS.
+        return cruces_existentes
+
+    por_encuesta = {}
+    codigos = set()
+    for fila in pendientes:
+        pk = fila["id"]
+        vin = _vin_valido(fila.get("chasis"))
+        fecha = _fecha_servicio_cruce(fila.get("fecha_servicio"))
+        agencia_esperada = agencias_jd_dms.get(
+            str(fila.get("codigo_concesionaria") or "").strip()
+        )
+        if not vin or not fecha or not agencia_esperada:
+            continue
+        opciones = {
+            (ag, orden, codigo)
+            for ag, orden, codigo, cierre, fechas_recepcion in matriz.get(vin, ())
+            if (cierre is not None and abs((fecha - cierre).days) <= 15)
+            or any(abs((fecha - f).days) <= 3 for f in fechas_recepcion)
+        }
+        if len(opciones) != 1:
+            continue
+        ag, orden, codigo = next(iter(opciones))
+        if ag != agencia_esperada or not orden or not codigo:
+            continue
+        por_encuesta[pk] = (ag, orden, codigo)
+        codigos.add(codigo)
+
+    if not codigos:
+        return cruces_existentes
+
+    funcionarios = {}
+    try:
+        with connections[DB_ALIAS].cursor() as cursor:
+            claves = sorted(codigos)
+            for inicio in range(0, len(claves), 200):
+                lote = claves[inicio:inicio + 200]
+                marcas = ",".join(["%s"] * len(lote))
+                cursor.execute(
+                    "SELECT agencia, cod_funcionario, nm_funcionario, "
+                    "cod_cargo, cod_area, cod_setor "
+                    "FROM public.matriz_funcionarios "
+                    "WHERE REGEXP_REPLACE(BTRIM(cod_funcionario::text), "
+                    "'[.]0+$', '') IN (" + marcas + ")",
+                    lote,
+                )
+                for agencia, codigo, nombre, cargo, area, sector in cursor.fetchall():
+                    clave = (_nombre_key(agencia), _codigo_funcionario(codigo))
+                    registro = (
+                        str(nombre or "").strip(),
+                        str(cargo or "").strip().upper(),
+                        str(area or "").strip().upper(),
+                        str(sector or "").strip().upper(),
+                    )
+                    funcionarios.setdefault(clave, set()).add(registro)
+    except Exception:
+        return cruces_existentes
+
+    resultado = cruces_existentes.copy()
+    for fila in pendientes:
+        pk = fila["id"]
+        opcion = por_encuesta.get(pk)
+        if not opcion:
+            continue
+        agencia, _orden, codigo = opcion
+        registros = funcionarios.get((agencia, codigo), set())
+        if len(registros) != 1:
+            continue
+        nombre, cargo, area, sector = next(iter(registros))
+        if nombre and (cargo, area, sector) == ("ASH", "AT", "REC"):
+            # En el panel se muestra solo el nombre del catálogo, sin sufijos.
+            # La procedencia ASH, no confirmada, sigue auditada en asesor_cruce.
+            resultado[pk] = (
+                nombre,
+                "matriz_ash_provisional_vin_orden_fecha",
+            )
+    return resultado
+
+
 def _asesores_servicio_cruce_estable():
     """Cruce con evidencia global, independiente de filtros y paginación del panel."""
-    clave_cache = "jdpower:servicio:asesores_globales:v4_pg_recepcion_nombres"
+    clave_cache = "jdpower:servicio:asesores_globales:v6_pg_ash_sin_etiqueta"
     resultado = cache.get(clave_cache)
     if resultado is not None:
         return resultado
@@ -655,6 +792,7 @@ def _asesores_servicio_cruce_estable():
     resultado = _asesores_servicio_fallback_matriz(referencia, directo)
     resultado = _asesores_servicio_fallback_recepcion(referencia, resultado)
     resultado = _asesores_servicio_normalizar_nombres(referencia, resultado)
+    resultado = _asesores_servicio_fallback_ash_provisional(referencia, resultado)
     # Evita repetir cruces entre tres bases en cada cambio de filtro.
     cache.set(clave_cache, resultado, timeout=120)
     return resultado
