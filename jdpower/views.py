@@ -251,12 +251,11 @@ def _mismo_nombre_abreviado(abreviado, completo):
 
 
 def _asesores_servicio_fallback_matriz(filas, cruce_hoja):
-    """Completa SOLO casos pendientes con DMS: VIN + fecha + agencia + AST.
-
-    El nombre directo de hoja_ingresos conserva prioridad. Para habilitar el
-    respaldo, un código AST debe haber coincidido con >=2 nombres de hoja en
-    la misma agencia, con >=80 % de concordancia. No usa ID asesor J.D. Power.
-    No escribe datos; ante fallo del catálogo conserva las coincidencias previas.
+    """Prioridad: hoja_ingresos (VIN + fecha ±15 días). Para casos pendientes,
+    exige VIN válido, fecha ±15 días, agencia JD/DMS verificada y un único
+    empleado AST/AT/REC por agencia + código en matriz_funcionarios.
+    Una segunda opción SEC/MEC puede descartarse; ASH/otras/desconocidas
+    mantienen el caso ambiguo. No escribe en ninguna base de datos.
     """
     pendientes = [fila for fila in filas if not cruce_hoja.get(fila["id"], ("", ""))[0]]
     if not pendientes:
@@ -266,7 +265,17 @@ def _asesores_servicio_fallback_matriz(filas, cruce_hoja):
     if not vins:
         return cruce_hoja
 
-    # Fuente espejo de atenciones: VIN exacto, fecha real, agencia y empleado.
+    # Correspondencias verificadas entre códigos J.D. Power y agencias DMS.
+    # No se atribuye automáticamente ninguna concesionaria desconocida.
+    agencias_jd_dms = {
+        "1905": _nombre_key("Vw Tuxtepec"),
+        "2923": _nombre_key("Vw Cordoba"),
+        "2924": _nombre_key("Vw Orizaba"),
+        "2927": _nombre_key("Vw Poza Rica"),
+        "2929": _nombre_key("Vw Tuxpan"),
+    }
+
+    # VIN + fecha real de atención: siempre consultar la matriz en PostgreSQL.
     matriz = {}
     try:
         with connections[DB_ALIAS].cursor() as cursor:
@@ -284,106 +293,112 @@ def _asesores_servicio_fallback_matriz(filas, cruce_hoja):
                     fecha = _fecha_servicio_cruce(cierre)
                     codigo = _codigo_funcionario(funcionario)
                     agencia_dms = _nombre_key(agencia)
-                    if fecha and codigo and agencia_dms:
-                        matriz.setdefault(_vin_valido(vin), []).append(
+                    vin = _vin_valido(vin)
+                    if vin and fecha and codigo and agencia_dms:
+                        matriz.setdefault(vin, []).append(
                             (fecha, codigo, agencia_dms)
                         )
     except Exception:
-        # Si la matriz no responde, mantener el cruce directo sin error 500.
+        # Una falla en DMS no debe eliminar coincidencias de hoja_ingresos.
         return cruce_hoja
 
-    # Cada encuesta debe tener exactamente UN empleado y UNA agencia en +/-15d.
     por_encuesta = {}
-    agencias_confirmadas = {}
+    codigos = set()
     for fila in filas:
         pk = fila["id"]
         vin = _vin_valido(fila.get("chasis"))
-        fecha_servicio = _fecha_servicio_cruce(fila.get("fecha_servicio"))
+        fecha = _fecha_servicio_cruce(fila.get("fecha_servicio"))
         agencia_jd = str(fila.get("codigo_concesionaria") or "").strip()
-        if not vin or not fecha_servicio or not agencia_jd:
+        agencia_esperada = agencias_jd_dms.get(agencia_jd)
+        if not vin or not fecha or not agencia_esperada:
             continue
+
         opciones = {
-            (codigo, agencia_dms)
+            (agencia_dms, codigo)
             for cierre, codigo, agencia_dms in matriz.get(vin, ())
-            if abs((fecha_servicio - cierre).days) <= 15
+            if abs((fecha - cierre).days) <= 15
         }
-        if len(opciones) != 1:
+        # Si el VIN se atendió en otra agencia en el mismo intervalo, no
+        # adivinar a cuál de las atenciones pertenece la encuesta.
+        if not opciones or any(a != agencia_esperada for a, _ in opciones):
             continue
-        codigo, agencia_dms = next(iter(opciones))
-        por_encuesta[pk] = (agencia_jd, agencia_dms, codigo)
-        if cruce_hoja.get(pk, ("", ""))[0]:
-            agencias_confirmadas.setdefault(agencia_jd, set()).add(agencia_dms)
+        por_encuesta[pk] = opciones
+        codigos.update(codigo for _, codigo in opciones)
 
-    # La agencia del DMS debe ser la única observada para la agencia JD,
-    # usando exclusivamente casos cuyo VIN ya tenía nombre validado en hoja.
-    agencia_unica = {
-        jd: next(iter(nombres))
-        for jd, nombres in agencias_confirmadas.items()
-        if len(nombres) == 1
-    }
-
-    codigos = sorted({
-        int(codigo)
-        for jd, agencia_dms, codigo in por_encuesta.values()
-        if agencia_unica.get(jd) == agencia_dms
-    })
     if not codigos:
         return cruce_hoja
 
-    # Catalogo DMS SQL Server. AST/AT/REC son los cargos de servicio
-    # corroborados en los casos conocidos; MEC, SEC y demás quedan excluidos.
+    # Catálogo completo de empleados por agencia + código. Los códigos se
+    # repiten entre concesionarias; consultar sólo por código sería inseguro.
     funcionarios = {}
     try:
-        with connections["sqlserver"].cursor() as cursor:
-            for inicio in range(0, len(codigos), 200):
-                lote = codigos[inicio:inicio + 200]
+        with connections[DB_ALIAS].cursor() as cursor:
+            claves = sorted(codigos)
+            for inicio in range(0, len(claves), 200):
+                lote = claves[inicio:inicio + 200]
                 marcas = ",".join(["%s"] * len(lote))
                 cursor.execute(
-                    "SELECT Cod_Funcionario, Nm_Funcionario, "
-                    "Cod_Cargo, Cod_Area, Cod_Setor "
-                    "FROM dbo.Funcionarios "
-                    "WHERE TRY_CONVERT(int, Cod_Funcionario) "
-                    "IN (" + marcas + ")",
+                    "SELECT agencia, cod_funcionario, nm_funcionario, "
+                    "cod_cargo, cod_area, cod_setor "
+                    "FROM public.matriz_funcionarios "
+                    "WHERE REGEXP_REPLACE(BTRIM(cod_funcionario::text), "
+                    "'[.]0+$', '') IN (" + marcas + ")",
                     lote,
                 )
-                for codigo, nombre, cargo, area, sector in cursor.fetchall():
-                    clave = _codigo_funcionario(codigo)
+                for agencia, codigo, nombre, cargo, area, sector in cursor.fetchall():
+                    clave = (_nombre_key(agencia), _codigo_funcionario(codigo))
+                    if clave[1] not in codigos or clave[0] not in agencias_jd_dms.values():
+                        continue
                     texto = str(nombre or "").strip()
-                    if (
-                        clave and texto
-                        and str(cargo or "").strip().upper() == "AST"
-                        and str(area or "").strip().upper() == "AT"
-                        and str(sector or "").strip().upper() == "REC"
-                    ):
-                        funcionarios.setdefault(clave, {})[_nombre_key(texto)] = texto
+                    registro = (
+                        _nombre_key(texto), texto,
+                        str(cargo or "").strip().upper(),
+                        str(area or "").strip().upper(),
+                        str(sector or "").strip().upper(),
+                    )
+                    funcionarios.setdefault(clave, set()).add(registro)
     except Exception:
-        # Catálogo temporalmente inaccesible: no romper el reporte.
         return cruce_hoja
 
-    # Reconciliar abreviaciones únicamente si el código pasó validación
-    # cruzada en la misma agencia. Las discrepancias reales NO se ignoran.
+    # Únicamente un registro de catálogo distinto por (agencia, código).
+    # SEC/MEC son cargos inequívocamente ajenos a asesoría. ASH no se
+    # descarta: debe quedar en revisión si compite con un código AST.
+    def asesor_validado(opciones):
+        asesores = []
+        for clave in opciones:
+            registros = funcionarios.get(clave, set())
+            if len(registros) != 1:
+                return None
+            nombre_key, nombre, cargo, area, sector = next(iter(registros))
+            if nombre_key and (cargo, area, sector) == ("AST", "AT", "REC"):
+                asesores.append((clave, nombre))
+            elif len(opciones) > 1 and cargo in ("SEC", "MEC"):
+                continue
+            else:
+                return None
+        return asesores[0] if len(asesores) == 1 else None
+
+    # Los nombres ya identificados por hoja_ingresos conservan prioridad.
+    # Sólo se homologa una abreviatura si hay evidencia suficiente y no
+    # existe contradicción; así evitamos barras duplicadas en la gráfica.
     evidencia = {}
     for fila in filas:
         pk = fila["id"]
-        previo = cruce_hoja.get(pk, ("", ""))
-        nombre_hoja = previo[0]
-        clave = por_encuesta.get(pk)
-        if not nombre_hoja or not clave:
+        nombre_hoja = cruce_hoja.get(pk, ("", ""))[0]
+        opciones = por_encuesta.get(pk)
+        if not nombre_hoja or not opciones or len(opciones) != 1:
             continue
-        jd, agencia_dms, codigo = clave
-        if agencia_unica.get(jd) != agencia_dms:
+        validado = asesor_validado(opciones)
+        if not validado:
             continue
-        nombres = funcionarios.get(codigo, {})
-        if len(nombres) != 1:
-            continue
-        nombre_dms = next(iter(nombres.values()))
-        marcador = evidencia.setdefault(clave, {"iguales": 0, "distintos": 0})
+        clave, nombre_dms = validado
+        cuenta = evidencia.setdefault(clave, {"iguales": 0, "distintos": 0})
         if _mismo_nombre_abreviado(nombre_hoja, nombre_dms):
-            marcador["iguales"] += 1
+            cuenta["iguales"] += 1
         else:
-            marcador["distintos"] += 1
+            cuenta["distintos"] += 1
 
-    codigos_confiables = {
+    confiables = {
         clave for clave, cuenta in evidencia.items()
         if cuenta["iguales"] >= 2
         and cuenta["iguales"] / (cuenta["iguales"] + cuenta["distintos"]) >= 0.80
@@ -392,27 +407,240 @@ def _asesores_servicio_fallback_matriz(filas, cruce_hoja):
     resultado = cruce_hoja.copy()
     for fila in filas:
         pk = fila["id"]
-        clave = por_encuesta.get(pk)
-        if clave not in codigos_confiables:
+        opciones = por_encuesta.get(pk)
+        if not opciones:
             continue
-        codigo = clave[2]
-        nombre_oficial = next(iter(funcionarios[codigo].values()))
+        validado = asesor_validado(opciones)
+        if not validado:
+            continue
+        clave, nombre_oficial = validado
         nombre_anterior, estado = resultado.get(pk, ("", "sin_coincidencia"))
         if nombre_anterior:
-            # Mismo asesor, etiqueta uniforme para evitar barras duplicadas.
-            if _mismo_nombre_abreviado(nombre_anterior, nombre_oficial):
+            if clave in confiables and _mismo_nombre_abreviado(nombre_anterior, nombre_oficial):
                 resultado[pk] = (nombre_oficial, estado)
         else:
             resultado[pk] = (
                 nombre_oficial, "matriz_funcionario_ast_vin_fecha_15d"
             )
+    return resultado
 
+
+def _asesores_servicio_fallback_recepcion(filas, cruces_existentes):
+    """Respaldo adicional, solo para encuestas SIN asesor identificado.
+
+    Criterio conservador: VIN exacto, agencia JD/DMS conocida, apertura o
+    llegada +/-3 dias de fecha_servicio; UNA orden y UN empleado AST/AT/REC
+    en ese intervalo, sin otra atencion ni otra agencia concurrentes.
+    Nunca cambia nombres existentes, no usa SQL Server ni escribe datos.
+    """
+    pendientes = [
+        fila for fila in filas
+        if not cruces_existentes.get(fila["id"], ("", ""))[0]
+        # No atribuir automaticamente si hoja_ingresos ofrecio nombres distintos.
+        and cruces_existentes.get(fila["id"], ("", ""))[1] != "vin_fecha_ambiguo"
+    ]
+    if not pendientes:
+        return cruces_existentes
+
+    agencias_jd_dms = {
+        "1905": _nombre_key("Vw Tuxtepec"),
+        "2923": _nombre_key("Vw Cordoba"),
+        "2924": _nombre_key("Vw Orizaba"),
+        "2927": _nombre_key("Vw Poza Rica"),
+        "2929": _nombre_key("Vw Tuxpan"),
+    }
+    vins = sorted({v for fila in pendientes if (v := _vin_valido(fila.get("chasis")))})
+    if not vins:
+        return cruces_existentes
+
+    # La fecha de cierre NO se usa en este respaldo: una orden puede durar
+    # semanas. El numero de orden permite detectar varias visitas del VIN.
+    por_vin = {}
+    try:
+        with connections[DB_ALIAS].cursor() as cursor:
+            for inicio in range(0, len(vins), 250):
+                lote = vins[inicio:inicio + 250]
+                marcas = ",".join(["%s"] * len(lote))
+                cursor.execute(
+                    "SELECT UPPER(TRIM(chassi::text)), agencia, nratendimento, "
+                    "funcionarioct, dtabertura, dtchegada, dt_llegada_real "
+                    "FROM public.matriz_atendimento "
+                    "WHERE UPPER(TRIM(chassi::text)) IN (" + marcas + ")",
+                    lote,
+                )
+                for vin, agencia, orden, empleado, apertura, llegada, llegada_real in cursor.fetchall():
+                    vin_normalizado = _vin_valido(vin)
+                    if not vin_normalizado:
+                        continue
+                    fechas = {
+                        f for dato in (apertura, llegada, llegada_real)
+                        if (f := _fecha_servicio_cruce(dato)) is not None
+                    }
+                    if not fechas:
+                        continue
+                    por_vin.setdefault(vin_normalizado, []).append((
+                        _nombre_key(agencia), str(orden or "").strip(),
+                        _codigo_funcionario(empleado), fechas,
+                    ))
+    except Exception:
+        # Conservar el resultado anterior ante un fallo de la tabla DMS.
+        return cruces_existentes
+
+    por_encuesta = {}
+    codigos = set()
+    for fila in pendientes:
+        pk = fila["id"]
+        vin = _vin_valido(fila.get("chasis"))
+        fecha = _fecha_servicio_cruce(fila.get("fecha_servicio"))
+        agencia = agencias_jd_dms.get(str(fila.get("codigo_concesionaria") or "").strip())
+        if not vin or not fecha or not agencia:
+            continue
+        # Filtrar por ventana PRIMERO, considerando todas las agencias.
+        # Otra agencia u otra orden cercana impide atribuir la encuesta.
+        cercanas = {
+            (ag, orden, codigo)
+            for ag, orden, codigo, fechas in por_vin.get(vin, ())
+            if any(abs((fecha - f).days) <= 3 for f in fechas)
+        }
+        if len(cercanas) != 1:
+            continue
+        ag, orden, codigo = next(iter(cercanas))
+        if ag != agencia or not orden or not codigo:
+            continue
+        por_encuesta[pk] = (ag, orden, codigo)
+        codigos.add(codigo)
+
+    if not codigos:
+        return cruces_existentes
+
+    funcionarios = {}
+    try:
+        with connections[DB_ALIAS].cursor() as cursor:
+            codigos_ordenados = sorted(codigos)
+            for inicio in range(0, len(codigos_ordenados), 200):
+                lote = codigos_ordenados[inicio:inicio + 200]
+                marcas = ",".join(["%s"] * len(lote))
+                cursor.execute(
+                    "SELECT agencia, cod_funcionario, nm_funcionario, "
+                    "cod_cargo, cod_area, cod_setor "
+                    "FROM public.matriz_funcionarios "
+                    "WHERE REGEXP_REPLACE(BTRIM(cod_funcionario::text), "
+                    "'[.]0+$', '') IN (" + marcas + ")",
+                    lote,
+                )
+                for agencia, codigo, nombre, cargo, area, sector in cursor.fetchall():
+                    clave = (_nombre_key(agencia), _codigo_funcionario(codigo))
+                    registro = (
+                        str(nombre or "").strip(),
+                        str(cargo or "").strip().upper(),
+                        str(area or "").strip().upper(),
+                        str(sector or "").strip().upper(),
+                    )
+                    funcionarios.setdefault(clave, set()).add(registro)
+    except Exception:
+        return cruces_existentes
+
+    resultado = cruces_existentes.copy()
+    for fila in pendientes:
+        pk = fila["id"]
+        opcion = por_encuesta.get(pk)
+        if not opcion:
+            continue
+        agencia, _orden, codigo = opcion
+        registros = funcionarios.get((agencia, codigo), set())
+        if len(registros) != 1:
+            continue
+        nombre, cargo, area, sector = next(iter(registros))
+        if nombre and (cargo, area, sector) == ("AST", "AT", "REC"):
+            # La etiqueta permite auditar este respaldo en el frontend/API.
+            resultado[pk] = (nombre, "matriz_recepcion_ast_3d_orden_unica")
+    return resultado
+
+def _asesores_servicio_normalizar_nombres(filas, cruces):
+    """Homologa SOLO la etiqueta del asesor ya identificado; nunca atribuye encuestas.
+
+    Busca nombres AST/AT/REC inequívocos en tdsql.public.matriz_funcionarios
+    y exige coincidencia única por agencia y palabras del nombre abreviado.
+    Conserva el origen del cruce y los casos sin identificar. Solo SELECT.
+    """
+    agencias_jd_dms = {
+        "1905": _nombre_key("Vw Tuxtepec"),
+        "2923": _nombre_key("Vw Cordoba"),
+        "2924": _nombre_key("Vw Orizaba"),
+        "2927": _nombre_key("Vw Poza Rica"),
+        "2929": _nombre_key("Vw Tuxpan"),
+    }
+    agencias_necesarias = {
+        agencias_jd_dms[codigo]
+        for fila in filas
+        if cruces.get(fila["id"], ("", ""))[0]
+        if (codigo := str(fila.get("codigo_concesionaria") or "").strip()) in agencias_jd_dms
+    }
+    if not agencias_necesarias:
+        return cruces
+
+    catalogo_por_codigo = {}
+    try:
+        with connections[DB_ALIAS].cursor() as cursor:
+            cursor.execute(
+                "SELECT agencia, cod_funcionario, nm_funcionario, "
+                "cod_cargo, cod_area, cod_setor "
+                "FROM public.matriz_funcionarios"
+            )
+            for agencia, codigo, nombre, cargo, area, sector in cursor.fetchall():
+                agencia_dms = _nombre_key(agencia)
+                codigo_dms = _codigo_funcionario(codigo)
+                if agencia_dms not in agencias_necesarias or not codigo_dms:
+                    continue
+                registro = (
+                    str(nombre or "").strip(),
+                    str(cargo or "").strip().upper(),
+                    str(area or "").strip().upper(),
+                    str(sector or "").strip().upper(),
+                )
+                catalogo_por_codigo.setdefault((agencia_dms, codigo_dms), set()).add(registro)
+    except Exception:
+        # La presentación nunca debe provocar un error 500 si falla el catálogo.
+        return cruces
+
+    nombres_por_agencia = {}
+    for (agencia_dms, _codigo), registros in catalogo_por_codigo.items():
+        # Un código repetido con información contradictoria no se normaliza.
+        if len(registros) != 1:
+            continue
+        nombre, cargo, area, sector = next(iter(registros))
+        nombre_normalizado = _nombre_key(nombre)
+        if nombre_normalizado and (cargo, area, sector) == ("AST", "AT", "REC"):
+            nombres_por_agencia.setdefault(agencia_dms, {}).setdefault(
+                nombre_normalizado, set()
+            ).add(nombre)
+
+    resultado = cruces.copy()
+    for fila in filas:
+        pk = fila["id"]
+        nombre_actual, estado = resultado.get(pk, ("", "sin_coincidencia"))
+        if not nombre_actual:
+            continue
+        agencia_jd = str(fila.get("codigo_concesionaria") or "").strip()
+        agencia_dms = agencias_jd_dms.get(agencia_jd)
+        if not agencia_dms:
+            continue
+        candidatos = set()
+        for nombre_key, representaciones in nombres_por_agencia.get(agencia_dms, {}).items():
+            if (_nombre_key(nombre_actual) == nombre_key or
+                    _mismo_nombre_abreviado(nombre_actual, next(iter(representaciones)))):
+                # Una misma persona puede tener variantes de escritura en el catálogo.
+                if len(representaciones) == 1:
+                    candidatos.update(representaciones)
+        if len(candidatos) == 1:
+            # Cambia la etiqueta, NUNCA el estado, el asesor inferido o los datos Q1.
+            resultado[pk] = (next(iter(candidatos)), estado)
     return resultado
 
 
 def _asesores_servicio_cruce_estable():
     """Cruce con evidencia global, independiente de filtros y paginación del panel."""
-    clave_cache = "jdpower:servicio:asesores_globales:v1"
+    clave_cache = "jdpower:servicio:asesores_globales:v4_pg_recepcion_nombres"
     resultado = cache.get(clave_cache)
     if resultado is not None:
         return resultado
@@ -425,6 +653,8 @@ def _asesores_servicio_cruce_estable():
     )
     directo = _asesores_servicio_desde_hoja_ingresos(referencia)
     resultado = _asesores_servicio_fallback_matriz(referencia, directo)
+    resultado = _asesores_servicio_fallback_recepcion(referencia, resultado)
+    resultado = _asesores_servicio_normalizar_nombres(referencia, resultado)
     # Evita repetir cruces entre tres bases en cada cambio de filtro.
     cache.set(clave_cache, resultado, timeout=120)
     return resultado
