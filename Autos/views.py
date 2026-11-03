@@ -33,6 +33,14 @@ CONDICION_COMERCIAL = "(" + " OR ".join(
 
 EXPRESION_VIN = 'UPPER(BTRIM("ProdOuServ"))'
 
+
+def condicion_venta_valida(columna):
+    """Criterio único de venta emitida usado por dashboard y reportes."""
+    return f"{columna} = 'E'"
+
+
+CONDICION_VENTA_VALIDA = condicion_venta_valida('"Situacao"')
+
 EXPRESION_AGENCIA = (
     f"CASE WHEN {CONDICION_COMERCIAL} "
     'THEN \'R&R VC\' ELSE "AGENCIA" END'
@@ -99,6 +107,7 @@ def leer_filtros(request, fecha_desde=None, fecha_hasta=None):
         "fecha_desde": fecha_desde if fecha_desde is not None else str(parametros.get("fecha_desde", "") or "").strip(),
         "fecha_hasta": fecha_hasta if fecha_hasta is not None else str(parametros.get("fecha_hasta", "") or "").strip(),
         "venta_digital": str(parametros.get("venta_digital", "") or "").strip().lower(),
+        "solo_vendidas": str(parametros.get("solo_vendidas", "") or "").strip().lower(),
     }
     for clave in ("fecha_desde", "fecha_hasta"):
         if valores[clave] and parse_date(valores[clave]) is None:
@@ -171,6 +180,9 @@ def construir_where(filtros, vins_digitales=None):
             parametros.append(vins_digitales)
         else:
             condiciones.append("FALSE")
+
+    if filtros["solo_vendidas"] in ("1", "true", "si", "sí"):
+        condiciones.append(CONDICION_VENTA_VALIDA)
 
     return "WHERE " + " AND ".join(condiciones), parametros
 
@@ -347,7 +359,7 @@ class VWVNDashboardView(APIView):
                 GROUPING(condicion_pago) AS g_pago,
                 periodo_mes, asesor, familia, condicion_pago,
                 COUNT(producto_servicio) AS productos,
-                COUNT(*) FILTER (WHERE situacion = 'E') AS unidades_vendidas,
+                COUNT(*) FILTER (WHERE {condicion_venta_valida("situacion")}) AS unidades_vendidas,
                 COALESCE(SUM(COALESCE(factura_sin_iva, 0) - COALESCE(isan, 0)), 0) AS ingresos,
                 COALESCE(SUM(COALESCE(costo, 0)), 0) AS costo,
                 COUNT(*) FILTER (WHERE vin_normalizado = ANY(%s::text[])) AS ventas_digitales
@@ -388,7 +400,7 @@ class VWVNDashboardView(APIView):
                 consulta_anual = f'''
                     SELECT DATE_TRUNC('month', "DtEmissao"::timestamp) AS periodo_mes,
                            COUNT("ProdOuServ") AS productos,
-                           COUNT(*) FILTER (WHERE "Situacao" = 'E') AS unidades_vendidas,
+                           COUNT(*) FILTER (WHERE {CONDICION_VENTA_VALIDA}) AS unidades_vendidas,
                            COALESCE(SUM(COALESCE("ValorFacturaSnIva", 0) - COALESCE("ISAN", 0)), 0) AS ingresos,
                            COALESCE(SUM(COALESCE("ValorCompra", 0)), 0) AS costo
                     FROM {TABLA}
