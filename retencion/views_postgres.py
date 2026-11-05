@@ -7,7 +7,7 @@ from rest_framework import viewsets
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.pagination import PageNumberPagination
-from django.db.models import Q, Sum
+from django.db.models import Q, Sum, CharField, Func, Value, F
 from decimal import Decimal
 from rest_framework.permissions import IsAuthenticated
 
@@ -198,7 +198,8 @@ class OrdenServicioVentaPostgresViewSet(
         if not es_filtro_vacio(search):
             texto = search.strip()
 
-            qs = qs.filter(
+            # Conservar las búsquedas originales.
+            filtro_busqueda = (
                 Q(vin__icontains=texto)
                 | Q(nombre_cliente__icontains=texto)
                 | Q(telefono_cliente__icontains=texto)
@@ -211,8 +212,31 @@ class OrdenServicioVentaPostgresViewSet(
                 | Q(modelo_nombre__icontains=texto)
             )
 
-        return qs
+            # Ignorar espacios, guiones, paréntesis
+            # y otros separadores al buscar teléfonos.
+            telefono_buscado = re.sub(r"[^0-9]", "", texto)
 
+            if telefono_buscado and re.fullmatch(
+                r"[\d\s()+.-]+", texto
+            ):
+                qs = qs.annotate(
+                    telefono_normalizado=Func(
+                        F("telefono_cliente"),
+                        Value(r"[^0-9]"),
+                        Value(""),
+                        Value("g"),
+                        function="regexp_replace",
+                        output_field=CharField(),
+                    )
+                )
+
+                filtro_busqueda |= Q(
+                    telefono_normalizado__contains=telefono_buscado
+                )
+
+            qs = qs.filter(filtro_busqueda)
+
+        return qs
     def aplicar_ordenamiento(self, qs):
         ordering = self.request.query_params.get(
             "ordering",
