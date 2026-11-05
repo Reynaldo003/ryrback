@@ -18,6 +18,7 @@ def filtros_base(**cambios):
         "fecha_hasta": "2026-10-31",
         "venta_digital": "",
         "solo_vendidas": "",
+        "filtros_columnas": {},
     }
     filtros.update(cambios)
     return filtros
@@ -44,3 +45,27 @@ class FiltroReporteVentasTests(SimpleTestCase):
                     filtros_base(solo_vendidas=valor)
                 )
                 self.assertIn(CONDICION_VENTA_VALIDA, where_sql)
+
+    def test_filtro_columna_acepta_varios_valores_exactos(self):
+        where_sql, parametros = construir_where(
+            filtros_base(
+                fecha_desde="",
+                fecha_hasta="",
+                filtros_columnas={"agencia": ["VW Córdoba", "VW Orizaba"]},
+            )
+        )
+
+        self.assertIn("= ANY(%s::text[])", where_sql)
+        self.assertEqual(parametros, [["VW Córdoba", "VW Orizaba"]])
+
+    def test_filtro_columna_admite_valores_vacios(self):
+        where_sql, parametros = construir_where(
+            filtros_base(
+                fecha_desde="",
+                fecha_hasta="",
+                filtros_columnas={"asesor": [""]},
+            )
+        )
+
+        self.assertIn('"Asesor" IS NULL', where_sql)
+        self.assertEqual(parametros, [])

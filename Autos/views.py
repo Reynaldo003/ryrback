@@ -1,4 +1,5 @@
 # Autos/views.py
+import json
 import re
 from django.core.cache import cache
 from django.db import connections
@@ -94,6 +95,13 @@ def leer_filtros(request, fecha_desde=None, fecha_hasta=None):
     if cond_uso not in ("N", "U"):
         cond_uso = "N"
 
+    try:
+        filtros_columnas = json.loads(parametros.get("col_filters", "{}") or "{}")
+        if not isinstance(filtros_columnas, dict):
+            filtros_columnas = {}
+    except (TypeError, ValueError, json.JSONDecodeError):
+        filtros_columnas = {}
+
     valores = {
         "cond_uso": cond_uso,
         "q": str(parametros.get("q", "") or "").strip(),
@@ -108,11 +116,46 @@ def leer_filtros(request, fecha_desde=None, fecha_hasta=None):
         "fecha_hasta": fecha_hasta if fecha_hasta is not None else str(parametros.get("fecha_hasta", "") or "").strip(),
         "venta_digital": str(parametros.get("venta_digital", "") or "").strip().lower(),
         "solo_vendidas": str(parametros.get("solo_vendidas", "") or "").strip().lower(),
+        "filtros_columnas": filtros_columnas,
     }
     for clave in ("fecha_desde", "fecha_hasta"):
         if valores[clave] and parse_date(valores[clave]) is None:
             raise ValueError(f"{clave} debe tener formato AAAA-MM-DD")
     return valores
+
+
+COLUMNAS_FILTRO = {
+    "serie": '"Serie"',
+    "nr_nota": '"NrNota"',
+    "tp_producto": '"TpProduto"',
+    "producto_servicio": '"ProdOuServ"',
+    "precio_unitario": '"PrcUnitario"',
+    "valor_bruto_item": '"VrBrutoItem"',
+    "influye_estadistica": '"InfluiEstat"',
+    "valor_descuento_item": '"VrDescItem"',
+    "codigo_condicion_pago": '"CodCondPgto"',
+    "valor_factura": '"ValorFactura"',
+    "valor_factura_sin_iva": '"ValorFacturaSnIva"',
+    "valor_compra": '"ValorCompra"',
+    "isan": '"ISAN"',
+    "iva": '"IVA"',
+    "codigo_entidad": '"CodEntidade"',
+    "fecha_emision": '"DtEmissao"',
+    "situacion": '"Situacao"',
+    "tipo_nf": '"TpNF"',
+    "nr_mov": '"NrMov"',
+    "fecha_ultima_venta": '"DrUltVenda"',
+    "razon_social": '"RazaoSocial"',
+    "tipo_persona": '"TpPessoa"',
+    "valor_total_productos": '"VrTotalProds"',
+    "codigo_marca": '"CodMarca"',
+    "nombre_marca": '"NmMarca"',
+    "nombre_familia": '"NmFamilia"',
+    "condicion_uso": '"CondUso"',
+    "nombre_condicion_pago": '"NmCondPgto"',
+    "asesor": '"Asesor"',
+    "agencia": EXPRESION_AGENCIA,
+}
 
 
 def construir_where(filtros, vins_digitales=None):
@@ -184,6 +227,34 @@ def construir_where(filtros, vins_digitales=None):
     if filtros["solo_vendidas"] in ("1", "true", "si", "sí"):
         condiciones.append(CONDICION_VENTA_VALIDA)
 
+    for clave, valores in filtros.get("filtros_columnas", {}).items():
+        if not isinstance(valores, list) or not valores:
+            continue
+        valores_texto = [str(valor) for valor in valores]
+        if clave == "tipo_venta":
+            partes = []
+            if "Venta digital" in valores_texto:
+                partes.append(f"{EXPRESION_VIN} = ANY(%s::text[])")
+                parametros.append(vins_digitales or [])
+            if "Venta tradicional" in valores_texto or "" in valores_texto:
+                partes.append(f"NOT COALESCE({EXPRESION_VIN} = ANY(%s::text[]), FALSE)")
+                parametros.append(vins_digitales or [])
+            if partes:
+                condiciones.append("(" + " OR ".join(partes) + ")")
+            continue
+        expresion = COLUMNAS_FILTRO.get(clave)
+        if not expresion:
+            continue
+        no_vacios = [valor for valor in valores_texto if valor != ""]
+        partes = []
+        if no_vacios:
+            partes.append(f"CAST({expresion} AS TEXT) = ANY(%s::text[])")
+            parametros.append(no_vacios)
+        if "" in valores_texto:
+            partes.append(f"({expresion} IS NULL OR BTRIM(CAST({expresion} AS TEXT)) = '')")
+        if partes:
+            condiciones.append("(" + " OR ".join(partes) + ")")
+
     return "WHERE " + " AND ".join(condiciones), parametros
 
 
@@ -237,7 +308,10 @@ class VWVNListView(APIView):
             pagina, tamano = 1, 50
         offset = (pagina - 1) * tamano
 
-        aplicar_digital = filtros["venta_digital"] in ("1", "true", "si", "sí")
+        aplicar_digital = (
+            filtros["venta_digital"] in ("1", "true", "si", "sí")
+            or "tipo_venta" in filtros.get("filtros_columnas", {})
+        )
         vins_digitales = obtener_vins_digitales() if aplicar_digital else None
         where_sql, parametros = construir_where(filtros, vins_digitales)
 
@@ -287,7 +361,7 @@ class VWVNListView(APIView):
         for registro in registros:
             expediente = expedientes_por_vin.get(normalizar_vin(registro["producto_servicio"]))
             registro["es_venta_digital"] = expediente is not None
-            registro["tipo_venta"] = "Venta digital" if expediente else ""
+            registro["tipo_venta"] = "Venta digital" if expediente else "Venta tradicional"
             registro["prospecto_digital"] = None
             if expediente:
                 cliente = expediente.cliente
@@ -314,6 +388,38 @@ class VWVNListView(APIView):
             "count": total, "page": pagina, "page_size": tamano,
             "results": VWVNSerializer(registros, many=True).data,
         })
+
+
+class VWVNFilterOptionsView(APIView):
+    """Valores distintos de una columna, sin paginación ni filtros de periodo."""
+    authentication_classes = [CRMJWTAuthentication]
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        cond_uso = str(request.query_params.get("cond_uso", "N") or "N").strip().upper()
+        if cond_uso not in ("N", "U"):
+            cond_uso = "N"
+        columna = str(request.query_params.get("column", "") or "").strip()
+        if columna == "tipo_venta":
+            return Response({"column": columna, "values": ["Venta digital", "Venta tradicional"]})
+        expresion = COLUMNAS_FILTRO.get(columna)
+        if not expresion:
+            return Response({"detail": "Columna no permitida."}, status=status.HTTP_400_BAD_REQUEST)
+
+        clave_cache = f"vw_vn_filtro_columna_{cond_uso}_{columna}"
+        valores = cache.get(clave_cache)
+        if valores is None:
+            consulta = f'''
+                SELECT DISTINCT COALESCE(CAST({expresion} AS TEXT), '') AS valor
+                FROM {TABLA}
+                WHERE "CondUso" = %s
+                ORDER BY valor
+            '''
+            with connections[BASE_DATOS].cursor() as cursor:
+                cursor.execute(consulta, [cond_uso])
+                valores = [fila[0] for fila in cursor.fetchall()]
+            cache.set(clave_cache, valores, timeout=1800)
+        return Response({"column": columna, "values": valores})
 
 
 class VWVNDashboardView(APIView):

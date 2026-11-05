@@ -4,6 +4,7 @@ from django.urls import path
 from .views import (
     VWVNListView,
     VWVNDashboardView,
+    VWVNFilterOptionsView,
 )
 
 from .productos_estoque import ProductosEstoqueListView
@@ -27,6 +28,11 @@ urlpatterns = [
         "api/dashboard/",
         VWVNDashboardView.as_view(),
         name="ventas-vn-dashboard",
+    ),
+    path(
+        "api/filter-options/",
+        VWVNFilterOptionsView.as_view(),
+        name="ventas-vn-filter-options",
     ),
     path(
         "api/productos/",
