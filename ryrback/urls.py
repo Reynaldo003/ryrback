@@ -37,6 +37,7 @@ urlpatterns = [
     path("logs/", include("logs.urls")),
     path("business-plan/", include("BusinessPlan.urls")),
     path("inspector-ai/", include("inspector_ai.urls")),
+    path("salesforce/", include("SalesForce.urls")),
 ]
 
 if settings.DEBUG:
