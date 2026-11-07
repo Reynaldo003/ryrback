@@ -510,46 +510,73 @@ def procesar_archivo(archivo, tabla, aplicar=False):
     resumen = resumen_vacio()
     vistos = set()
     lote = []
+
     def terminar_lote():
         if not lote:
             return
-        for numero, clave, estado, mensaje in procesar_lote(tabla, lote, aplicar=aplicar):
+
+        resultados = procesar_lote(tabla, lote, aplicar=aplicar)
+
+        for numero, clave, estado, mensaje in resultados:
             if estado == "error":
                 resumen["errores"] += 1
+
                 if len(resumen["detalle_errores"]) < 30:
-                    resumen["detalle_errores"].append({"fila": numero, "id": clave, "error": mensaje})
+                    resumen["detalle_errores"].append({
+                        "fila": numero,
+                        "id": clave,
+                        "error": mensaje
+                    })
             else:
-                resumen[estado] += 1
+                clave_resumen = "nuevos" if estado == "nuevo" else estado
+                resumen[clave_resumen] += 1
+
             for vista in resumen["vista_previa"]:
                 if vista["_fila"] == numero:
                     vista["Estado"] = estado
+
         lote.clear()
 
     for numero, fila in iterar_filas(archivo, tabla):
         resumen["encontrados"] += 1
+
         if len(resumen["vista_previa"]) < 8:
             vista = {"_fila": numero}
+
             for columna, valor in list(fila.items())[:7]:
                 vista[columna] = texto_celda(valor)
+
             resumen["vista_previa"].append(vista)
+
         try:
             clave, valores = preparar_fila(tabla, fila)
+
             if clave in vistos:
                 raise ValueError(f"ID duplicado dentro del archivo: {clave}")
+
             vistos.add(clave)
             lote.append((numero, clave, valores))
+
         except (ValueError, TypeError, ErrorModelo) as exc:
             resumen["errores"] += 1
+
             if len(resumen["detalle_errores"]) < 30:
-                resumen["detalle_errores"].append({"fila": numero, "error": str(exc)})
+                resumen["detalle_errores"].append({
+                    "fila": numero,
+                    "error": str(exc)
+                })
+
         if len(lote) >= TAMANO_LOTE:
             terminar_lote()
+
     terminar_lote()
+
     for vista in resumen["vista_previa"]:
         vista.pop("_fila", None)
-    resumen["valido"] = resumen["encontrados"] > 0 and resumen["errores"] == 0
-    return resumen
 
+    resumen["valido"] = resumen["encontrados"] > 0 and resumen["errores"] == 0
+
+    return resumen
 
 def huella_archivo(archivo):
     sha = hashlib.sha256()
