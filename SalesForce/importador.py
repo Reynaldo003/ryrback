@@ -287,13 +287,8 @@ def iterar_filas(archivo, tabla):
             libro.close()
 
 
-def leer_columna(fila, nombre):
-    buscada = limpiar_etiqueta(nombre)
-    for clave, valor in fila.items():
-        if limpiar_etiqueta(clave) == buscada:
-            return valor
-    return None
-
+def leer_columna(columnas, nombre):
+    return columnas.get(limpiar_etiqueta(nombre))
 
 def texto_celda(valor):
     if valor is None:
@@ -391,46 +386,87 @@ def convertir_valor(valor, campo, fecha_base=None):
 
 def preparar_fila(tabla, fila):
     modelo = TABLAS[tabla]["modelo"]
-    clave = texto_celda(leer_columna(fila, TABLAS[tabla]["clave"]))
+
+    # Indexar las columnas una sola vez por fila.
+    columnas = {
+        limpiar_etiqueta(nombre): valor
+        for nombre, valor in fila.items()
+    }
+
+    clave = texto_celda(leer_columna(columnas, TABLAS[tabla]["clave"]))
+
     if not clave:
         raise ValueError(f"Falta {TABLAS[tabla]['clave']}")
+
     if len(clave) > 18:
         raise ValueError("El identificador Salesforce excede 18 caracteres")
+
     valores = {}
+
     if tabla == "procesos-detalle":
         valores["proceso_id"] = clave
     else:
         valores[modelo._meta.pk.attname] = clave
-    fecha_base = obtener_fecha(leer_columna(fila, "Fecha")) if tabla.startswith("actividades-") else None
+
+    fecha_base = None
+
+    if tabla.startswith("actividades-"):
+        fecha_base = obtener_fecha(leer_columna(columnas, "Fecha"))
+
     for nombre, columna in MAPEOS[tabla].items():
-        original = leer_columna(fila, columna)
+        original = leer_columna(columnas, columna)
+
         if texto_celda(original) == "":
-            continue  # No borrar datos existentes por celdas vacías.
+            continue
+
         campo = modelo._meta.get_field(nombre)
         convertido = convertir_valor(original, campo, fecha_base=fecha_base)
+
         if convertido is not None:
             valores[nombre] = convertido
+
     if tabla == "prospectos":
-        nombre = " ".join(p for p in (valores.get("nombre", ""), valores.get("apellido_paterno", "")) if p)
+        nombre = " ".join(
+            parte for parte in [
+                valores.get("nombre", ""),
+                valores.get("apellido_paterno", "")
+            ] if parte
+        )
+
         modelo_interes = valores.get("modelo_interes", "")
+
         if nombre and modelo_interes:
-            valores["nombre_proceso_generado"] = f"{nombre} - {modelo_interes}"[:500]
+            valores["nombre_proceso_generado"] = (
+                f"{nombre} - {modelo_interes}"[:500]
+            )
+
     if tabla == "procesos":
         valores["_referencia"] = valores.get("lead_id", "")
+
     elif tabla == "actividades-prospectos":
-        valores["id_prospecto_original"] = texto_celda(leer_columna(fila, "Id. de prospecto"))
+        valores["id_prospecto_original"] = texto_celda(
+            leer_columna(columnas, "Id. de prospecto")
+        )
         valores["_referencia"] = valores["id_prospecto_original"]
+
     elif tabla == "actividades-procesos":
-        valores["id_proceso_original"] = texto_celda(leer_columna(fila, "Id. del proceso comercial"))
+        valores["id_proceso_original"] = texto_celda(
+            leer_columna(columnas, "Id. del proceso comercial")
+        )
         valores["_referencia"] = valores["id_proceso_original"]
+
     elif tabla in {"procesos-detalle", "facturas", "entregas"}:
-        valores["_referencia"] = texto_celda(leer_columna(fila, "Id. del proceso comercial"))
+        valores["_referencia"] = texto_celda(
+            leer_columna(columnas, "Id. del proceso comercial")
+        )
+
     valores["datos_origen"] = {
         str(columna): texto_celda(contenido)
-        for columna, contenido in fila.items() if texto_celda(contenido)
+        for columna, contenido in fila.items()
+        if texto_celda(contenido)
     }
-    return clave, valores
 
+    return clave, valores
 
 def procesar_lote(tabla, lote, aplicar=False):
     modelo = TABLAS[tabla]["modelo"]
