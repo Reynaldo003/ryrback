@@ -181,14 +181,46 @@ class ImportacionComercialViewSet(viewsets.ReadOnlyModelViewSet):
         tabla = (self.request.query_params.get("tabla") or "").strip()
         return queryset.filter(tabla=tabla) if tabla else queryset
 
-    @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser], url_path="validar")
+    @action(detail=False,methods=["post"],parser_classes=[MultiPartParser, FormParser],url_path="validar")
     def validar(self, request):
         entrada = ArchivoImportacionSerializer(data=request.data)
-        entrada.is_valid(raise_exception=True)
+
+        if not entrada.is_valid():
+            errores = entrada.errors
+
+            detalle = "; ".join(f"{campo}: {', '.join(str(mensaje) for mensaje in mensajes)}" for campo, mensajes in errores.items())
+            logger.warning("SalesForce: error al recibir archivo: %s", detalle)
+
+            return Response(
+                {
+                    "detail": detalle,
+                    "errores": errores
+                },status=status.HTTP_400_BAD_REQUEST
+            )
+
+        archivo = entrada.validated_data["archivo"]
+        tabla = entrada.validated_data["tabla"]
+
         try:
-            resultado = validar_archivo(entrada.validated_data["archivo"], entrada.validated_data["tabla"])
+            resultado = validar_archivo(archivo, tabla)
+
         except (ValueError, OSError, KeyError, BadZipFile) as exc:
-            raise ValidationError({"detail": str(exc)}) from exc
+            logger.warning(
+                "SalesForce: error validando tabla %s, archivo %s: %s",
+                tabla,
+                archivo.name,
+                exc
+            )
+
+            return Response({"detail": str(exc)},status=status.HTTP_400_BAD_REQUEST)
+
+        logger.info(
+            "SalesForce: validación completada. Tabla: %s, registros: %s, errores: %s",
+            tabla,
+            resultado["encontrados"],
+            resultado["errores"]
+        )
+
         return Response(resultado)
 
     @action(detail=False, methods=["post"], parser_classes=[MultiPartParser, FormParser], url_path="importar")
